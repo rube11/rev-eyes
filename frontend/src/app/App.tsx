@@ -1,4 +1,13 @@
+import { useEffect } from "react"
+import { initializeEvenExperience } from "../even/runtime"
+
 function App() {
+  // useEffect to only call init function once on mount rather than on component re renders
+  useEffect(() => {
+    initializeEvenExperience();
+  });
+
+
   return (
     <main className="app">
       <section className="app-shell">
