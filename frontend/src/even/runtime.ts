@@ -6,6 +6,8 @@ import {
   waitForEvenAppBridge,
 } from "@evenrealities/even_hub_sdk"
 
+const socket = new WebSocket("ws://localhost:8080")
+
 export async function initializeEvenExperience(): Promise<void> {
   const bridge = await waitForEvenAppBridge()
 
@@ -35,10 +37,31 @@ export async function initializeEvenExperience(): Promise<void> {
     content: "Mic: off",
     isEventCapture: 0,
   })
-
+  // create the glasses ui 
   await bridge.createStartUpPageContainer(new CreateStartUpPageContainer({
     containerTotalNum: 2,
     listObject: [menuOptions],
     textObject: [statusText],
   }))
+
+  // handle clicks
+  bridge.onEvenHubEvent(async (event) => {
+    if (event.listEvent?.currentSelectItemIndex === 1) {
+      await bridge.audioControl(false)
+      return
+    }
+
+    if (event.listEvent?.currentSelectItemIndex === 0) {
+      await bridge.audioControl(true)
+      return
+    }
+
+    const pcm = event.audioEvent?.audioPcm
+
+    if (pcm && socket.readyState === WebSocket.OPEN) {
+      const payload = new Uint8Array(pcm.byteLength)
+      payload.set(pcm)
+      socket.send(payload)
+    }
+  })
 }
