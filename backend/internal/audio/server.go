@@ -23,8 +23,7 @@ function to receive audio from the connection and store it inside
 a []byte channel so other go routines can access audio data and send
 it to an stt provider
 */
-func readAudio(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, audioChan chan<- []byte) {
-	defer cancel()
+func readAudio(ctx context.Context, conn *websocket.Conn, audioChan chan<- []byte) {
 	defer close(audioChan)
 
 	for {
@@ -48,11 +47,6 @@ func readAudio(ctx context.Context, cancel context.CancelFunc, conn *websocket.C
 			return
 		}
 	}
-
-}
-
-func sendAudioToSTT(ctx context.Context, cancel context.CancelFunc, audioChan <-chan []byte) {
-
 }
 
 // upgrader to upgrade http request to a socket connection
@@ -64,20 +58,24 @@ var upgrader = websocket.Upgrader{
 // opens the websocket connection and handles streaming data to an stt
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
-	ctx, cancel := context.WithCancel(r.Context())
-	audioChan := make(chan []byte, 100)
-	defer cancel()
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-
 	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	audioChan := make(chan []byte, 100)
 
 	/*
 	    received message is a byte slice becasue we are receiving data
 	   from our connection in the form of a uint8array
 	*/
-	go readAudio(ctx, cancel, conn, audioChan)
-	go sendAudioToSTT(ctx, cancel, audioChan)
+	go readAudio(ctx, conn, audioChan)
+
+	if err := s.Transcribe.Transcribe(ctx, audioChan); err != nil {
+		fmt.Println("transcription error:", err)
+	}
 }

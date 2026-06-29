@@ -3,5 +3,5 @@ package stt
 import "context"
 
 type Transcriber interface {
-	Transcribe(ctx context.Context, audio []byte) (string, error)
+	Transcribe(ctx context.Context, audio <-chan []byte) error
 }
