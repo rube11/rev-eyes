@@ -49,13 +49,14 @@ func (dg *deepGramTranscriber) Transcribe(ctx context.Context, audio <-chan []by
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	dgClient, err := client.NewWSUsingChanWithCancel(
+	handler := newDeepgramHandler()
+	dgClient, err := client.NewWSUsingCallbackWithCancel(
 		streamCtx,
 		cancel,
 		dg.deepgramKey,
 		clientOptions,
 		transcriptionOptions,
-		nil, // The SDK's default channel handler prints interim and final transcripts.
+		handler,
 	)
 	if err != nil {
 		return fmt.Errorf("create Deepgram client: %w", err)
