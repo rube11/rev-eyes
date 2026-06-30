@@ -14,31 +14,43 @@ type deepgramHandler struct {
 
 	mu         sync.RWMutex
 	transcript string
+	completed  chan<- string
 }
 
-func newDeepgramHandler() *deepgramHandler {
+func newDeepgramHandler(completed chan<- string) *deepgramHandler {
 	return &deepgramHandler{
 		DefaultCallbackHandler: websocket.NewDefaultCallbackHandler(),
+		completed:              completed,
 	}
 }
 
 func (h *deepgramHandler) Message(message *msginterfaces.MessageResponse) error {
-	if message == nil || !message.IsFinal || len(message.Channel.Alternatives) == 0 {
+	if message == nil {
 		return nil
 	}
 
-	text := strings.TrimSpace(message.Channel.Alternatives[0].Transcript)
-	if text == "" {
-		return nil
+	var text string
+	if message.IsFinal && len(message.Channel.Alternatives) > 0 {
+		text = strings.TrimSpace(message.Channel.Alternatives[0].Transcript)
 	}
 
 	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if h.transcript != "" {
-		h.transcript += " "
+	if text != "" {
+		if h.transcript != "" {
+			h.transcript += " "
+		}
+		h.transcript += text
 	}
-	h.transcript += text
+
+	if message.SpeechFinal && h.transcript != "" {
+		utterance := h.transcript
+		h.transcript = ""
+		h.mu.Unlock()
+
+		h.completed <- utterance
+		return nil
+	}
+	h.mu.Unlock()
 
 	return nil
 }

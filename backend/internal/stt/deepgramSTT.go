@@ -14,12 +14,19 @@ var initDeepgram sync.Once
 
 type deepGramTranscriber struct {
 	deepgramKey string
+	completed   chan string
 }
 
 func NewDeepGramTranscriber(apiKey string) *deepGramTranscriber {
 	return &deepGramTranscriber{
 		deepgramKey: apiKey,
+		completed:   make(chan string, 10),
 	}
+}
+
+// CompletedUtterances returns transcripts after Deepgram marks the end of speech.
+func (dg *deepGramTranscriber) CompletedUtterances() <-chan string {
+	return dg.completed
 }
 
 func (dg *deepGramTranscriber) Transcribe(ctx context.Context, audio <-chan []byte) error {
@@ -49,7 +56,7 @@ func (dg *deepGramTranscriber) Transcribe(ctx context.Context, audio <-chan []by
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	handler := newDeepgramHandler()
+	handler := newDeepgramHandler(dg.completed)
 	dgClient, err := client.NewWSUsingCallbackWithCancel(
 		streamCtx,
 		cancel,
