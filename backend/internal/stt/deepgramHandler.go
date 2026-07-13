@@ -1,6 +1,7 @@
 package stt
 
 import (
+	"context"
 	"strings"
 	"sync"
 
@@ -14,13 +15,18 @@ type deepgramHandler struct {
 
 	mu         sync.RWMutex
 	transcript string
+	ctx        context.Context
 	completed  chan<- string
+	finalized  chan struct{}
+	finalize   sync.Once
 }
 
-func newDeepgramHandler(completed chan<- string) *deepgramHandler {
+func newDeepgramHandler(ctx context.Context, completed chan<- string) *deepgramHandler {
 	return &deepgramHandler{
 		DefaultCallbackHandler: websocket.NewDefaultCallbackHandler(),
+		ctx:                    ctx,
 		completed:              completed,
+		finalized:              make(chan struct{}),
 	}
 }
 
@@ -34,6 +40,7 @@ func (h *deepgramHandler) Message(message *msginterfaces.MessageResponse) error 
 		text = strings.TrimSpace(message.Channel.Alternatives[0].Transcript)
 	}
 
+	var utterance string
 	h.mu.Lock()
 	if text != "" {
 		if h.transcript != "" {
@@ -42,17 +49,28 @@ func (h *deepgramHandler) Message(message *msginterfaces.MessageResponse) error 
 		h.transcript += text
 	}
 
-	if message.SpeechFinal && h.transcript != "" {
-		utterance := h.transcript
+	if (message.SpeechFinal || message.FromFinalize) && h.transcript != "" {
+		utterance = h.transcript
 		h.transcript = ""
-		h.mu.Unlock()
-
-		h.completed <- utterance
-		return nil
 	}
 	h.mu.Unlock()
 
+	if utterance != "" {
+		select {
+		case h.completed <- utterance:
+		case <-h.ctx.Done():
+		}
+	}
+
+	if message.FromFinalize {
+		h.finalize.Do(func() { close(h.finalized) })
+	}
+
 	return nil
+}
+
+func (h *deepgramHandler) Finalized() <-chan struct{} {
+	return h.finalized
 }
 
 func (h *deepgramHandler) Transcript() string {

@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	interfaces "github.com/deepgram/deepgram-go-sdk/v3/pkg/client/interfaces"
 	client "github.com/deepgram/deepgram-go-sdk/v3/pkg/client/listen"
 )
 
 var initDeepgram sync.Once
+
+const finalizeTimeout = 3 * time.Second
 
 type deepGramTranscriber struct {
 	deepgramKey string
@@ -56,7 +59,7 @@ func (dg *deepGramTranscriber) Transcribe(ctx context.Context, audio <-chan []by
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	handler := newDeepgramHandler(dg.completed)
+	handler := newDeepgramHandler(streamCtx, dg.completed)
 	dgClient, err := client.NewWSUsingCallbackWithCancel(
 		streamCtx,
 		cancel,
@@ -87,7 +90,15 @@ func (dg *deepGramTranscriber) Transcribe(ctx context.Context, audio <-chan []by
 				if err := dgClient.Finalize(); err != nil {
 					return fmt.Errorf("finalize Deepgram stream: %w", err)
 				}
-				return nil
+
+				select {
+				case <-handler.Finalized():
+					return nil
+				case <-streamCtx.Done():
+					return streamCtx.Err()
+				case <-time.After(finalizeTimeout):
+					return errors.New("timed out waiting for Deepgram finalization")
+				}
 			}
 			if len(chunk) == 0 {
 				continue
