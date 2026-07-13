@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,11 +21,16 @@ type deepGramTranscriber struct {
 	completed   chan string
 }
 
-func NewDeepGramTranscriber(apiKey string) *deepGramTranscriber {
+func NewDeepGramTranscriber(apiKey string) (*deepGramTranscriber, error) {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil, errors.New("deepgram API key is required")
+	}
+
 	return &deepGramTranscriber{
 		deepgramKey: apiKey,
 		completed:   make(chan string, 10),
-	}
+	}, nil
 }
 
 // CompletedUtterances returns transcripts after Deepgram marks the end of speech.
