@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/rube11/rev-eyes/backend/internal/audio"
+	"github.com/rube11/rev-eyes/backend/internal/database"
 	"github.com/rube11/rev-eyes/backend/internal/router"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
 )
@@ -24,6 +25,15 @@ func main() {
 }
 
 func run() error {
+	databaseCtx, cancelDatabase := context.WithTimeout(context.Background(), 10*time.Second)
+	databasePool, err := database.Open(databaseCtx, os.Getenv("DATABASE_URL"))
+	cancelDatabase()
+	if err != nil {
+		return err
+	}
+	defer databasePool.Close()
+	slog.Info("database connection established")
+
 	classifier, err := router.NewOpenAIClassifier(
 		os.Getenv("OPENAI_API_KEY"),
 		os.Getenv("OPENAI_ROUTER_MODEL"),
