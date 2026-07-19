@@ -55,7 +55,7 @@ func (t *Tool) Execute(
 		return tool.Result{}, errors.New("get_current_location does not accept arguments")
 	}
 
-	position, found, err := t.locations.Current(ctx, scope.UserID)
+	position, found, err := t.locations.Current(ctx, scope)
 	if err != nil {
 		return tool.Result{}, fmt.Errorf("get current location: %w", err)
 	}

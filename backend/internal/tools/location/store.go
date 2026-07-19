@@ -6,13 +6,16 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
 var (
-	ErrUserIDRequired   = errors.New("user ID is required")
-	ErrInvalidLatitude  = errors.New("latitude must be between -90 and 90")
-	ErrInvalidLongitude = errors.New("longitude must be between -180 and 180")
-	ErrInvalidAccuracy  = errors.New("accuracy must not be negative")
+	ErrUserIDRequired    = errors.New("user ID is required")
+	ErrSessionIDRequired = errors.New("session ID is required")
+	ErrInvalidLatitude   = errors.New("latitude must be between -90 and 90")
+	ErrInvalidLongitude  = errors.New("longitude must be between -180 and 180")
+	ErrInvalidAccuracy   = errors.New("accuracy must not be negative")
 )
 
 // Position is the latest location reported by a user's device.
@@ -23,26 +26,32 @@ type Position struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
-// Reader provides the latest known location for a user.
+// Reader provides the latest known location within an authenticated session.
 type Reader interface {
-	Current(ctx context.Context, userID string) (Position, bool, error)
+	Current(ctx context.Context, scope tool.Scope) (Position, bool, error)
 }
 
-// Store keeps the latest reported location for each user in memory.
+type scopedPosition struct {
+	userID   string
+	position Position
+}
+
+// Store keeps the latest reported location for each authenticated application
+// session in memory.
 type Store struct {
 	mu        sync.RWMutex
-	positions map[string]Position
+	positions map[string]scopedPosition
 }
 
 func NewStore() *Store {
-	return &Store{positions: make(map[string]Position)}
+	return &Store{positions: make(map[string]scopedPosition)}
 }
 
-// Update replaces a user's latest known position.
-func (s *Store) Update(userID string, position Position) error {
-	userID = strings.TrimSpace(userID)
-	if userID == "" {
-		return ErrUserIDRequired
+// Update replaces the latest position for a trusted user and application session.
+func (s *Store) Update(scope tool.Scope, position Position) error {
+	scope, err := validateScope(scope)
+	if err != nil {
+		return err
 	}
 	if position.Latitude < -90 || position.Latitude > 90 {
 		return ErrInvalidLatitude
@@ -61,28 +70,62 @@ func (s *Store) Update(userID string, position Position) error {
 
 	s.mu.Lock()
 	if s.positions == nil {
-		s.positions = make(map[string]Position)
+		s.positions = make(map[string]scopedPosition)
 	}
-	s.positions[userID] = position
+	s.positions[scope.SessionID] = scopedPosition{
+		userID:   scope.UserID,
+		position: position,
+	}
 	s.mu.Unlock()
 
 	return nil
 }
 
-// Current returns a user's latest known position.
-func (s *Store) Current(ctx context.Context, userID string) (Position, bool, error) {
+// Current returns the latest position only when both the trusted user and
+// application session match the stored owner.
+func (s *Store) Current(ctx context.Context, scope tool.Scope) (Position, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return Position{}, false, err
 	}
 
-	userID = strings.TrimSpace(userID)
-	if userID == "" {
-		return Position{}, false, ErrUserIDRequired
+	scope, err := validateScope(scope)
+	if err != nil {
+		return Position{}, false, err
 	}
 
 	s.mu.RLock()
-	position, found := s.positions[userID]
+	stored, found := s.positions[scope.SessionID]
 	s.mu.RUnlock()
+	if !found || stored.userID != scope.UserID {
+		return Position{}, false, nil
+	}
 
-	return position, found, nil
+	return stored.position, true, nil
+}
+
+// Delete removes a location only when the trusted user owns the session entry.
+func (s *Store) Delete(scope tool.Scope) {
+	scope, err := validateScope(scope)
+	if err != nil {
+		return
+	}
+
+	s.mu.Lock()
+	stored, found := s.positions[scope.SessionID]
+	if found && stored.userID == scope.UserID {
+		delete(s.positions, scope.SessionID)
+	}
+	s.mu.Unlock()
+}
+
+func validateScope(scope tool.Scope) (tool.Scope, error) {
+	scope.UserID = strings.TrimSpace(scope.UserID)
+	if scope.UserID == "" {
+		return tool.Scope{}, ErrUserIDRequired
+	}
+	scope.SessionID = strings.TrimSpace(scope.SessionID)
+	if scope.SessionID == "" {
+		return tool.Scope{}, ErrSessionIDRequired
+	}
+	return scope, nil
 }
