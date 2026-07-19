@@ -18,7 +18,6 @@ const finalizeTimeout = 3 * time.Second
 
 type deepGramTranscriber struct {
 	deepgramKey string
-	completed   chan string
 }
 
 func NewDeepGramTranscriber(apiKey string) (*deepGramTranscriber, error) {
@@ -27,23 +26,22 @@ func NewDeepGramTranscriber(apiKey string) (*deepGramTranscriber, error) {
 		return nil, errors.New("deepgram API key is required")
 	}
 
-	return &deepGramTranscriber{
-		deepgramKey: apiKey,
-		completed:   make(chan string, 10),
-	}, nil
+	return &deepGramTranscriber{deepgramKey: apiKey}, nil
 }
 
-// CompletedUtterances returns transcripts after Deepgram marks the end of speech.
-func (dg *deepGramTranscriber) CompletedUtterances() <-chan string {
-	return dg.completed
-}
-
-func (dg *deepGramTranscriber) Transcribe(ctx context.Context, audio <-chan []byte) error {
+func (dg *deepGramTranscriber) Transcribe(
+	ctx context.Context,
+	audio <-chan []byte,
+	completed chan<- string,
+) error {
 	if dg.deepgramKey == "" {
 		return errors.New("deepgram API key is required")
 	}
 	if audio == nil {
 		return errors.New("audio channel is required")
+	}
+	if completed == nil {
+		return errors.New("completed utterance channel is required")
 	}
 
 	initDeepgram.Do(client.InitWithDefault)
@@ -65,7 +63,7 @@ func (dg *deepGramTranscriber) Transcribe(ctx context.Context, audio <-chan []by
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	handler := newDeepgramHandler(streamCtx, dg.completed)
+	handler := newDeepgramHandler(streamCtx, completed)
 	dgClient, err := client.NewWSUsingCallbackWithCancel(
 		streamCtx,
 		cancel,

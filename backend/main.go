@@ -47,12 +47,12 @@ func run() error {
 		return err
 	}
 	activityRouter := router.NewRouter(classifier)
-	audioServer := audio.NewServer(transcriber)
+	audioServer := audio.NewServer(transcriber, func(ctx context.Context, utterance string) {
+		routeUtterance(ctx, utterance, activityRouter)
+	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	go routeUtterances(ctx, transcriber.CompletedUtterances(), activityRouter)
 
 	server := &http.Server{
 		Addr:              listenAddress(),
@@ -82,27 +82,16 @@ func run() error {
 	}
 }
 
-func routeUtterances(ctx context.Context, completed <-chan string, activityRouter *router.Router) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case utterance, ok := <-completed:
-			if !ok {
-				return
-			}
-
-			decision, err := activityRouter.Route(ctx, utterance)
-			if err != nil {
-				slog.ErrorContext(ctx, "failed to route utterance", "error", err)
-				continue
-			}
-
-			slog.InfoContext(ctx, "utterance routed",
-				"action", decision.Action,
-			)
-		}
+func routeUtterance(ctx context.Context, utterance string, activityRouter *router.Router) {
+	decision, err := activityRouter.Route(ctx, utterance)
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to route utterance", "error", err)
+		return
 	}
+
+	slog.InfoContext(ctx, "utterance routed",
+		"action", decision.Action,
+	)
 }
 
 func listenAddress() string {

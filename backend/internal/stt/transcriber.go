@@ -3,5 +3,8 @@ package stt
 import "context"
 
 type Transcriber interface {
-	Transcribe(ctx context.Context, audio <-chan []byte) error
+	// Transcribe streams audio and sends finalized utterances to completed.
+	// The caller owns the completed channel and must keep consuming it until
+	// Transcribe returns.
+	Transcribe(ctx context.Context, audio <-chan []byte, completed chan<- string) error
 }

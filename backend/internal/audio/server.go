@@ -11,8 +11,13 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/stt"
 )
 
+const completedUtteranceBuffer = 10
+
+type UtteranceHandler func(ctx context.Context, utterance string)
+
 type Server struct {
-	Transcribe stt.Transcriber
+	Transcriber     stt.Transcriber
+	HandleUtterance UtteranceHandler
 
 	mu          sync.Mutex
 	connections map[*websocket.Conn]struct{}
@@ -20,11 +25,12 @@ type Server struct {
 	handlers    sync.WaitGroup
 }
 
-// constructor
-func NewServer(transcriber stt.Transcriber) *Server {
+// NewServer creates the audio WebSocket server.
+func NewServer(transcriber stt.Transcriber, handleUtterance UtteranceHandler) *Server {
 	return &Server{
-		Transcribe:  transcriber,
-		connections: make(map[*websocket.Conn]struct{}),
+		Transcriber:     transcriber,
+		HandleUtterance: handleUtterance,
+		connections:     make(map[*websocket.Conn]struct{}),
 	}
 }
 
@@ -107,6 +113,25 @@ func readAudio(ctx context.Context, conn *websocket.Conn, audioChan chan<- []byt
 	}
 }
 
+func (s *Server) transcribeConnection(ctx context.Context, audio <-chan []byte) error {
+	completed := make(chan string, completedUtteranceBuffer)
+	done := make(chan error, 1)
+
+	go func() {
+		err := s.Transcriber.Transcribe(ctx, audio, completed)
+		close(completed)
+		done <- err
+	}()
+
+	for utterance := range completed {
+		if s.HandleUtterance != nil {
+			s.HandleUtterance(ctx, utterance)
+		}
+	}
+
+	return <-done
+}
+
 // upgrader to upgrade http request to a socket connection
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -165,7 +190,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	*/
 	go readAudio(ctx, conn, audioChan)
 
-	if err := s.Transcribe.Transcribe(ctx, audioChan); err != nil {
+	if err := s.transcribeConnection(ctx, audioChan); err != nil {
 		fmt.Println("transcription error:", err)
 	}
 }
