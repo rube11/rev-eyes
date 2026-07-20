@@ -16,7 +16,7 @@ type Spec struct {
 	Name        string
 	Description string
 	Parameters  json.RawMessage
-	ReadOnly    bool
+	ReadOnly    bool // Safe to execute concurrently with other read-only tools.
 }
 
 // Scope contains trusted request information supplied by the backend.
