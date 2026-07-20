@@ -112,18 +112,18 @@ func (s *Store) Append(
 	scope tool.Scope,
 	speaker Speaker,
 	text string,
-) error {
+) (string, error) {
 	scope.UserID = strings.TrimSpace(scope.UserID)
 	scope.SessionID = strings.TrimSpace(scope.SessionID)
 	if scope.UserID == "" || scope.SessionID == "" {
-		return ErrScopeRequired
+		return "", ErrScopeRequired
 	}
 	if speaker != SpeakerUser && speaker != SpeakerAssistant {
-		return ErrSpeakerInvalid
+		return "", ErrSpeakerInvalid
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return ErrTextRequired
+		return "", ErrTextRequired
 	}
 
 	var utteranceID string
@@ -160,10 +160,10 @@ func (s *Store) Append(
 		text,
 	).Scan(&utteranceID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrSessionUnavailable
+		return "", ErrSessionUnavailable
 	}
 	if err != nil {
-		return fmt.Errorf("append transcript utterance: %w", err)
+		return "", fmt.Errorf("append transcript utterance: %w", err)
 	}
-	return nil
+	return utteranceID, nil
 }

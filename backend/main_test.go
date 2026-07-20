@@ -24,7 +24,7 @@ func (f fakeUtteranceService) HandleUtterance(
 }
 
 type fakeTranscriptStore struct {
-	append func(context.Context, tool.Scope, session.Speaker, string) error
+	append func(context.Context, tool.Scope, session.Speaker, string) (string, error)
 }
 
 func (f fakeTranscriptStore) Append(
@@ -32,8 +32,21 @@ func (f fakeTranscriptStore) Append(
 	scope tool.Scope,
 	speaker session.Speaker,
 	text string,
-) error {
+) (string, error) {
 	return f.append(ctx, scope, speaker, text)
+}
+
+type fakeMemoryStore struct {
+	remember func(context.Context, tool.Scope, string, string) error
+}
+
+func (f fakeMemoryStore) Remember(
+	ctx context.Context,
+	scope tool.Scope,
+	sourceUtteranceID string,
+	text string,
+) error {
+	return f.remember(ctx, scope, sourceUtteranceID, text)
 }
 
 func TestHandleUtterancePersistsFinalizedTranscriptInOrder(t *testing.T) {
@@ -44,9 +57,9 @@ func TestHandleUtterancePersistsFinalizedTranscriptInOrder(t *testing.T) {
 			_ tool.Scope,
 			speaker session.Speaker,
 			text string,
-		) error {
+		) (string, error) {
 			calls = append(calls, string(speaker)+":"+text)
-			return nil
+			return "utterance-123", nil
 		},
 	}
 	service := fakeUtteranceService{
@@ -59,6 +72,12 @@ func TestHandleUtterancePersistsFinalizedTranscriptInOrder(t *testing.T) {
 			return assistant.Outcome{Response: "Here you go."}, nil
 		},
 	}
+	memories := fakeMemoryStore{
+		remember: func(context.Context, tool.Scope, string, string) error {
+			t.Fatal("Remember() was called")
+			return nil
+		},
+	}
 
 	response, err := handleUtterance(
 		context.Background(),
@@ -66,6 +85,7 @@ func TestHandleUtterancePersistsFinalizedTranscriptInOrder(t *testing.T) {
 		"Where am I?",
 		service,
 		transcripts,
+		memories,
 	)
 	if err != nil {
 		t.Fatalf("handleUtterance() error = %v", err)
@@ -92,8 +112,8 @@ func TestHandleUtteranceStopsWhenUserTranscriptCannotBePersisted(t *testing.T) {
 			tool.Scope,
 			session.Speaker,
 			string,
-		) error {
-			return persistErr
+		) (string, error) {
+			return "", persistErr
 		},
 	}
 	service := fakeUtteranceService{
@@ -106,6 +126,12 @@ func TestHandleUtteranceStopsWhenUserTranscriptCannotBePersisted(t *testing.T) {
 			return assistant.Outcome{}, nil
 		},
 	}
+	memories := fakeMemoryStore{
+		remember: func(context.Context, tool.Scope, string, string) error {
+			t.Fatal("Remember() was called")
+			return nil
+		},
+	}
 
 	_, err := handleUtterance(
 		context.Background(),
@@ -113,6 +139,7 @@ func TestHandleUtteranceStopsWhenUserTranscriptCannotBePersisted(t *testing.T) {
 		"hello",
 		service,
 		transcripts,
+		memories,
 	)
 	if !errors.Is(err, persistErr) {
 		t.Fatalf("handleUtterance() error = %v, want wrapped persistence error", err)

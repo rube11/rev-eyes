@@ -16,6 +16,7 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/assistant/openai"
 	"github.com/rube11/rev-eyes/backend/internal/auth"
 	"github.com/rube11/rev-eyes/backend/internal/database"
+	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/realtime"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
@@ -23,6 +24,8 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/tool/location"
 	"github.com/rube11/rev-eyes/backend/internal/web"
 )
+
+const memoryAcknowledgment = "Got it, I'll remember that."
 
 func main() {
 	if err := run(); err != nil {
@@ -44,6 +47,10 @@ func run() error {
 	defer databasePool.Close()
 	slog.Info("database connection established")
 	sessionStore, err := session.NewStore(databasePool)
+	if err != nil {
+		return err
+	}
+	memoryStore, err := memory.NewStore(databasePool)
 	if err != nil {
 		return err
 	}
@@ -112,7 +119,14 @@ func run() error {
 		Authenticate: tickets.Consume,
 		CheckOrigin:  origins.Allows,
 		Utterance: func(ctx context.Context, scope tool.Scope, utterance string) (string, error) {
-			return handleUtterance(ctx, scope, utterance, assistantService, sessionStore)
+			return handleUtterance(
+				ctx,
+				scope,
+				utterance,
+				assistantService,
+				sessionStore,
+				memoryStore,
+			)
 		},
 		Location: func(_ context.Context, scope tool.Scope, update realtime.LocationUpdate) error {
 			return locationStore.Update(scope, location.Position{
@@ -161,7 +175,11 @@ type utteranceService interface {
 }
 
 type transcriptStore interface {
-	Append(context.Context, tool.Scope, session.Speaker, string) error
+	Append(context.Context, tool.Scope, session.Speaker, string) (string, error)
+}
+
+type memoryStore interface {
+	Remember(context.Context, tool.Scope, string, string) error
 }
 
 func handleUtterance(
@@ -170,8 +188,10 @@ func handleUtterance(
 	utterance string,
 	service utteranceService,
 	transcripts transcriptStore,
+	memories memoryStore,
 ) (string, error) {
-	if err := transcripts.Append(ctx, scope, session.SpeakerUser, utterance); err != nil {
+	utteranceID, err := transcripts.Append(ctx, scope, session.SpeakerUser, utterance)
+	if err != nil {
 		return "", fmt.Errorf("persist user utterance: %w", err)
 	}
 
@@ -179,12 +199,25 @@ func handleUtterance(
 	if err != nil {
 		return "", err
 	}
-	if outcome.Response != "" {
-		if err := transcripts.Append(
+
+	response := outcome.Response
+	if outcome.Decision.Action == assistant.ActionRemember {
+		memoryText := strings.TrimSpace(outcome.Decision.Query)
+		if memoryText == "" {
+			memoryText = utterance
+		}
+		if err := memories.Remember(ctx, scope, utteranceID, memoryText); err != nil {
+			return "", fmt.Errorf("persist memory: %w", err)
+		}
+		response = memoryAcknowledgment
+	}
+
+	if response != "" {
+		if _, err := transcripts.Append(
 			ctx,
 			scope,
 			session.SpeakerAssistant,
-			outcome.Response,
+			response,
 		); err != nil {
 			return "", fmt.Errorf("persist assistant utterance: %w", err)
 		}
@@ -192,9 +225,9 @@ func handleUtterance(
 
 	slog.InfoContext(ctx, "utterance handled",
 		"action", outcome.Decision.Action,
-		"responded", outcome.Response != "",
+		"responded", response != "",
 	)
-	return outcome.Response, nil
+	return response, nil
 }
 
 func listenAddress() string {
