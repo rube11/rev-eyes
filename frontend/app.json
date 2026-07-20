@@ -1,0 +1,29 @@
+{
+  "package_id": "com.reveyes.app",
+  "edition": "202601",
+  "name": "Rev Eyes",
+  "version": "0.1.0",
+  "min_app_version": "2.0.0",
+  "min_sdk_version": "0.0.12",
+  "entrypoint": "index.html",
+  "permissions": [
+    {
+      "name": "network",
+      "desc": "Connects to Rev Eyes services for authentication and assistant responses.",
+      "whitelist": [
+        "https://ikqdeosysrsynkxbijgn.supabase.co"
+      ]
+    },
+    {
+      "name": "location",
+      "desc": "Shares location with the assistant for nearby context."
+    },
+    {
+      "name": "g2-microphone",
+      "desc": "Captures voice commands through the glasses."
+    }
+  ],
+  "supported_languages": [
+    "en"
+  ]
+}
