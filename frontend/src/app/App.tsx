@@ -2,7 +2,10 @@ import { useEffect, useState } from "react"
 import type { FormEvent } from "react"
 import type { Session } from "@supabase/supabase-js"
 
-import { initializeEvenExperience } from "../even/runtime"
+import {
+  initializeEvenExperience,
+  showEvenMessage,
+} from "../even/runtime"
 import { supabase } from "../shared/api/supabase"
 
 function App() {
@@ -22,20 +25,37 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (session === null) {
+      void showEvenMessage("Open phone to sign in").catch(() => undefined)
+    }
+  }, [session])
+
+  useEffect(() => {
     if (!accessToken) {
       return
     }
 
     let disposed = false
     let stop: (() => void) | undefined
-    initializeEvenExperience(accessToken, setResponse)
+    initializeEvenExperience(
+      accessToken,
+      (text) => {
+        if (!disposed) {
+          setResponse(text)
+        }
+      },
+      (nextStatus) => {
+        if (!disposed) {
+          setStatus(nextStatus)
+        }
+      },
+    )
       .then((cleanup) => {
         if (disposed) {
           cleanup()
           return
         }
         stop = cleanup
-        setStatus("Connected")
       })
       .catch((reason: unknown) => {
         if (!disposed) {
