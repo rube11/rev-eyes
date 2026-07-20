@@ -20,10 +20,11 @@ Choose exactly one action:
 - ignore: background speech, filler, or speech that requires no processing.
 - respond: a direct question or command that should wake the main assistant.
 - state_update: current conversational or situational context that should update short-lived assistant state without a response.
-- remember: a durable fact, preference, or explicit request to remember something.
+- remember: an explicit user request to remember a durable fact or preference. Never choose remember unless the user explicitly asks for it.
 - propose_task: a potential task inferred from the speech that should be proposed to the user before execution.
 
 Set query to a concise, standalone version of the request. Use an empty query for ignore.
+For remember, set query to only the fact or preference being saved.
 Classify the speech only. Do not answer it.`
 )
 
