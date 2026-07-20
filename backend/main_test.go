@@ -104,6 +104,79 @@ func TestHandleUtterancePersistsFinalizedTranscriptInOrder(t *testing.T) {
 	}
 }
 
+func TestHandleUtterancePersistsExplicitMemory(t *testing.T) {
+	var calls []string
+	scope := tool.Scope{UserID: "user-123", SessionID: "session-123"}
+	transcripts := fakeTranscriptStore{
+		append: func(
+			_ context.Context,
+			_ tool.Scope,
+			speaker session.Speaker,
+			text string,
+		) (string, error) {
+			calls = append(calls, string(speaker)+":"+text)
+			return "utterance-123", nil
+		},
+	}
+	service := fakeUtteranceService{
+		handle: func(
+			_ context.Context,
+			_ tool.Scope,
+			utterance string,
+		) (assistant.Outcome, error) {
+			calls = append(calls, "handle:"+utterance)
+			return assistant.Outcome{
+				Decision: assistant.Decision{
+					Action: assistant.ActionRemember,
+					Query:  "The user's boss is Maya.",
+				},
+			}, nil
+		},
+	}
+	memories := fakeMemoryStore{
+		remember: func(
+			_ context.Context,
+			gotScope tool.Scope,
+			sourceUtteranceID string,
+			text string,
+		) error {
+			if gotScope != scope {
+				t.Fatalf("scope = %+v, want %+v", gotScope, scope)
+			}
+			calls = append(
+				calls,
+				"remember:"+sourceUtteranceID+":"+text,
+			)
+			return nil
+		},
+	}
+
+	response, err := handleUtterance(
+		context.Background(),
+		scope,
+		"Remember that my boss is Maya.",
+		service,
+		transcripts,
+		memories,
+	)
+	if err != nil {
+		t.Fatalf("handleUtterance() error = %v", err)
+	}
+	if response != memoryAcknowledgment {
+		t.Fatalf("response = %q", response)
+	}
+
+	want := []string{
+		"user:Remember that my boss is Maya.",
+		"handle:Remember that my boss is Maya.",
+		"remember:utterance-123:The user's boss is Maya.",
+		"assistant:" + memoryAcknowledgment,
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
 func TestHandleUtteranceStopsWhenUserTranscriptCannotBePersisted(t *testing.T) {
 	persistErr := errors.New("database unavailable")
 	transcripts := fakeTranscriptStore{
