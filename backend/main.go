@@ -11,10 +11,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rube11/rev-eyes/backend/internal/audio"
+	"github.com/rube11/rev-eyes/backend/internal/assistant"
+	"github.com/rube11/rev-eyes/backend/internal/assistant/openai"
+	"github.com/rube11/rev-eyes/backend/internal/auth"
 	"github.com/rube11/rev-eyes/backend/internal/database"
-	"github.com/rube11/rev-eyes/backend/internal/router"
+	"github.com/rube11/rev-eyes/backend/internal/realtime"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
+	"github.com/rube11/rev-eyes/backend/internal/tool"
+	"github.com/rube11/rev-eyes/backend/internal/tool/location"
+	"github.com/rube11/rev-eyes/backend/internal/web"
 )
 
 func main() {
@@ -25,7 +30,10 @@ func main() {
 }
 
 func run() error {
-	databaseCtx, cancelDatabase := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	databaseCtx, cancelDatabase := context.WithTimeout(ctx, 10*time.Second)
 	databasePool, err := database.Open(databaseCtx, os.Getenv("DATABASE_URL"))
 	cancelDatabase()
 	if err != nil {
@@ -34,7 +42,21 @@ func run() error {
 	defer databasePool.Close()
 	slog.Info("database connection established")
 
-	classifier, err := router.NewOpenAIClassifier(
+	origins, err := web.NewOriginPolicy(os.Getenv("FRONTEND_ORIGIN"))
+	if err != nil {
+		return err
+	}
+	tokenVerifier, err := auth.NewSupabaseVerifier(ctx, os.Getenv("SUPABASE_URL"))
+	if err != nil {
+		return err
+	}
+	tickets := auth.NewTicketStore()
+	ticketHandler, err := auth.NewTicketHandler(tokenVerifier.Verify, tickets)
+	if err != nil {
+		return err
+	}
+
+	classifier, err := assistant.NewOpenAIClassifier(
 		os.Getenv("OPENAI_API_KEY"),
 		os.Getenv("OPENAI_ROUTER_MODEL"),
 	)
@@ -46,23 +68,65 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	activityRouter := router.NewRouter(classifier)
-	audioServer := audio.NewServer(transcriber, func(ctx context.Context, utterance string) {
-		routeUtterance(ctx, utterance, activityRouter)
+	activityRouter := assistant.NewRouter(classifier)
+
+	toolRegistry := tool.NewRegistry()
+	locationStore := location.NewStore()
+	locationTool, err := location.New(locationStore)
+	if err != nil {
+		return err
+	}
+	if err := toolRegistry.Register(locationTool); err != nil {
+		return err
+	}
+
+	toolExecutor, err := tool.NewExecutor(toolRegistry)
+	if err != nil {
+		return err
+	}
+	agent, err := openai.NewAgent(
+		os.Getenv("OPENAI_API_KEY"),
+		os.Getenv("OPENAI_AGENT_MODEL"),
+		toolRegistry,
+		toolExecutor,
+	)
+	if err != nil {
+		return err
+	}
+	assistantService, err := assistant.NewService(activityRouter, agent)
+	if err != nil {
+		return err
+	}
+
+	realtimeServer := realtime.NewServer(transcriber, realtime.Handlers{
+		Authenticate: tickets.Consume,
+		CheckOrigin:  origins.Allows,
+		Utterance: func(ctx context.Context, scope tool.Scope, utterance string) (string, error) {
+			return handleUtterance(ctx, scope, utterance, assistantService)
+		},
+		Location: func(_ context.Context, scope tool.Scope, update realtime.LocationUpdate) error {
+			return locationStore.Update(scope, location.Position{
+				Latitude:       update.Latitude,
+				Longitude:      update.Longitude,
+				AccuracyMeters: update.AccuracyMeters,
+			})
+		},
+		Disconnect: locationStore.Delete,
 	})
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	mux := http.NewServeMux()
+	mux.Handle("/auth/ws-ticket", origins.Handler(ticketHandler))
+	mux.Handle("/", realtimeServer)
 
 	server := &http.Server{
 		Addr:              listenAddress(),
-		Handler:           audioServer.Handler(),
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	serverErrors := make(chan error, 1)
 	go func() {
-		slog.Info("audio WebSocket server listening", "address", server.Addr)
+		slog.Info("server listening", "address", server.Addr)
 		serverErrors <- server.ListenAndServe()
 	}()
 
@@ -77,21 +141,27 @@ func run() error {
 		defer cancel()
 
 		serverErr := server.Shutdown(shutdownCtx)
-		audioErr := audioServer.Shutdown(shutdownCtx)
-		return errors.Join(serverErr, audioErr)
+		realtimeErr := realtimeServer.Shutdown(shutdownCtx)
+		return errors.Join(serverErr, realtimeErr)
 	}
 }
 
-func routeUtterance(ctx context.Context, utterance string, activityRouter *router.Router) {
-	decision, err := activityRouter.Route(ctx, utterance)
+func handleUtterance(
+	ctx context.Context,
+	scope tool.Scope,
+	utterance string,
+	service *assistant.Service,
+) (string, error) {
+	outcome, err := service.HandleUtterance(ctx, scope, utterance)
 	if err != nil {
-		slog.ErrorContext(ctx, "failed to route utterance", "error", err)
-		return
+		return "", err
 	}
 
-	slog.InfoContext(ctx, "utterance routed",
-		"action", decision.Action,
+	slog.InfoContext(ctx, "utterance handled",
+		"action", outcome.Decision.Action,
+		"responded", outcome.Response != "",
 	)
+	return outcome.Response, nil
 }
 
 func listenAddress() string {

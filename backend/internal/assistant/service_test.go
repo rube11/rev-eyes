@@ -5,13 +5,12 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rube11/rev-eyes/backend/internal/router"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
-type routerFunc func(ctx context.Context, utterance string) (router.Decision, error)
+type routerFunc func(ctx context.Context, utterance string) (Decision, error)
 
-func (f routerFunc) Route(ctx context.Context, utterance string) (router.Decision, error) {
+func (f routerFunc) Route(ctx context.Context, utterance string) (Decision, error) {
 	return f(ctx, utterance)
 }
 
@@ -27,9 +26,9 @@ func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
 	wantScope := tool.Scope{UserID: "user-123", SessionID: "session-456"}
 	agentCalled := false
 	service, err := NewService(
-		routerFunc(func(context.Context, string) (router.Decision, error) {
-			return router.Decision{
-				Action: router.ActionRespond,
+		routerFunc(func(context.Context, string) (Decision, error) {
+			return Decision{
+				Action: ActionRespond,
 				Query:  "What is nearby?",
 			}, nil
 		}),
@@ -59,7 +58,7 @@ func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
 	if !agentCalled {
 		t.Fatal("Respond() was not called")
 	}
-	if outcome.Decision.Action != router.ActionRespond {
+	if outcome.Decision.Action != ActionRespond {
 		t.Fatalf("outcome action = %q", outcome.Decision.Action)
 	}
 	if outcome.Response != "There is a cafe nearby." {
@@ -71,8 +70,8 @@ func TestHandleUtteranceDoesNotCallAgentForNonResponseAction(t *testing.T) {
 	t.Parallel()
 
 	service, err := NewService(
-		routerFunc(func(context.Context, string) (router.Decision, error) {
-			return router.Decision{Action: router.ActionStateUpdate}, nil
+		routerFunc(func(context.Context, string) (Decision, error) {
+			return Decision{Action: ActionStateUpdate}, nil
 		}),
 		agentFunc(func(context.Context, tool.Scope, string) (string, error) {
 			t.Fatal("Respond() called for state update")
@@ -87,7 +86,7 @@ func TestHandleUtteranceDoesNotCallAgentForNonResponseAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleUtterance() error = %v", err)
 	}
-	if outcome.Decision.Action != router.ActionStateUpdate {
+	if outcome.Decision.Action != ActionStateUpdate {
 		t.Fatalf("outcome action = %q", outcome.Decision.Action)
 	}
 	if outcome.Response != "" {
@@ -99,8 +98,8 @@ func TestHandleUtteranceUsesOriginalUtteranceWhenQueryIsEmpty(t *testing.T) {
 	t.Parallel()
 
 	service, err := NewService(
-		routerFunc(func(context.Context, string) (router.Decision, error) {
-			return router.Decision{Action: router.ActionRespond}, nil
+		routerFunc(func(context.Context, string) (Decision, error) {
+			return Decision{Action: ActionRespond}, nil
 		}),
 		agentFunc(func(_ context.Context, _ tool.Scope, query string) (string, error) {
 			if query != "what time is it" {
@@ -127,8 +126,8 @@ func TestHandleUtteranceWrapsDependencyErrors(t *testing.T) {
 
 	routeErr := errors.New("route failed")
 	service, err := NewService(
-		routerFunc(func(context.Context, string) (router.Decision, error) {
-			return router.Decision{}, routeErr
+		routerFunc(func(context.Context, string) (Decision, error) {
+			return Decision{}, routeErr
 		}),
 		agentFunc(func(context.Context, tool.Scope, string) (string, error) {
 			return "", nil
@@ -143,8 +142,8 @@ func TestHandleUtteranceWrapsDependencyErrors(t *testing.T) {
 
 	agentErr := errors.New("agent failed")
 	service, err = NewService(
-		routerFunc(func(context.Context, string) (router.Decision, error) {
-			return router.Decision{Action: router.ActionRespond, Query: "hello"}, nil
+		routerFunc(func(context.Context, string) (Decision, error) {
+			return Decision{Action: ActionRespond, Query: "hello"}, nil
 		}),
 		agentFunc(func(context.Context, tool.Scope, string) (string, error) {
 			return "", agentErr
@@ -164,8 +163,8 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 	agent := agentFunc(func(context.Context, tool.Scope, string) (string, error) {
 		return "", nil
 	})
-	activityRouter := routerFunc(func(context.Context, string) (router.Decision, error) {
-		return router.Decision{}, nil
+	activityRouter := routerFunc(func(context.Context, string) (Decision, error) {
+		return Decision{}, nil
 	})
 
 	if _, err := NewService(nil, agent); !errors.Is(err, ErrRouterRequired) {

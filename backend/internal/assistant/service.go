@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/rube11/rev-eyes/backend/internal/router"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
@@ -17,7 +16,7 @@ var (
 
 // ActivityRouter decides how the assistant should handle a finalized utterance.
 type ActivityRouter interface {
-	Route(ctx context.Context, utterance string) (router.Decision, error)
+	Route(ctx context.Context, utterance string) (Decision, error)
 }
 
 // Agent generates a response for a routed query. Scope must be populated from
@@ -28,7 +27,7 @@ type Agent interface {
 
 // Outcome describes what the assistant decided and any response it generated.
 type Outcome struct {
-	Decision router.Decision
+	Decision Decision
 	Response string
 }
 
@@ -65,7 +64,7 @@ func (s *Service) HandleUtterance(
 	}
 
 	outcome := Outcome{Decision: decision}
-	if decision.Action != router.ActionRespond {
+	if decision.Action != ActionRespond {
 		return outcome, nil
 	}
 
