@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
 func TestTicketStoreCreatesOneTimeScopedTickets(t *testing.T) {
@@ -15,7 +17,11 @@ func TestTicketStoreCreatesOneTimeScopedTickets(t *testing.T) {
 	store := NewTicketStore()
 	store.now = func() time.Time { return now }
 
-	ticket, expiresAt, err := store.Issue(" user-123 ")
+	issuedScope := tool.Scope{
+		UserID:    " user-123 ",
+		SessionID: " session-123 ",
+	}
+	ticket, expiresAt, err := store.Issue(issuedScope)
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
@@ -27,14 +33,17 @@ func TestTicketStoreCreatesOneTimeScopedTickets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Consume() error = %v", err)
 	}
-	if scope.UserID != "user-123" || scope.SessionID == "" {
+	if scope.UserID != "user-123" || scope.SessionID != "session-123" {
 		t.Fatalf("scope = %+v", scope)
 	}
 	if _, err := store.Consume(ticket); !errors.Is(err, ErrInvalidTicket) {
 		t.Fatalf("second Consume() error = %v, want %v", err, ErrInvalidTicket)
 	}
 
-	secondTicket, _, err := store.Issue("user-123")
+	secondTicket, _, err := store.Issue(tool.Scope{
+		UserID:    "user-123",
+		SessionID: "session-123",
+	})
 	if err != nil {
 		t.Fatalf("second Issue() error = %v", err)
 	}
@@ -42,8 +51,8 @@ func TestTicketStoreCreatesOneTimeScopedTickets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Consume() error = %v", err)
 	}
-	if secondScope.SessionID == scope.SessionID {
-		t.Fatal("separate tickets received the same session ID")
+	if secondScope != scope {
+		t.Fatalf("second scope = %+v, want %+v", secondScope, scope)
 	}
 }
 
@@ -52,7 +61,10 @@ func TestTicketStoreRejectsExpiredTicket(t *testing.T) {
 	store := NewTicketStore()
 	store.now = func() time.Time { return now }
 
-	ticket, _, err := store.Issue("user-123")
+	ticket, _, err := store.Issue(tool.Scope{
+		UserID:    "user-123",
+		SessionID: "session-123",
+	})
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
@@ -71,7 +83,13 @@ func TestTicketHandlerExchangesBearerTokenForTicket(t *testing.T) {
 		}
 		return "user-123", nil
 	}
-	handler, err := NewTicketHandler(verifier, store)
+	resolveSession := func(_ context.Context, userID string) (string, error) {
+		if userID != "user-123" {
+			t.Fatalf("userID = %q", userID)
+		}
+		return "session-123", nil
+	}
+	handler, err := NewTicketHandler(verifier, resolveSession, store)
 	if err != nil {
 		t.Fatalf("NewTicketHandler() error = %v", err)
 	}
@@ -102,7 +120,7 @@ func TestTicketHandlerExchangesBearerTokenForTicket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Consume() error = %v", err)
 	}
-	if scope.UserID != "user-123" || scope.SessionID == "" {
+	if scope.UserID != "user-123" || scope.SessionID != "session-123" {
 		t.Fatalf("scope = %+v", scope)
 	}
 }
@@ -112,6 +130,10 @@ func TestTicketHandlerRejectsMissingBearerToken(t *testing.T) {
 	handler, err := NewTicketHandler(
 		func(context.Context, string) (string, error) {
 			t.Fatal("Verify() was called")
+			return "", nil
+		},
+		func(context.Context, string) (string, error) {
+			t.Fatal("resolveSession() was called")
 			return "", nil
 		},
 		store,

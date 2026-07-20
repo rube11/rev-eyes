@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -17,8 +18,9 @@ import (
 const ticketTTL = time.Minute
 
 var (
-	ErrInvalidTicket  = errors.New("invalid or expired WebSocket ticket")
-	ErrUserIDRequired = errors.New("user ID is required")
+	ErrInvalidTicket     = errors.New("invalid or expired WebSocket ticket")
+	ErrUserIDRequired    = errors.New("user ID is required")
+	ErrSessionIDRequired = errors.New("session ID is required")
 )
 
 type ticketGrant struct {
@@ -40,17 +42,17 @@ func NewTicketStore() *TicketStore {
 	}
 }
 
-func (s *TicketStore) Issue(userID string) (string, time.Time, error) {
-	userID = strings.TrimSpace(userID)
-	if userID == "" {
+func (s *TicketStore) Issue(scope tool.Scope) (string, time.Time, error) {
+	scope.UserID = strings.TrimSpace(scope.UserID)
+	scope.SessionID = strings.TrimSpace(scope.SessionID)
+	if scope.UserID == "" {
 		return "", time.Time{}, ErrUserIDRequired
+	}
+	if scope.SessionID == "" {
+		return "", time.Time{}, ErrSessionIDRequired
 	}
 
 	ticket, err := randomID(32)
-	if err != nil {
-		return "", time.Time{}, err
-	}
-	sessionID, err := randomID(24)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -65,10 +67,7 @@ func (s *TicketStore) Issue(userID string) (string, time.Time, error) {
 		}
 	}
 	s.tickets[sha256.Sum256([]byte(ticket))] = ticketGrant{
-		scope: tool.Scope{
-			UserID:    userID,
-			SessionID: sessionID,
-		},
+		scope:     scope,
 		expiresAt: expiresAt,
 	}
 	s.mu.Unlock()
@@ -105,18 +104,32 @@ func randomID(size int) (string, error) {
 }
 
 type TicketHandler struct {
-	verifier TokenVerifier
-	tickets  *TicketStore
+	verifier       TokenVerifier
+	resolveSession SessionResolver
+	tickets        *TicketStore
 }
 
-func NewTicketHandler(verifier TokenVerifier, tickets *TicketStore) (*TicketHandler, error) {
+type SessionResolver func(ctx context.Context, userID string) (string, error)
+
+func NewTicketHandler(
+	verifier TokenVerifier,
+	resolveSession SessionResolver,
+	tickets *TicketStore,
+) (*TicketHandler, error) {
 	if verifier == nil {
 		return nil, errors.New("token verifier is required")
+	}
+	if resolveSession == nil {
+		return nil, errors.New("session resolver is required")
 	}
 	if tickets == nil {
 		return nil, errors.New("ticket store is required")
 	}
-	return &TicketHandler{verifier: verifier, tickets: tickets}, nil
+	return &TicketHandler{
+		verifier:       verifier,
+		resolveSession: resolveSession,
+		tickets:        tickets,
+	}, nil
 }
 
 func (h *TicketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +150,15 @@ func (h *TicketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ticket, expiresAt, err := h.tickets.Issue(userID)
+	sessionID, err := h.resolveSession(r.Context(), userID)
+	if err != nil {
+		http.Error(w, "could not resolve session", http.StatusInternalServerError)
+		return
+	}
+	ticket, expiresAt, err := h.tickets.Issue(tool.Scope{
+		UserID:    userID,
+		SessionID: sessionID,
+	})
 	if err != nil {
 		http.Error(w, "could not issue WebSocket ticket", http.StatusInternalServerError)
 		return

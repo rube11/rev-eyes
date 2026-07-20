@@ -16,6 +16,7 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/auth"
 	"github.com/rube11/rev-eyes/backend/internal/database"
 	"github.com/rube11/rev-eyes/backend/internal/realtime"
+	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 	"github.com/rube11/rev-eyes/backend/internal/tool/location"
@@ -41,6 +42,10 @@ func run() error {
 	}
 	defer databasePool.Close()
 	slog.Info("database connection established")
+	sessionStore, err := session.NewStore(databasePool)
+	if err != nil {
+		return err
+	}
 
 	origins, err := web.NewOriginPolicy(os.Getenv("FRONTEND_ORIGIN"))
 	if err != nil {
@@ -51,7 +56,11 @@ func run() error {
 		return err
 	}
 	tickets := auth.NewTicketStore()
-	ticketHandler, err := auth.NewTicketHandler(tokenVerifier.Verify, tickets)
+	ticketHandler, err := auth.NewTicketHandler(
+		tokenVerifier.Verify,
+		sessionStore.Resume,
+		tickets,
+	)
 	if err != nil {
 		return err
 	}
