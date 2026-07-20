@@ -58,6 +58,28 @@ p {
   color: #475569;
 }
 
+form,
+label {
+  display: grid;
+  gap: 12px;
+}
+
+input,
+button {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  font: inherit;
+}
+
+button {
+  margin-top: 20px;
+  color: white;
+  background: #111827;
+  cursor: pointer;
+}
+
 code {
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 }
