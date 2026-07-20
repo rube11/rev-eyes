@@ -10,7 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@evenrealities/even_hub_sdk": "^0.0.10",
+    "@evenrealities/even_hub_sdk": "^0.0.12",
     "@supabase/supabase-js": "^2.110.7",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"

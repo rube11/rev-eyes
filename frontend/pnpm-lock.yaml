@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@evenrealities/even_hub_sdk':
-        specifier: ^0.0.10
-        version: 0.0.10
+        specifier: ^0.0.12
+        version: 0.0.12
       '@supabase/supabase-js':
         specifier: ^2.110.7
         version: 2.110.7
@@ -175,8 +175,8 @@ packages:
     resolution: {integrity: sha512-rZAP3aVgB9ds9KOeUSL+zZ21hPmo8dh6fnIFwRQj5EAZl9gzR7wxYbYXYysAM8CTqGmUGyp2S4kUdV17MnGuWQ==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
 
-  '@evenrealities/even_hub_sdk@0.0.10':
-    resolution: {integrity: sha512-95zmlbFzyyh+TxPz5Wq8Ix4IxUDZzo/WJWAUXPQ/83kaU8R78MOYYBgKDM47Yw61LoEn+Ob5GNLDu/T9bj85xA==}
+  '@evenrealities/even_hub_sdk@0.0.12':
+    resolution: {integrity: sha512-PXAeuPl7dMIlSWlctDeQAodIr7iuNROaH9GvRrZ86xzRh33DkMJYY1hSxy6BTk+TLkDA0tYlVi4bOsSIJngINA==}
     engines: {node: ^20.0.0 || >=22.0.0}
 
   '@humanfs/core@0.19.2':
@@ -1120,7 +1120,7 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
-  '@evenrealities/even_hub_sdk@0.0.10': {}
+  '@evenrealities/even_hub_sdk@0.0.12': {}
 
   '@humanfs/core@0.19.2':
     dependencies:
