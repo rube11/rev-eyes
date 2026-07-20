@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -111,7 +112,7 @@ func run() error {
 		Authenticate: tickets.Consume,
 		CheckOrigin:  origins.Allows,
 		Utterance: func(ctx context.Context, scope tool.Scope, utterance string) (string, error) {
-			return handleUtterance(ctx, scope, utterance, assistantService)
+			return handleUtterance(ctx, scope, utterance, assistantService, sessionStore)
 		},
 		Location: func(_ context.Context, scope tool.Scope, update realtime.LocationUpdate) error {
 			return locationStore.Update(scope, location.Position{
@@ -155,15 +156,38 @@ func run() error {
 	}
 }
 
+type utteranceService interface {
+	HandleUtterance(context.Context, tool.Scope, string) (assistant.Outcome, error)
+}
+
+type transcriptStore interface {
+	Append(context.Context, tool.Scope, session.Speaker, string) error
+}
+
 func handleUtterance(
 	ctx context.Context,
 	scope tool.Scope,
 	utterance string,
-	service *assistant.Service,
+	service utteranceService,
+	transcripts transcriptStore,
 ) (string, error) {
+	if err := transcripts.Append(ctx, scope, session.SpeakerUser, utterance); err != nil {
+		return "", fmt.Errorf("persist user utterance: %w", err)
+	}
+
 	outcome, err := service.HandleUtterance(ctx, scope, utterance)
 	if err != nil {
 		return "", err
+	}
+	if outcome.Response != "" {
+		if err := transcripts.Append(
+			ctx,
+			scope,
+			session.SpeakerAssistant,
+			outcome.Response,
+		); err != nil {
+			return "", fmt.Errorf("persist assistant utterance: %w", err)
+		}
 	}
 
 	slog.InfoContext(ctx, "utterance handled",
