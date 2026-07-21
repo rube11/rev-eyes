@@ -175,6 +175,9 @@ func TestServerExchangesScopedLocationAndAssistantMessages(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("WriteJSON() error = %v", err)
 	}
+	if err := conn.WriteJSON(map[string]string{"type": listeningStartMessageType}); err != nil {
+		t.Fatalf("WriteJSON() error = %v", err)
+	}
 	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("where am I")); err != nil {
 		t.Fatalf("WriteMessage() error = %v", err)
 	}
@@ -197,6 +200,10 @@ func TestServerExchangesScopedLocationAndAssistantMessages(t *testing.T) {
 	if scope := receive(t, utteranceScopes); scope != expectedScope {
 		t.Fatalf("utterance scope = %+v, want %+v", scope, expectedScope)
 	}
+	if err := conn.WriteJSON(map[string]string{"type": listeningStopMessageType}); err != nil {
+		t.Fatalf("WriteJSON() error = %v", err)
+	}
+	assertServerMessageType(t, conn, listeningStoppedMessageType)
 
 	if err := conn.WriteMessage(
 		websocket.CloseMessage,
@@ -253,6 +260,9 @@ func TestDisconnectCancelsUtterance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial() error = %v", err)
 	}
+	if err := conn.WriteJSON(map[string]string{"type": listeningStartMessageType}); err != nil {
+		t.Fatalf("WriteJSON() error = %v", err)
+	}
 	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("hello")); err != nil {
 		t.Fatalf("WriteMessage() error = %v", err)
 	}
@@ -292,10 +302,103 @@ func TestServerRejectsOversizedMessage(t *testing.T) {
 	receive(t, disconnected)
 }
 
+func TestServerControlsTranscriptionLifecycle(t *testing.T) {
+	started := make(chan struct{}, 2)
+	processed := make(chan struct{}, 1)
+	server := NewServer(transcriberFunc(func(
+		ctx context.Context,
+		audio <-chan []byte,
+		completed chan<- string,
+	) error {
+		started <- struct{}{}
+		return echoTranscriber{}.Transcribe(ctx, audio, completed)
+	}), Handlers{
+		Authenticate: func(string) (tool.Scope, error) {
+			return tool.Scope{UserID: "user", SessionID: "session"}, nil
+		},
+		Location: func(context.Context, tool.Scope, LocationUpdate) error {
+			processed <- struct{}{}
+			return nil
+		},
+		Utterance: func(_ context.Context, _ tool.Scope, utterance string) (string, error) {
+			return "reply to " + utterance, nil
+		},
+	})
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(websocketTestURL(httpServer.URL), nil)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline() error = %v", err)
+	}
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("ignored")); err != nil {
+		t.Fatalf("WriteMessage() error = %v", err)
+	}
+	if err := conn.WriteJSON(map[string]string{"type": locationMessageType}); err != nil {
+		t.Fatalf("WriteJSON() error = %v", err)
+	}
+	receive(t, processed)
+
+	select {
+	case <-started:
+		t.Fatal("transcription started on connection")
+	default:
+	}
+
+	for _, utterance := range []string{"first", "second"} {
+		if err := conn.WriteJSON(map[string]string{"type": listeningStartMessageType}); err != nil {
+			t.Fatalf("WriteJSON() error = %v", err)
+		}
+		receive(t, started)
+
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte(utterance)); err != nil {
+			t.Fatalf("WriteMessage() error = %v", err)
+		}
+		var response serverMessage
+		if err := conn.ReadJSON(&response); err != nil {
+			t.Fatalf("ReadJSON() error = %v", err)
+		}
+		if response.Type != assistantResponseMessageType || response.Text != "reply to "+utterance {
+			t.Fatalf("response = %+v", response)
+		}
+
+		if err := conn.WriteJSON(map[string]string{"type": listeningStopMessageType}); err != nil {
+			t.Fatalf("WriteJSON() error = %v", err)
+		}
+		assertServerMessageType(t, conn, listeningStoppedMessageType)
+	}
+}
+
 type discardJSONWriter struct{}
 
 func (discardJSONWriter) WriteJSON(any) error {
 	return nil
+}
+
+type transcriberFunc func(context.Context, <-chan []byte, chan<- string) error
+
+func (f transcriberFunc) Transcribe(
+	ctx context.Context,
+	audio <-chan []byte,
+	completed chan<- string,
+) error {
+	return f(ctx, audio, completed)
+}
+
+func assertServerMessageType(t *testing.T, conn *websocket.Conn, want string) {
+	t.Helper()
+
+	var message serverMessage
+	if err := conn.ReadJSON(&message); err != nil {
+		t.Fatalf("ReadJSON() error = %v", err)
+	}
+	if message.Type != want {
+		t.Fatalf("message type = %q, want %q", message.Type, want)
+	}
 }
 
 func websocketTestURL(httpURL string) string {
