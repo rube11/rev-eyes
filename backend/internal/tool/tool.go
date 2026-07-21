@@ -21,8 +21,9 @@ type Spec struct {
 
 // Scope contains trusted request information supplied by the backend.
 type Scope struct {
-	UserID    string
-	SessionID string
+	UserID      string
+	SessionID   string
+	UtteranceID string
 }
 
 // Result is the normalized output returned by a tool.
