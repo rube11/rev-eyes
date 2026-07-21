@@ -15,7 +15,7 @@ import type {
   EvenHubEvent,
 } from "@evenrealities/even_hub_sdk"
 
-import { connectAudioSocket } from "../shared/api/client"
+import { connectRealtimeSocket } from "../shared/api/client"
 
 const responseContainer = {
   id: 2,
@@ -25,7 +25,10 @@ const responseContainer = {
 type ServerMessage = {
   type: string
   text?: string
+  error?: string
 }
+
+type ListeningState = "idle" | "starting" | "listening" | "stopping"
 
 let bridgePromise: ReturnType<typeof waitForEvenAppBridge> | undefined
 let startup: Promise<void> | undefined
@@ -133,6 +136,18 @@ function sendLocation(socket: WebSocket, location: AppLocation) {
   }))
 }
 
+function sendControl(socket: WebSocket, type: string) {
+  if (socket.readyState !== WebSocket.OPEN) {
+    return false
+  }
+  try {
+    socket.send(JSON.stringify({ type }))
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function initializeEvenExperience(
   accessToken: string,
   onResponse: (text: string) => void,
@@ -142,24 +157,52 @@ export async function initializeEvenExperience(
   onStatus("Connecting")
   await showEvenMessage("Connecting...")
 
-  const socket = await connectAudioSocket(accessToken)
+  const socket = await connectRealtimeSocket(accessToken)
   let active = true
-  let listening = false
+  let listeningState: ListeningState = "idle"
   let locationStarted = false
   onStatus("Connected")
   await showEvenMessage("Ready\nPress Toggle listening")
 
+  const handleServerMessage = async (message: ServerMessage) => {
+    switch (message.type) {
+      case "assistant_response": {
+        if (!message.text) {
+          return
+        }
+        onResponse(message.text)
+        const state = listeningState === "listening" ? "Listening..." : "Ready"
+        const display = `${state}\n\n${message.text}`
+        await showEvenMessage(display)
+        return
+      }
+
+      case "listening_stopped": {
+        const stoppedUnexpectedly =
+          listeningState === "starting" || listeningState === "listening"
+        listeningState = "idle"
+        if (stoppedUnexpectedly) {
+          await bridge.audioControl(false).catch(() => undefined)
+        }
+        if (message.error) {
+          onStatus(message.error)
+          await showEvenMessage(message.error)
+        } else {
+          onStatus("Connected")
+          if (stoppedUnexpectedly) {
+            await showEvenMessage("Ready")
+          }
+        }
+        return
+      }
+    }
+  }
   const handleMessage = (event: MessageEvent<string>) => {
     try {
       const message = JSON.parse(event.data) as ServerMessage
-      if (message.type === "assistant_response" && message.text) {
-        onResponse(message.text)
-        const state = listening ? "Listening..." : "Ready"
-        const display = `${state}\n\n${message.text}`
-        void showEvenMessage(display).catch(() => {
-          onStatus("Display unavailable")
-        })
-      }
+      void handleServerMessage(message).catch(() => {
+        onStatus("Glasses command failed")
+      })
     } catch {
       // Ignore unknown server messages.
     }
@@ -168,7 +211,7 @@ export async function initializeEvenExperience(
     if (!active) {
       return
     }
-    listening = false
+    listeningState = "idle"
     onStatus("Disconnected")
     void showEvenMessage("Connection lost\nReopen the app").catch(() => undefined)
     void bridge.audioControl(false).catch(() => undefined)
@@ -182,7 +225,11 @@ export async function initializeEvenExperience(
 
   const handleEvenEvent = async (event: EvenHubEvent) => {
     const pcm = event.audioEvent?.audioPcm
-    if (pcm && socket.readyState === WebSocket.OPEN) {
+    if (
+      pcm &&
+      listeningState === "listening" &&
+      socket.readyState === WebSocket.OPEN
+    ) {
       socket.send(new Uint8Array(pcm))
       return
     }
@@ -200,11 +247,16 @@ export async function initializeEvenExperience(
       return
     }
 
-    if (listening) {
-      await bridge.audioControl(false)
-      listening = false
+    if (listeningState === "listening") {
+      listeningState = "stopping"
+      sendControl(socket, "listening_stop")
+      await bridge.audioControl(false).catch(() => undefined)
       onStatus("Connected")
       await showEvenMessage("Ready")
+      return
+    }
+
+    if (listeningState !== "idle") {
       return
     }
 
@@ -212,17 +264,38 @@ export async function initializeEvenExperience(
       await showEvenMessage("Connection lost\nReopen the app")
       return
     }
+    listeningState = "starting"
     onStatus("Starting microphone")
     await showEvenMessage("Starting microphone...")
+    if (!active || listeningState !== "starting") {
+      return
+    }
     const started = await bridge.audioControl(
       true,
       AudioInputSource.Glasses,
-    )
-    listening = started
-    onStatus(started ? "Listening" : "Microphone unavailable")
-    await showEvenMessage(
-      started ? "Listening..." : "Could not start microphone",
-    )
+    ).catch(() => false)
+    if (!active || listeningState !== "starting") {
+      if (started) {
+        await bridge.audioControl(false).catch(() => undefined)
+      }
+      return
+    }
+    if (!started) {
+      listeningState = "idle"
+      onStatus("Microphone unavailable")
+      await showEvenMessage("Could not start microphone")
+      return
+    }
+    if (!sendControl(socket, "listening_start")) {
+      listeningState = "idle"
+      await bridge.audioControl(false).catch(() => undefined)
+      onStatus("Disconnected")
+      await showEvenMessage("Connection lost\nReopen the app")
+      return
+    }
+    listeningState = "listening"
+    onStatus("Listening")
+    await showEvenMessage("Listening...")
   }
   const stopEvents = bridge.onEvenHubEvent((event) => {
     void handleEvenEvent(event).catch(() => {
@@ -259,7 +332,7 @@ export async function initializeEvenExperience(
 
   return () => {
     active = false
-    listening = false
+    listeningState = "idle"
     stopEvents()
     stopLocationEvents()
     socket.removeEventListener("message", handleMessage)

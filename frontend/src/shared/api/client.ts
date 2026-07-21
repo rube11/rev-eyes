@@ -4,7 +4,7 @@ type TicketResponse = {
   ticket: string
 }
 
-export async function connectAudioSocket(accessToken: string): Promise<WebSocket> {
+export async function connectRealtimeSocket(accessToken: string): Promise<WebSocket> {
   const response = await fetch(`${env.apiBaseUrl}/auth/ws-ticket`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}` },
