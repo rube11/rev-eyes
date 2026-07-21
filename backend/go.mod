@@ -8,10 +8,12 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.7.2
+	github.com/tiktoken-go/tokenizer v0.3.0
 )
 
 require (
 	github.com/MicahParks/jwkset v0.11.0 // indirect
+	github.com/dlclark/regexp2 v1.9.0 // indirect
 	github.com/dvonthenen/websocket v1.5.1-dyv.2 // indirect
 	github.com/fatih/color v1.15.0 // indirect
 	github.com/go-logr/logr v1.3.0 // indirect
