@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,11 +12,12 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
+const searchLimit = 5
+
 var (
 	ErrDatabaseRequired  = errors.New("memory database is required")
 	ErrScopeRequired     = errors.New("memory scope is required")
 	ErrSourceRequired    = errors.New("source utterance ID is required")
-	ErrTextRequired      = errors.New("memory text is required")
 	ErrSourceUnavailable = errors.New("source utterance is unavailable")
 )
 
@@ -31,12 +33,12 @@ func NewStore(pool *pgxpool.Pool) (*Store, error) {
 	return &Store{pool: pool}, nil
 }
 
-// Remember saves one confirmed memory linked to its trusted source utterance.
+// Remember saves one confirmed card linked to its trusted source utterance.
 func (s *Store) Remember(
 	ctx context.Context,
 	scope tool.Scope,
 	sourceUtteranceID string,
-	text string,
+	card Card,
 ) error {
 	scope.UserID = strings.TrimSpace(scope.UserID)
 	scope.SessionID = strings.TrimSpace(scope.SessionID)
@@ -47,13 +49,26 @@ func (s *Store) Remember(
 	if sourceUtteranceID == "" {
 		return ErrSourceRequired
 	}
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return ErrTextRequired
+	card = card.Normalize()
+	if err := card.Validate(); err != nil {
+		return err
+	}
+
+	details, err := json.Marshal(card.Details)
+	if err != nil {
+		return fmt.Errorf("encode memory details: %w", err)
+	}
+	entities, err := json.Marshal(card.Entities)
+	if err != nil {
+		return fmt.Errorf("encode memory entities: %w", err)
+	}
+	topics := make([]string, len(card.Topics))
+	for index, topic := range card.Topics {
+		topics[index] = string(topic)
 	}
 
 	var memoryID string
-	err := s.pool.QueryRow(
+	err = s.pool.QueryRow(
 		ctx,
 		`with source as (
 		     select id, user_id
@@ -63,8 +78,23 @@ func (s *Store) Remember(
 		       and session_id = $2::uuid
 		 ),
 		 created_memory as (
-		     insert into public.memories (user_id, text)
-		     select user_id, $4
+		     insert into public.memories (
+		         user_id,
+		         topics,
+		         kind,
+		         title,
+		         summary,
+		         details,
+		         entities
+		     )
+		     select
+		         user_id,
+		         $4,
+		         $5,
+		         $6,
+		         $7,
+		         $8::jsonb,
+		         $9::jsonb
 		     from source
 		     returning id, user_id
 		 )
@@ -83,7 +113,12 @@ func (s *Store) Remember(
 		scope.UserID,
 		scope.SessionID,
 		sourceUtteranceID,
-		text,
+		topics,
+		string(card.Kind),
+		card.Title,
+		card.Summary,
+		string(details),
+		string(entities),
 	).Scan(&memoryID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrSourceUnavailable
@@ -92,4 +127,90 @@ func (s *Store) Remember(
 		return fmt.Errorf("save confirmed memory: %w", err)
 	}
 	return nil
+}
+
+// Find returns the newest active cards matching an exact lookup.
+func (s *Store) Find(
+	ctx context.Context,
+	scope tool.Scope,
+	lookup Lookup,
+) ([]Card, error) {
+	scope.UserID = strings.TrimSpace(scope.UserID)
+	if scope.UserID == "" {
+		return nil, ErrScopeRequired
+	}
+
+	lookup = lookup.Normalize()
+	if lookup.Empty() {
+		return nil, nil
+	}
+
+	topics := make([]string, 0, len(lookup.Topics))
+	for _, topic := range lookup.Topics {
+		topics = append(topics, string(topic))
+	}
+	kinds := make([]string, 0, len(lookup.Kinds))
+	for _, kind := range lookup.Kinds {
+		kinds = append(kinds, string(kind))
+	}
+
+	rows, err := s.pool.Query(
+		ctx,
+		`select jsonb_build_object(
+		     'topics', memory.topics,
+		     'kind', memory.kind,
+		     'title', memory.title,
+		     'summary', memory.summary,
+		     'details', memory.details,
+		     'entities', memory.entities
+		 )
+		 from public.memories as memory
+		 where memory.user_id = $1::uuid
+		   and memory.status = 'active'
+		   and (cardinality($2::text[]) = 0 or memory.topics && $2::text[])
+		   and (cardinality($3::text[]) = 0 or memory.kind = any($3::text[]))
+		   and case when cardinality($4::text[]) > 0 then
+		       exists (
+		           select 1
+		           from jsonb_array_elements(memory.entities) as entity(value)
+		           where lower(entity.value->>'name') = any($4::text[])
+		       )
+		   else
+		       exists (
+		           select 1
+		           from unnest($5::text[]) as term(value)
+		           where strpos(lower(memory.title || ' ' || memory.summary), term.value) > 0
+		       )
+		   end
+		 order by memory.updated_at desc
+		 limit $6`,
+		scope.UserID,
+		topics,
+		kinds,
+		lookup.Entities,
+		lookup.Terms,
+		searchLimit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("find memories: %w", err)
+	}
+	defer rows.Close()
+
+	cards := make([]Card, 0, searchLimit)
+	for rows.Next() {
+		var encoded []byte
+		if err := rows.Scan(&encoded); err != nil {
+			return nil, fmt.Errorf("scan memory: %w", err)
+		}
+		var card Card
+		if err := json.Unmarshal(encoded, &card); err != nil {
+			return nil, fmt.Errorf("decode memory: %w", err)
+		}
+		cards = append(cards, card)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read memories: %w", err)
+	}
+
+	return cards, nil
 }
