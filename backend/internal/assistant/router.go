@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+
+	"github.com/rube11/rev-eyes/backend/internal/memory"
 )
 
 type Action string
@@ -17,11 +19,14 @@ const (
 	ActionStateUpdate Action = "state_update"
 	ActionRemember    Action = "remember"
 	ActionProposeTask Action = "propose_task"
+	ActionResolveTask Action = "resolve_task"
 )
 
 type Decision struct {
-	Action Action `json:"action"`
-	Query  string `json:"query"`
+	Action       Action        `json:"action"`
+	Query        string        `json:"query"`
+	MemoryLookup memory.Lookup `json:"memory_lookup"`
+	Memory       *memory.Card  `json:"memory"`
 }
 
 type Router struct {
@@ -65,6 +70,25 @@ func (r *Router) Route(ctx context.Context, utterance string) (Decision, error) 
 
 	decision.Query = strings.TrimSpace(decision.Query)
 	decision = validateDecision(decision)
+	if decision.Action == ActionRespond || decision.Action == ActionProposeTask {
+		decision.MemoryLookup = decision.MemoryLookup.Normalize()
+	} else {
+		decision.MemoryLookup = memory.Lookup{}
+	}
+	if decision.Action != ActionRemember {
+		decision.Memory = nil
+	} else if decision.Memory == nil {
+		err := fmt.Errorf("%w: remember decision has no card", memory.ErrCardInvalid)
+		slog.ErrorContext(ctx, "router memory validation failed", "error", err)
+		return fallback, err
+	} else {
+		card := decision.Memory.Normalize()
+		if err := card.Validate(); err != nil {
+			slog.ErrorContext(ctx, "router memory validation failed", "error", err)
+			return fallback, err
+		}
+		decision.Memory = &card
+	}
 	slog.InfoContext(ctx, "router decision", "action", decision.Action)
 
 	return decision, nil

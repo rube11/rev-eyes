@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/rube11/rev-eyes/backend/internal/memory"
 )
 
 const (
@@ -24,7 +26,22 @@ Choose exactly one action:
 - propose_task: a potential task inferred from the speech that should be proposed to the user before execution.
 
 Set query to a concise, standalone version of the request. Use an empty query for ignore.
-For remember, set query to only the fact or preference being saved.
+Set memory_lookup to empty arrays unless the action is respond or propose_task.
+For respond and propose_task, always create a proactive memory lookup:
+- terms: one to five short lowercase words or phrases likely to appear in a relevant memory title or summary. Include useful synonyms, not filler words.
+- topics: zero to three relevant memory topics.
+- kinds: zero or more relevant memory kinds.
+- entities: names explicitly mentioned in the request.
+Topics and kinds are hard filters, so leave them empty when uncertain.
+Set memory to null unless the action is remember.
+For remember, set query to the memory summary and create one memory card:
+- Choose one to three topics from: work, personal, friends, family, relationships, health, preferences, goals, places, other.
+- Choose a kind from: fact, preference, relationship, event, goal, instruction.
+- Write a short title and a single concise, standalone summary.
+- Add useful details as lowercase snake_case keys with short values.
+- Include named people, places, organizations, projects, and events as entities.
+- Use only facts stated in the utterance. Never resolve missing context or invent details.
+For propose_task, preserve whether the user implied the action rather than explicitly requested it in query.
 Classify the speech only. Do not answer it.`
 )
 
@@ -108,13 +125,93 @@ func openAIRequest(model, utterance string) map[string]any {
 							"type": "string",
 							"enum": []string{"ignore", "respond", "state_update", "remember", "propose_task"},
 						},
-						"query": map[string]string{"type": "string"},
+						"query":         map[string]string{"type": "string"},
+						"memory_lookup": memoryLookupSchema(),
+						"memory": map[string]any{
+							"anyOf": []any{
+								memoryCardSchema(),
+								map[string]string{"type": "null"},
+							},
+						},
 					},
-					"required":             []string{"action", "query"},
+					"required":             []string{"action", "query", "memory_lookup", "memory"},
 					"additionalProperties": false,
 				},
 			},
 		},
+	}
+}
+
+func memoryLookupSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"terms":    stringArraySchema(nil),
+			"topics":   stringArraySchema(memory.TopicValues()),
+			"kinds":    stringArraySchema(memory.KindValues()),
+			"entities": stringArraySchema(nil),
+		},
+		"required":             []string{"terms", "topics", "kinds", "entities"},
+		"additionalProperties": false,
+	}
+}
+
+func stringArraySchema(values []string) map[string]any {
+	items := map[string]any{"type": "string"}
+	if len(values) > 0 {
+		items["enum"] = values
+	}
+	return map[string]any{"type": "array", "items": items}
+}
+
+func memoryCardSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"topics": stringArraySchema(memory.TopicValues()),
+			"kind": map[string]any{
+				"type": "string",
+				"enum": memory.KindValues(),
+			},
+			"title":   map[string]string{"type": "string"},
+			"summary": map[string]string{"type": "string"},
+			"details": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"key":   map[string]string{"type": "string"},
+						"value": map[string]string{"type": "string"},
+					},
+					"required":             []string{"key", "value"},
+					"additionalProperties": false,
+				},
+			},
+			"entities": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"type": map[string]any{
+							"type": "string",
+							"enum": memory.EntityTypeValues(),
+						},
+						"name": map[string]string{"type": "string"},
+					},
+					"required":             []string{"type", "name"},
+					"additionalProperties": false,
+				},
+			},
+		},
+		"required": []string{
+			"topics",
+			"kind",
+			"title",
+			"summary",
+			"details",
+			"entities",
+		},
+		"additionalProperties": false,
 	}
 }
 
