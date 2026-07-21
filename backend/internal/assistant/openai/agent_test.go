@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
@@ -101,7 +102,13 @@ func TestAgentReturnsText(t *testing.T) {
 		})
 	})
 
-	response, err := agent.Respond(context.Background(), tool.Scope{}, "  hello  ")
+	response, err := agent.Respond(
+		context.Background(),
+		tool.Scope{},
+		"  hello  ",
+		session.Conversation{},
+		nil,
+	)
 	if err != nil {
 		t.Fatalf("Respond() error = %v", err)
 	}
@@ -174,7 +181,13 @@ func TestAgentExecutesAndReplaysToolCalls(t *testing.T) {
 	})
 
 	scope := tool.Scope{UserID: "user-123", SessionID: "session-456"}
-	response, err := agent.Respond(context.Background(), scope, "What is nearby?")
+	response, err := agent.Respond(
+		context.Background(),
+		scope,
+		"What is nearby?",
+		session.Conversation{},
+		nil,
+	)
 	if err != nil {
 		t.Fatalf("Respond() error = %v", err)
 	}
@@ -322,7 +335,13 @@ func TestAgentReturnsToolErrorsToModel(t *testing.T) {
 		})
 	})
 
-	response, err := agent.Respond(context.Background(), tool.Scope{}, "Where am I?")
+	response, err := agent.Respond(
+		context.Background(),
+		tool.Scope{},
+		"Where am I?",
+		session.Conversation{},
+		nil,
+	)
 	if err != nil {
 		t.Fatalf("Respond() error = %v", err)
 	}
@@ -350,7 +369,13 @@ func TestAgentStopsAtRoundLimit(t *testing.T) {
 	})
 	agent.maxToolRounds = 2
 
-	if _, err := agent.Respond(context.Background(), tool.Scope{}, "keep looking"); !errors.Is(err, ErrToolRoundLimit) {
+	if _, err := agent.Respond(
+		context.Background(),
+		tool.Scope{},
+		"keep looking",
+		session.Conversation{},
+		nil,
+	); !errors.Is(err, ErrToolRoundLimit) {
 		t.Fatalf("Respond() error = %v", err)
 	}
 	if requestNumber != 3 {
@@ -368,7 +393,13 @@ func TestAgentReportsAPIError(t *testing.T) {
 		})
 	})
 
-	_, err := agent.Respond(context.Background(), tool.Scope{}, "hello")
+	_, err := agent.Respond(
+		context.Background(),
+		tool.Scope{},
+		"hello",
+		session.Conversation{},
+		nil,
+	)
 	if err == nil || !strings.Contains(err.Error(), "invalid request") {
 		t.Fatalf("Respond() error = %v", err)
 	}

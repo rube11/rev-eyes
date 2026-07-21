@@ -37,9 +37,17 @@ type createRequest struct {
 	Input             []json.RawMessage `json:"input"`
 	Tools             []functionTool    `json:"tools,omitempty"`
 	ToolChoice        string            `json:"tool_choice,omitempty"`
-	ParallelToolCalls bool              `json:"parallel_tool_calls"`
+	ParallelToolCalls bool              `json:"parallel_tool_calls,omitempty"`
+	MaxOutputTokens   int               `json:"max_output_tokens,omitempty"`
 	Store             bool              `json:"store"`
 	Include           []string          `json:"include,omitempty"`
+}
+
+type responseOptions struct {
+	instructions     string
+	tools            []functionTool
+	maxOutputTokens  int
+	includeReasoning bool
 }
 
 type createResponse struct {
@@ -73,22 +81,29 @@ type toolOutput struct {
 	Output string `json:"output"`
 }
 
+func encodeInputMessage(role, content string) (json.RawMessage, error) {
+	return json.Marshal(inputMessage{Role: role, Content: content})
+}
+
 func (a *Agent) createResponse(
 	ctx context.Context,
 	input []json.RawMessage,
-	tools []functionTool,
+	options responseOptions,
 ) (createResponse, error) {
 	body := createRequest{
 		Model:             a.model,
-		Instructions:      agentInstructions,
+		Instructions:      options.instructions,
 		Input:             input,
-		Tools:             tools,
-		ParallelToolCalls: true,
+		Tools:             options.tools,
+		ParallelToolCalls: len(options.tools) > 0,
+		MaxOutputTokens:   options.maxOutputTokens,
 		Store:             false,
-		Include:           []string{"reasoning.encrypted_content"},
 	}
-	if len(tools) > 0 {
+	if len(options.tools) > 0 {
 		body.ToolChoice = "auto"
+	}
+	if options.includeReasoning {
+		body.Include = []string{"reasoning.encrypted_content"}
 	}
 
 	encoded, err := json.Marshal(body)
