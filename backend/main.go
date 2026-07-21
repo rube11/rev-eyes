@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,15 +16,15 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/auth"
 	"github.com/rube11/rev-eyes/backend/internal/database"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
+	"github.com/rube11/rev-eyes/backend/internal/notification"
 	"github.com/rube11/rev-eyes/backend/internal/realtime"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
+	"github.com/rube11/rev-eyes/backend/internal/task"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 	"github.com/rube11/rev-eyes/backend/internal/tool/location"
 	"github.com/rube11/rev-eyes/backend/internal/web"
 )
-
-const memoryAcknowledgment = "Got it, I'll remember that."
 
 func main() {
 	if err := run(); err != nil {
@@ -51,6 +50,18 @@ func run() error {
 		return err
 	}
 	memoryStore, err := memory.NewStore(databasePool)
+	if err != nil {
+		return err
+	}
+	taskStore, err := task.NewStore(databasePool)
+	if err != nil {
+		return err
+	}
+	notificationStore, err := notification.NewStore(databasePool)
+	if err != nil {
+		return err
+	}
+	taskConfirmer, err := task.NewConfirmer(taskStore)
 	if err != nil {
 		return err
 	}
@@ -93,8 +104,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := toolRegistry.Register(locationTool); err != nil {
+	taskTool, err := task.NewTool(taskStore)
+	if err != nil {
 		return err
+	}
+	for _, candidate := range []tool.Tool{locationTool, taskTool} {
+		if err := toolRegistry.Register(candidate); err != nil {
+			return err
+		}
 	}
 
 	toolExecutor, err := tool.NewExecutor(toolRegistry)
@@ -110,14 +127,35 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	assistantService, err := assistant.NewService(activityRouter, agent)
+	conversationManager, err := session.NewConversationManager(
+		sessionStore,
+		agent,
+	)
+	if err != nil {
+		return err
+	}
+	assistantService, err := assistant.NewService(
+		activityRouter,
+		agent,
+		memoryStore,
+		conversationManager,
+		taskConfirmer,
+	)
 	if err != nil {
 		return err
 	}
 
-	realtimeServer := realtime.NewServer(transcriber, realtime.Handlers{
+	realtimeHub := realtime.NewHub()
+	notificationService, err := notification.NewService(notificationStore, realtimeHub)
+	if err != nil {
+		return err
+	}
+	realtimeServer := realtime.NewServerWithHub(transcriber, realtimeHub, realtime.Handlers{
 		Authenticate: tickets.Consume,
 		CheckOrigin:  origins.Allows,
+		Connect: func(ctx context.Context, scope tool.Scope) error {
+			return notificationService.Flush(ctx, scope.UserID)
+		},
 		Utterance: func(ctx context.Context, scope tool.Scope, utterance string) (string, error) {
 			return handleUtterance(
 				ctx,
@@ -168,66 +206,6 @@ func run() error {
 		realtimeErr := realtimeServer.Shutdown(shutdownCtx)
 		return errors.Join(serverErr, realtimeErr)
 	}
-}
-
-type utteranceService interface {
-	HandleUtterance(context.Context, tool.Scope, string) (assistant.Outcome, error)
-}
-
-type transcriptStore interface {
-	Append(context.Context, tool.Scope, session.Speaker, string) (string, error)
-}
-
-type memoryStore interface {
-	Remember(context.Context, tool.Scope, string, string) error
-}
-
-func handleUtterance(
-	ctx context.Context,
-	scope tool.Scope,
-	utterance string,
-	service utteranceService,
-	transcripts transcriptStore,
-	memories memoryStore,
-) (string, error) {
-	utteranceID, err := transcripts.Append(ctx, scope, session.SpeakerUser, utterance)
-	if err != nil {
-		return "", fmt.Errorf("persist user utterance: %w", err)
-	}
-
-	outcome, err := service.HandleUtterance(ctx, scope, utterance)
-	if err != nil {
-		return "", err
-	}
-
-	response := outcome.Response
-	if outcome.Decision.Action == assistant.ActionRemember {
-		memoryText := strings.TrimSpace(outcome.Decision.Query)
-		if memoryText == "" {
-			memoryText = utterance
-		}
-		if err := memories.Remember(ctx, scope, utteranceID, memoryText); err != nil {
-			return "", fmt.Errorf("persist memory: %w", err)
-		}
-		response = memoryAcknowledgment
-	}
-
-	if response != "" {
-		if _, err := transcripts.Append(
-			ctx,
-			scope,
-			session.SpeakerAssistant,
-			response,
-		); err != nil {
-			return "", fmt.Errorf("persist assistant utterance: %w", err)
-		}
-	}
-
-	slog.InfoContext(ctx, "utterance handled",
-		"action", outcome.Decision.Action,
-		"responded", response != "",
-	)
-	return response, nil
 }
 
 func listenAddress() string {

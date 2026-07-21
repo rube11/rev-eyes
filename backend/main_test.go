@@ -7,20 +7,22 @@ import (
 	"testing"
 
 	"github.com/rube11/rev-eyes/backend/internal/assistant"
+	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
 type fakeUtteranceService struct {
-	handle func(context.Context, tool.Scope, string) (assistant.Outcome, error)
+	handle func(context.Context, tool.Scope, string, string) (assistant.Outcome, error)
 }
 
 func (f fakeUtteranceService) HandleUtterance(
 	ctx context.Context,
 	scope tool.Scope,
+	utteranceID string,
 	utterance string,
 ) (assistant.Outcome, error) {
-	return f.handle(ctx, scope, utterance)
+	return f.handle(ctx, scope, utteranceID, utterance)
 }
 
 type fakeTranscriptStore struct {
@@ -37,16 +39,16 @@ func (f fakeTranscriptStore) Append(
 }
 
 type fakeMemoryStore struct {
-	remember func(context.Context, tool.Scope, string, string) error
+	remember func(context.Context, tool.Scope, string, memory.Card) error
 }
 
 func (f fakeMemoryStore) Remember(
 	ctx context.Context,
 	scope tool.Scope,
 	sourceUtteranceID string,
-	text string,
+	card memory.Card,
 ) error {
-	return f.remember(ctx, scope, sourceUtteranceID, text)
+	return f.remember(ctx, scope, sourceUtteranceID, card)
 }
 
 func TestHandleUtterancePersistsFinalizedTranscriptInOrder(t *testing.T) {
@@ -66,14 +68,15 @@ func TestHandleUtterancePersistsFinalizedTranscriptInOrder(t *testing.T) {
 		handle: func(
 			_ context.Context,
 			_ tool.Scope,
+			utteranceID string,
 			utterance string,
 		) (assistant.Outcome, error) {
-			calls = append(calls, "handle:"+utterance)
+			calls = append(calls, "handle:"+utteranceID+":"+utterance)
 			return assistant.Outcome{Response: "Here you go."}, nil
 		},
 	}
 	memories := fakeMemoryStore{
-		remember: func(context.Context, tool.Scope, string, string) error {
+		remember: func(context.Context, tool.Scope, string, memory.Card) error {
 			t.Fatal("Remember() was called")
 			return nil
 		},
@@ -96,7 +99,7 @@ func TestHandleUtterancePersistsFinalizedTranscriptInOrder(t *testing.T) {
 
 	want := []string{
 		"user:Where am I?",
-		"handle:Where am I?",
+		"handle:utterance-123:Where am I?",
 		"assistant:Here you go.",
 	}
 	if !reflect.DeepEqual(calls, want) {
@@ -107,6 +110,16 @@ func TestHandleUtterancePersistsFinalizedTranscriptInOrder(t *testing.T) {
 func TestHandleUtterancePersistsExplicitMemory(t *testing.T) {
 	var calls []string
 	scope := tool.Scope{UserID: "user-123", SessionID: "session-123"}
+	wantCard := memory.Card{
+		Topics:  []memory.Topic{memory.TopicWork, memory.TopicRelationships},
+		Kind:    memory.KindRelationship,
+		Title:   "Maya is my boss",
+		Summary: "Maya is the user's boss.",
+		Details: []memory.Detail{{Key: "relationship", Value: "boss"}},
+		Entities: []memory.Entity{
+			{Type: memory.EntityPerson, Name: "Maya"},
+		},
+	}
 	transcripts := fakeTranscriptStore{
 		append: func(
 			_ context.Context,
@@ -122,13 +135,15 @@ func TestHandleUtterancePersistsExplicitMemory(t *testing.T) {
 		handle: func(
 			_ context.Context,
 			_ tool.Scope,
+			utteranceID string,
 			utterance string,
 		) (assistant.Outcome, error) {
-			calls = append(calls, "handle:"+utterance)
+			calls = append(calls, "handle:"+utteranceID+":"+utterance)
 			return assistant.Outcome{
 				Decision: assistant.Decision{
 					Action: assistant.ActionRemember,
-					Query:  "The user's boss is Maya.",
+					Query:  wantCard.Summary,
+					Memory: &wantCard,
 				},
 			}, nil
 		},
@@ -138,15 +153,15 @@ func TestHandleUtterancePersistsExplicitMemory(t *testing.T) {
 			_ context.Context,
 			gotScope tool.Scope,
 			sourceUtteranceID string,
-			text string,
+			card memory.Card,
 		) error {
 			if gotScope != scope {
 				t.Fatalf("scope = %+v, want %+v", gotScope, scope)
 			}
-			calls = append(
-				calls,
-				"remember:"+sourceUtteranceID+":"+text,
-			)
+			if !reflect.DeepEqual(card, wantCard) {
+				t.Fatalf("card = %#v, want %#v", card, wantCard)
+			}
+			calls = append(calls, "remember:"+sourceUtteranceID)
 			return nil
 		},
 	}
@@ -168,8 +183,8 @@ func TestHandleUtterancePersistsExplicitMemory(t *testing.T) {
 
 	want := []string{
 		"user:Remember that my boss is Maya.",
-		"handle:Remember that my boss is Maya.",
-		"remember:utterance-123:The user's boss is Maya.",
+		"handle:utterance-123:Remember that my boss is Maya.",
+		"remember:utterance-123",
 		"assistant:" + memoryAcknowledgment,
 	}
 	if !reflect.DeepEqual(calls, want) {
@@ -194,13 +209,14 @@ func TestHandleUtteranceStopsWhenUserTranscriptCannotBePersisted(t *testing.T) {
 			context.Context,
 			tool.Scope,
 			string,
+			string,
 		) (assistant.Outcome, error) {
 			t.Fatal("HandleUtterance() was called")
 			return assistant.Outcome{}, nil
 		},
 	}
 	memories := fakeMemoryStore{
-		remember: func(context.Context, tool.Scope, string, string) error {
+		remember: func(context.Context, tool.Scope, string, memory.Card) error {
 			t.Fatal("Remember() was called")
 			return nil
 		},
