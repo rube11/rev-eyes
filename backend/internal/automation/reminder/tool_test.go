@@ -1,4 +1,4 @@
-package task
+package reminder
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
@@ -27,6 +28,7 @@ func TestToolCreatesPendingReminderProposal(t *testing.T) {
 	wantProposal := Proposal{
 		Title:    "Call the dentist",
 		Schedule: "tomorrow",
+		DueAt:    time.Date(2099, time.July, 22, 16, 0, 0, 0, time.UTC),
 	}
 	proposalTool, err := NewTool(proposerFunc(func(
 		_ context.Context,
@@ -45,7 +47,7 @@ func TestToolCreatesPendingReminderProposal(t *testing.T) {
 	result, err := proposalTool.Execute(
 		context.Background(),
 		wantScope,
-		json.RawMessage(`{"title":" Call the dentist ","schedule":" tomorrow "}`),
+		json.RawMessage(`{"title":" Call the dentist ","schedule":" tomorrow ","due_at":"2099-07-22T09:00:00-07:00"}`),
 	)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -74,8 +76,10 @@ func TestToolRejectsInvalidArguments(t *testing.T) {
 	}
 
 	for _, arguments := range []string{
-		`{"title":"","schedule":null}`,
-		`{"title":"Call","schedule":null,"extra":true}`,
+		`{"title":"","schedule":"tomorrow","due_at":"2099-07-22T09:00:00-07:00"}`,
+		`{"title":"Call","schedule":"tomorrow","due_at":"not-a-time"}`,
+		`{"title":"Call","schedule":"tomorrow","due_at":"2020-01-01T09:00:00Z"}`,
+		`{"title":"Call","schedule":"tomorrow","due_at":"2099-07-22T09:00:00Z","extra":true}`,
 	} {
 		if _, err := proposalTool.Execute(
 			context.Background(),
