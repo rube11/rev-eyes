@@ -13,11 +13,11 @@ import (
 )
 
 var (
-	ErrRouterRequired        = errors.New("assistant router is required")
-	ErrAgentRequired         = errors.New("assistant agent is required")
-	ErrMemoryRequired        = errors.New("assistant memory reader is required")
-	ErrConversationRequired  = errors.New("assistant conversation reader is required")
-	ErrTaskConfirmerRequired = errors.New("assistant task confirmer is required")
+	ErrRouterRequired            = errors.New("assistant router is required")
+	ErrAgentRequired             = errors.New("assistant agent is required")
+	ErrMemoryRequired            = errors.New("assistant memory reader is required")
+	ErrConversationRequired      = errors.New("assistant conversation reader is required")
+	ErrProposalConfirmerRequired = errors.New("assistant proposal confirmer is required")
 )
 
 // ActivityRouter decides how the assistant should handle a finalized utterance.
@@ -47,7 +47,7 @@ type ConversationReader interface {
 	Prepare(context.Context, tool.Scope, string, string) (session.Conversation, error)
 }
 
-type TaskConfirmer interface {
+type ProposalConfirmer interface {
 	Confirm(context.Context, tool.Scope, string) (string, bool, error)
 }
 
@@ -63,7 +63,7 @@ type Service struct {
 	agent        Agent
 	memories     MemoryReader
 	conversation ConversationReader
-	tasks        TaskConfirmer
+	proposals    ProposalConfirmer
 }
 
 func NewService(
@@ -71,7 +71,7 @@ func NewService(
 	agent Agent,
 	memories MemoryReader,
 	conversation ConversationReader,
-	tasks TaskConfirmer,
+	proposals ProposalConfirmer,
 ) (*Service, error) {
 	if activityRouter == nil {
 		return nil, ErrRouterRequired
@@ -85,8 +85,8 @@ func NewService(
 	if conversation == nil {
 		return nil, ErrConversationRequired
 	}
-	if tasks == nil {
-		return nil, ErrTaskConfirmerRequired
+	if proposals == nil {
+		return nil, ErrProposalConfirmerRequired
 	}
 
 	return &Service{
@@ -94,11 +94,11 @@ func NewService(
 		agent:        agent,
 		memories:     memories,
 		conversation: conversation,
-		tasks:        tasks,
+		proposals:    proposals,
 	}, nil
 }
 
-// HandleUtterance resolves clear task confirmations, then routes new speech.
+// HandleUtterance resolves clear proposal confirmations, then routes new speech.
 func (s *Service) HandleUtterance(
 	ctx context.Context,
 	scope tool.Scope,
@@ -108,13 +108,13 @@ func (s *Service) HandleUtterance(
 	turnScope := scope
 	turnScope.UtteranceID = strings.TrimSpace(utteranceID)
 
-	confirmation, handled, err := s.tasks.Confirm(ctx, turnScope, utterance)
+	confirmation, handled, err := s.proposals.Confirm(ctx, turnScope, utterance)
 	if err != nil {
-		return Outcome{}, fmt.Errorf("confirm task proposal: %w", err)
+		return Outcome{}, fmt.Errorf("confirm proposal: %w", err)
 	}
 	if handled {
 		return Outcome{
-			Decision: Decision{Action: ActionResolveTask},
+			Decision: Decision{Action: ActionResolveProposal},
 			Response: strings.TrimSpace(confirmation),
 		}, nil
 	}
@@ -125,7 +125,9 @@ func (s *Service) HandleUtterance(
 	}
 
 	outcome := Outcome{Decision: decision}
-	if decision.Action != ActionRespond && decision.Action != ActionProposeTask {
+	if decision.Action != ActionRespond &&
+		decision.Action != ActionProposeTask &&
+		decision.Action != ActionProposeWatch {
 		return outcome, nil
 	}
 

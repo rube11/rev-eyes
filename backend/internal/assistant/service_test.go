@@ -78,9 +78,9 @@ var noConversation = conversationReaderFunc(func(
 	return session.Conversation{}, nil
 })
 
-type taskConfirmerFunc func(context.Context, tool.Scope, string) (string, bool, error)
+type proposalConfirmerFunc func(context.Context, tool.Scope, string) (string, bool, error)
 
-func (f taskConfirmerFunc) Confirm(
+func (f proposalConfirmerFunc) Confirm(
 	ctx context.Context,
 	scope tool.Scope,
 	utterance string,
@@ -88,7 +88,7 @@ func (f taskConfirmerFunc) Confirm(
 	return f(ctx, scope, utterance)
 }
 
-var noTaskConfirmation = taskConfirmerFunc(func(
+var noProposalConfirmation = proposalConfirmerFunc(func(
 	context.Context,
 	tool.Scope,
 	string,
@@ -172,7 +172,7 @@ func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
 			}
 			return wantConversation, nil
 		}),
-		noTaskConfirmation,
+		noProposalConfirmation,
 	)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -217,7 +217,7 @@ func TestHandleUtteranceDoesNotCallAgentForNonResponseAction(t *testing.T) {
 			t.Fatal("Prepare() called for state update")
 			return session.Conversation{}, nil
 		}),
-		noTaskConfirmation,
+		noProposalConfirmation,
 	)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -250,7 +250,7 @@ func TestHandleUtteranceUsesOriginalUtteranceWhenQueryIsEmpty(t *testing.T) {
 		}),
 		noMemories,
 		noConversation,
-		noTaskConfirmation,
+		noProposalConfirmation,
 	)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -279,7 +279,7 @@ func TestHandleUtteranceWrapsDependencyErrors(t *testing.T) {
 		}),
 		noMemories,
 		noConversation,
-		noTaskConfirmation,
+		noProposalConfirmation,
 	)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -298,7 +298,7 @@ func TestHandleUtteranceWrapsDependencyErrors(t *testing.T) {
 		}),
 		noMemories,
 		noConversation,
-		noTaskConfirmation,
+		noProposalConfirmation,
 	)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -328,7 +328,7 @@ func TestHandleUtteranceContinuesWhenMemoryLookupFails(t *testing.T) {
 			return nil, errors.New("database unavailable")
 		}),
 		noConversation,
-		noTaskConfirmation,
+		noProposalConfirmation,
 	)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -372,7 +372,7 @@ func TestHandleUtteranceContinuesWhenConversationPreparationFails(t *testing.T) 
 		) (session.Conversation, error) {
 			return wantConversation, errors.New("save failed")
 		}),
-		noTaskConfirmation,
+		noProposalConfirmation,
 	)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -402,19 +402,19 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		return Decision{}, nil
 	})
 
-	if _, err := NewService(nil, agent, noMemories, noConversation, noTaskConfirmation); !errors.Is(err, ErrRouterRequired) {
+	if _, err := NewService(nil, agent, noMemories, noConversation, noProposalConfirmation); !errors.Is(err, ErrRouterRequired) {
 		t.Fatalf("NewService(nil, agent) error = %v", err)
 	}
-	if _, err := NewService(activityRouter, nil, noMemories, noConversation, noTaskConfirmation); !errors.Is(err, ErrAgentRequired) {
+	if _, err := NewService(activityRouter, nil, noMemories, noConversation, noProposalConfirmation); !errors.Is(err, ErrAgentRequired) {
 		t.Fatalf("NewService(router, nil) error = %v", err)
 	}
-	if _, err := NewService(activityRouter, agent, nil, noConversation, noTaskConfirmation); !errors.Is(err, ErrMemoryRequired) {
+	if _, err := NewService(activityRouter, agent, nil, noConversation, noProposalConfirmation); !errors.Is(err, ErrMemoryRequired) {
 		t.Fatalf("NewService(router, agent, nil) error = %v", err)
 	}
-	if _, err := NewService(activityRouter, agent, noMemories, nil, noTaskConfirmation); !errors.Is(err, ErrConversationRequired) {
+	if _, err := NewService(activityRouter, agent, noMemories, nil, noProposalConfirmation); !errors.Is(err, ErrConversationRequired) {
 		t.Fatalf("NewService(router, agent, memories, nil) error = %v", err)
 	}
-	if _, err := NewService(activityRouter, agent, noMemories, noConversation, nil); !errors.Is(err, ErrTaskConfirmerRequired) {
+	if _, err := NewService(activityRouter, agent, noMemories, noConversation, nil); !errors.Is(err, ErrProposalConfirmerRequired) {
 		t.Fatalf("NewService(router, agent, memories, conversation, nil) error = %v", err)
 	}
 }

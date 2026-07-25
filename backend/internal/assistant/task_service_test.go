@@ -33,7 +33,7 @@ func TestHandleUtteranceRoutesTaskCandidateToAgent(t *testing.T) {
 		}),
 		noMemories,
 		noConversation,
-		noTaskConfirmation,
+		noProposalConfirmation,
 	)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -80,7 +80,7 @@ func TestHandleUtteranceResolvesTaskBeforeRouting(t *testing.T) {
 		}),
 		noMemories,
 		noConversation,
-		taskConfirmerFunc(func(
+		proposalConfirmerFunc(func(
 			_ context.Context,
 			scope tool.Scope,
 			utterance string,
@@ -104,7 +104,7 @@ func TestHandleUtteranceResolvesTaskBeforeRouting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleUtterance() error = %v", err)
 	}
-	if outcome.Decision.Action != ActionResolveTask ||
+	if outcome.Decision.Action != ActionResolveProposal ||
 		outcome.Response != "Okay, I saved that reminder." {
 		t.Fatalf("outcome = %#v", outcome)
 	}
@@ -124,7 +124,7 @@ func TestHandleUtteranceReportsTaskConfirmationFailure(t *testing.T) {
 		}),
 		noMemories,
 		noConversation,
-		taskConfirmerFunc(func(context.Context, tool.Scope, string) (string, bool, error) {
+		proposalConfirmerFunc(func(context.Context, tool.Scope, string) (string, bool, error) {
 			return "", false, wantErr
 		}),
 	)
