@@ -16,20 +16,20 @@ var initDeepgram sync.Once
 
 const finalizeTimeout = 3 * time.Second
 
-type deepGramTranscriber struct {
+type deepgramTranscriber struct {
 	deepgramKey string
 }
 
-func NewDeepGramTranscriber(apiKey string) (*deepGramTranscriber, error) {
+func NewDeepgramTranscriber(apiKey string) (*deepgramTranscriber, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		return nil, errors.New("deepgram API key is required")
 	}
 
-	return &deepGramTranscriber{deepgramKey: apiKey}, nil
+	return &deepgramTranscriber{deepgramKey: apiKey}, nil
 }
 
-func (dg *deepGramTranscriber) Transcribe(
+func (dg *deepgramTranscriber) Transcribe(
 	ctx context.Context,
 	audio <-chan []byte,
 	completed chan<- string,
