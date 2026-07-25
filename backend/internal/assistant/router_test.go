@@ -132,3 +132,23 @@ func TestRouterKeepsMemoryLookupForTaskProposal(t *testing.T) {
 		t.Fatalf("Route() = %#v, want lookup %#v", decision, want)
 	}
 }
+
+func TestRouterKeepsMemoryLookupForWatchProposal(t *testing.T) {
+	router := NewRouter(func(context.Context, string) (string, error) {
+		return `{
+			"action":"propose_watch",
+			"query":"Tell me if Nintendo announces its next console.",
+			"memory_lookup":{"terms":["nintendo"],"topics":["preferences"],"kinds":[],"entities":["Nintendo"]},
+			"memory":null
+		}`, nil
+	})
+
+	decision, err := router.Route(context.Background(), "Tell me if Nintendo announces its next console")
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	if decision.Action != ActionProposeWatch ||
+		!reflect.DeepEqual(decision.MemoryLookup.Terms, []string{"nintendo"}) {
+		t.Fatalf("Route() = %#v", decision)
+	}
+}
