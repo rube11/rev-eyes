@@ -1,4 +1,4 @@
-package task
+package reminder
 
 import (
 	"bytes"
@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
@@ -18,14 +20,15 @@ const parametersSchema = `{
       "description": "A short action-oriented reminder title."
     },
     "schedule": {
-      "anyOf": [
-        {"type": "string"},
-        {"type": "null"}
-      ],
-      "description": "The timing stated by the user, or null when none was stated."
+      "type": "string",
+      "description": "The timing stated by the user."
+    },
+    "due_at": {
+      "type": "string",
+      "description": "The resolved future time in RFC3339 format."
     }
   },
-  "required": ["title", "schedule"],
+  "required": ["title", "schedule", "due_at"],
   "additionalProperties": false
 }`
 
@@ -50,7 +53,7 @@ func NewTool(proposer Proposer) (*Tool, error) {
 func (t *Tool) Spec() tool.Spec {
 	return tool.Spec{
 		Name:        "propose_task",
-		Description: "Propose one reminder when the user implies a concrete future action but has not explicitly asked to create it. The proposal remains inactive until the user confirms it.",
+		Description: "Propose one timed reminder when the user implies a concrete future action but has not explicitly asked to create it. The proposal remains inactive until the user confirms it.",
 		Parameters:  json.RawMessage(parametersSchema),
 		ReadOnly:    false,
 	}
@@ -62,8 +65,9 @@ func (t *Tool) Execute(
 	arguments json.RawMessage,
 ) (tool.Result, error) {
 	var input struct {
-		Title    string  `json:"title"`
-		Schedule *string `json:"schedule"`
+		Title    string `json:"title"`
+		Schedule string `json:"schedule"`
+		DueAt    string `json:"due_at"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(arguments))
 	decoder.DisallowUnknownFields()
@@ -71,13 +75,17 @@ func (t *Tool) Execute(
 		return tool.Result{}, fmt.Errorf("decode task proposal: %w", err)
 	}
 
-	proposal := Proposal{Title: input.Title}
-	if input.Schedule != nil {
-		proposal.Schedule = *input.Schedule
+	dueAt, err := time.Parse(time.RFC3339, strings.TrimSpace(input.DueAt))
+	if err != nil {
+		return tool.Result{}, fmt.Errorf("parse task due time: %w", err)
 	}
+	proposal := Proposal{Title: input.Title, Schedule: input.Schedule, DueAt: dueAt}
 	proposal = proposal.normalize()
 	if err := proposal.validate(); err != nil {
 		return tool.Result{}, err
+	}
+	if !proposal.DueAt.After(time.Now().UTC()) {
+		return tool.Result{}, fmt.Errorf("%w: due time must be in the future", ErrProposalInvalid)
 	}
 	if err := t.proposer.Propose(ctx, scope, proposal); err != nil {
 		return tool.Result{}, err
