@@ -2,25 +2,22 @@ import {
   AppLocationAccuracy,
   AudioInputSource,
   CreateStartUpPageContainer,
-  ListContainerProperty,
-  ListItemContainerProperty,
   OsEventTypeList,
   StartUpPageCreateResult,
-  TextContainerProperty,
-  TextContainerUpgrade,
   waitForEvenAppBridge,
 } from "@evenrealities/even_hub_sdk"
 import type {
   AppLocation,
   EvenHubEvent,
+  RebuildPageContainer,
 } from "@evenrealities/even_hub_sdk"
 
+import {
+  buildMessagePage,
+  buildSystemPage,
+  presentGlassesMessage,
+} from "./glasses-ui"
 import { connectRealtimeSocket } from "../shared/api/client"
-
-const responseContainer = {
-  id: 2,
-  name: "response",
-}
 
 type ServerMessage = {
   type: string
@@ -43,38 +40,18 @@ async function ensurePage() {
   const bridge = await getBridge()
 
   startup ??= (async () => {
+    const initialPage = buildSystemPage(
+      "SIGNED OUT",
+      "WELCOME",
+      "Open the phone app to sign in.",
+      "Open phone to continue",
+    )
     const result = await bridge.createStartUpPageContainer(
       new CreateStartUpPageContainer({
-        containerTotalNum: 2,
-        listObject: [
-          new ListContainerProperty({
-            xPosition: 0,
-            yPosition: 0,
-            width: 160,
-            height: 288,
-            containerID: 1,
-            containerName: "controls",
-            itemContainer: new ListItemContainerProperty({
-              itemCount: 1,
-              itemWidth: 160,
-              isItemSelectBorderEn: 1,
-              itemName: ["Toggle listening"],
-            }),
-            isEventCapture: 1,
-          }),
-        ],
-        textObject: [
-          new TextContainerProperty({
-            xPosition: 176,
-            yPosition: 0,
-            width: 400,
-            height: 288,
-            containerID: responseContainer.id,
-            containerName: responseContainer.name,
-            content: "Open phone to sign in",
-            isEventCapture: 0,
-          }),
-        ],
+        containerTotalNum: initialPage.containerTotalNum,
+        listObject: initialPage.listObject,
+        textObject: initialPage.textObject,
+        imageObject: initialPage.imageObject,
       }),
     )
     if (result !== StartUpPageCreateResult.success) {
@@ -102,26 +79,23 @@ async function ensurePage() {
   return bridge
 }
 
-function displayText(text: string) {
-  const trimmed = text.trim()
-  if (trimmed.length <= 320) {
-    return trimmed || "Ready"
+async function renderGlassesPage(page: RebuildPageContainer): Promise<void> {
+  const bridge = await ensurePage()
+  const rebuilt = await bridge.rebuildPageContainer(page)
+  if (!rebuilt) {
+    throw new Error("Glasses display update failed")
   }
-  return `${trimmed.slice(0, 317)}...`
 }
 
 export async function showEvenMessage(text: string): Promise<void> {
-  const bridge = await ensurePage()
-  const updated = await bridge.textContainerUpgrade(
-    new TextContainerUpgrade({
-      containerID: responseContainer.id,
-      containerName: responseContainer.name,
-      content: displayText(text),
-    }),
+  await renderGlassesPage(
+    buildSystemPage(
+      "SIGNED OUT",
+      "WELCOME",
+      text,
+      "Open phone to continue",
+    ),
   )
-  if (!updated) {
-    throw new Error("Glasses display update failed")
-  }
 }
 
 function sendLocation(socket: WebSocket, location: AppLocation) {
@@ -155,14 +129,40 @@ export async function initializeEvenExperience(
 ): Promise<() => void> {
   const bridge = await ensurePage()
   onStatus("Connecting")
-  await showEvenMessage("Connecting...")
+  await renderGlassesPage(buildSystemPage(
+    "CONNECTING",
+    "SECURE LINK",
+    "Connecting to your assistant…",
+    "Please wait",
+  ))
 
   const socket = await connectRealtimeSocket(accessToken)
   let active = true
   let listeningState: ListeningState = "idle"
   let locationStarted = false
+  let popupVisible = false
+
+  const showReady = () => renderGlassesPage(buildSystemPage(
+    "READY",
+    "ASK ANYTHING",
+    "Tap below, then speak naturally.",
+    "Tap to talk",
+  ))
+  const showListening = () => renderGlassesPage(buildSystemPage(
+    "LISTENING",
+    "I'M LISTENING",
+    "Speak naturally. Tap again when you're done.",
+    "Tap when done",
+  ))
+  const showConnectionLost = () => renderGlassesPage(buildSystemPage(
+    "OFFLINE",
+    "CONNECTION LOST",
+    "Reopen the phone app to reconnect.",
+    "Open phone to continue",
+  ))
+
   onStatus("Connected")
-  await showEvenMessage("Ready\nPress Toggle listening")
+  await showReady()
 
   const handleServerMessage = async (message: ServerMessage) => {
     switch (message.type) {
@@ -171,9 +171,11 @@ export async function initializeEvenExperience(
           return
         }
         onResponse(message.text)
-        const state = listeningState === "listening" ? "Listening..." : "Ready"
-        const display = `${state}\n\n${message.text}`
-        await showEvenMessage(display)
+        const presentation = presentGlassesMessage(message.text)
+        popupVisible = presentation.kind === "reminder" ||
+          presentation.kind === "update"
+        const state = listeningState === "listening" ? "LISTENING" : "READY"
+        await renderGlassesPage(buildMessagePage(presentation, state))
         return
       }
 
@@ -186,11 +188,17 @@ export async function initializeEvenExperience(
         }
         if (message.error) {
           onStatus(message.error)
-          await showEvenMessage(message.error)
+          popupVisible = false
+          await renderGlassesPage(buildSystemPage(
+            "UNAVAILABLE",
+            "MICROPHONE",
+            message.error,
+            "Tap to retry",
+          ))
         } else {
           onStatus("Connected")
-          if (stoppedUnexpectedly) {
-            await showEvenMessage("Ready")
+          if (stoppedUnexpectedly && !popupVisible) {
+            await showReady()
           }
         }
         return
@@ -212,8 +220,9 @@ export async function initializeEvenExperience(
       return
     }
     listeningState = "idle"
+    popupVisible = false
     onStatus("Disconnected")
-    void showEvenMessage("Connection lost\nReopen the app").catch(() => undefined)
+    void showConnectionLost().catch(() => undefined)
     void bridge.audioControl(false).catch(() => undefined)
     if (locationStarted) {
       locationStarted = false
@@ -239,11 +248,26 @@ export async function initializeEvenExperience(
       listEvent !== undefined &&
       (listEvent.eventType ?? OsEventTypeList.CLICK_EVENT) ===
         OsEventTypeList.CLICK_EVENT
+    const textEvent = event.textEvent
+    const textClick =
+      textEvent !== undefined &&
+      (textEvent.eventType ?? OsEventTypeList.CLICK_EVENT) ===
+        OsEventTypeList.CLICK_EVENT
     const systemClick =
       event.sysEvent !== undefined &&
       (event.sysEvent.eventType ?? OsEventTypeList.CLICK_EVENT) ===
         OsEventTypeList.CLICK_EVENT
-    if (!listClick && !systemClick) {
+    if (!listClick && !textClick && !systemClick) {
+      return
+    }
+
+    if (popupVisible) {
+      popupVisible = false
+      if (listeningState === "listening") {
+        await showListening()
+      } else {
+        await showReady()
+      }
       return
     }
 
@@ -252,7 +276,7 @@ export async function initializeEvenExperience(
       sendControl(socket, "listening_stop")
       await bridge.audioControl(false).catch(() => undefined)
       onStatus("Connected")
-      await showEvenMessage("Ready")
+      await showReady()
       return
     }
 
@@ -261,12 +285,17 @@ export async function initializeEvenExperience(
     }
 
     if (socket.readyState !== WebSocket.OPEN) {
-      await showEvenMessage("Connection lost\nReopen the app")
+      await showConnectionLost()
       return
     }
     listeningState = "starting"
     onStatus("Starting microphone")
-    await showEvenMessage("Starting microphone...")
+    await renderGlassesPage(buildSystemPage(
+      "STARTING",
+      "MICROPHONE",
+      "Opening the glasses microphone…",
+      "Please wait",
+    ))
     if (!active || listeningState !== "starting") {
       return
     }
@@ -283,19 +312,24 @@ export async function initializeEvenExperience(
     if (!started) {
       listeningState = "idle"
       onStatus("Microphone unavailable")
-      await showEvenMessage("Could not start microphone")
+      await renderGlassesPage(buildSystemPage(
+        "UNAVAILABLE",
+        "MICROPHONE",
+        "Could not start the glasses microphone.",
+        "Tap to retry",
+      ))
       return
     }
     if (!sendControl(socket, "listening_start")) {
       listeningState = "idle"
       await bridge.audioControl(false).catch(() => undefined)
       onStatus("Disconnected")
-      await showEvenMessage("Connection lost\nReopen the app")
+      await showConnectionLost()
       return
     }
     listeningState = "listening"
     onStatus("Listening")
-    await showEvenMessage("Listening...")
+    await showListening()
   }
   const stopEvents = bridge.onEvenHubEvent((event) => {
     void handleEvenEvent(event).catch(() => {
