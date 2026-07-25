@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/mail"
 	"net/url"
 	"strings"
 	"time"
@@ -19,26 +20,40 @@ const (
 )
 
 var (
-	ErrInvalidAccessToken  = errors.New("invalid access token")
-	ErrSupabaseURLRequired = errors.New("SUPABASE_URL is required")
+	ErrInvalidAccessToken    = errors.New("invalid access token")
+	ErrEmailNotAllowed       = errors.New("email is not allowed for beta access")
+	ErrSupabaseURLRequired   = errors.New("SUPABASE_URL is required")
+	ErrAllowedEmailsRequired = errors.New("BETA_ALLOWED_EMAILS is required")
+	ErrAllowedEmailInvalid   = errors.New("BETA_ALLOWED_EMAILS contains an invalid email")
 )
 
 // TokenVerifier returns the authenticated Supabase user ID from an access token.
 type TokenVerifier func(ctx context.Context, accessToken string) (string, error)
 
-// SupabaseVerifier verifies access tokens with the project's public signing keys.
+// SupabaseVerifier verifies access tokens and restricts them to configured beta
+// emails.
 type SupabaseVerifier struct {
-	issuer string
-	keys   keyfunc.Keyfunc
+	issuer        string
+	keys          keyfunc.Keyfunc
+	allowedEmails map[string]struct{}
 }
 
 type supabaseClaims struct {
 	jwt.RegisteredClaims
-	Role string `json:"role"`
+	Role  string `json:"role"`
+	Email string `json:"email"`
 }
 
-func NewSupabaseVerifier(ctx context.Context, projectURL string) (*SupabaseVerifier, error) {
+func NewSupabaseVerifier(
+	ctx context.Context,
+	projectURL string,
+	allowedEmailList string,
+) (*SupabaseVerifier, error) {
 	baseURL, err := normalizeProjectURL(projectURL)
+	if err != nil {
+		return nil, err
+	}
+	allowedEmails, err := parseAllowedEmails(allowedEmailList)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +81,11 @@ func NewSupabaseVerifier(ctx context.Context, projectURL string) (*SupabaseVerif
 		return nil, errors.New("Supabase JWKS contains no asymmetric signing keys")
 	}
 
-	return &SupabaseVerifier{issuer: issuer, keys: keys}, nil
+	return &SupabaseVerifier{
+		issuer:        issuer,
+		keys:          keys,
+		allowedEmails: allowedEmails,
+	}, nil
 }
 
 func (v *SupabaseVerifier) Verify(ctx context.Context, accessToken string) (string, error) {
@@ -101,8 +120,41 @@ func (v *SupabaseVerifier) Verify(ctx context.Context, accessToken string) (stri
 		strings.TrimSpace(claims.Subject) == "" {
 		return "", ErrInvalidAccessToken
 	}
+	email, err := normalizeEmail(claims.Email)
+	if err != nil {
+		return "", ErrInvalidAccessToken
+	}
+	if _, allowed := v.allowedEmails[email]; !allowed {
+		return "", ErrEmailNotAllowed
+	}
 
 	return strings.TrimSpace(claims.Subject), nil
+}
+
+func parseAllowedEmails(value string) (map[string]struct{}, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, ErrAllowedEmailsRequired
+	}
+
+	allowed := make(map[string]struct{})
+	for _, candidate := range strings.Split(value, ",") {
+		email, err := normalizeEmail(candidate)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %q", ErrAllowedEmailInvalid, strings.TrimSpace(candidate))
+		}
+		allowed[email] = struct{}{}
+	}
+	return allowed, nil
+}
+
+func normalizeEmail(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	address, err := mail.ParseAddress(value)
+	if err != nil || address.Name != "" || address.Address != value {
+		return "", errors.New("invalid email")
+	}
+	return value, nil
 }
 
 func normalizeProjectURL(projectURL string) (string, error) {

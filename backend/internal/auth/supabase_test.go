@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -34,7 +35,11 @@ func TestSupabaseVerifierValidatesAuthenticatedAccessToken(t *testing.T) {
 	defer server.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	verifier, err := NewSupabaseVerifier(ctx, server.URL)
+	verifier, err := NewSupabaseVerifier(
+		ctx,
+		server.URL,
+		" beta.tester@example.com ",
+	)
 	if err != nil {
 		cancel()
 		t.Fatalf("NewSupabaseVerifier() error = %v", err)
@@ -51,7 +56,8 @@ func TestSupabaseVerifierValidatesAuthenticatedAccessToken(t *testing.T) {
 				ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
 				IssuedAt:  jwt.NewNumericDate(now.Add(-time.Minute)),
 			},
-			Role: "authenticated",
+			Role:  "authenticated",
+			Email: "Beta.Tester@Example.COM",
 		}
 	}
 
@@ -62,6 +68,15 @@ func TestSupabaseVerifierValidatesAuthenticatedAccessToken(t *testing.T) {
 	}
 	if userID != "user-123" {
 		t.Fatalf("Verify() user ID = %q", userID)
+	}
+
+	disallowedClaims := validClaims()
+	disallowedClaims.Email = "someone-else@example.com"
+	if _, err := verifier.Verify(
+		context.Background(),
+		signToken(t, privateKey, keyID, disallowedClaims),
+	); !errors.Is(err, ErrEmailNotAllowed) {
+		t.Fatalf("Verify() disallowed email error = %v", err)
 	}
 
 	hmacToken := jwt.NewWithClaims(jwt.SigningMethodHS256, validClaims())
@@ -114,6 +129,18 @@ func TestSupabaseVerifierValidatesAuthenticatedAccessToken(t *testing.T) {
 				claims.Subject = ""
 			},
 		},
+		{
+			name: "missing email",
+			mutate: func(claims *supabaseClaims) {
+				claims.Email = ""
+			},
+		},
+		{
+			name: "invalid email",
+			mutate: func(claims *supabaseClaims) {
+				claims.Email = "not-an-email"
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -127,6 +154,36 @@ func TestSupabaseVerifierValidatesAuthenticatedAccessToken(t *testing.T) {
 				t.Fatal("Verify() error = nil")
 			}
 		})
+	}
+}
+
+func TestParseAllowedEmails(t *testing.T) {
+	t.Parallel()
+
+	allowed, err := parseAllowedEmails(
+		" First.Tester@Example.com,second.tester@example.com ",
+	)
+	if err != nil {
+		t.Fatalf("parseAllowedEmails() error = %v", err)
+	}
+	for _, email := range []string{
+		"first.tester@example.com",
+		"second.tester@example.com",
+	} {
+		if _, exists := allowed[email]; !exists {
+			t.Fatalf("allowed emails does not contain %q", email)
+		}
+	}
+
+	for _, value := range []string{
+		"",
+		"not-an-email",
+		"tester@example.com,",
+		"Tester <tester@example.com>",
+	} {
+		if _, err := parseAllowedEmails(value); err == nil {
+			t.Fatalf("parseAllowedEmails(%q) error = nil", value)
+		}
 	}
 }
 
