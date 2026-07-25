@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
+    "build:beta": "tsc -b && vite build --mode beta",
     "lint": "eslint .",
+    "pack:beta": "pnpm build:beta && evenhub pack app.json dist --output rev-eyes-beta.ehpk",
     "qr": "evenhub qr",
     "preview": "vite preview"
   },
