@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
@@ -67,7 +69,13 @@ func (a *Agent) executeCall(
 	scope tool.Scope,
 	call toolCall,
 ) (json.RawMessage, error) {
+	startedAt := time.Now()
 	result, err := a.executor.Execute(ctx, scope, call.Name, call.Arguments)
+	slog.InfoContext(ctx, "tool executed",
+		"name", call.Name,
+		"success", err == nil,
+		"duration_ms", time.Since(startedAt).Milliseconds(),
+	)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
