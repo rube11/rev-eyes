@@ -27,6 +27,7 @@ coverage/
 /tmp/
 *.log
 .nvimlog
+infra/*.tgz
 
 # Editor settings
 .idea/
