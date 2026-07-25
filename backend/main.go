@@ -14,15 +14,20 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/assistant"
 	"github.com/rube11/rev-eyes/backend/internal/assistant/openai"
 	"github.com/rube11/rev-eyes/backend/internal/auth"
+	"github.com/rube11/rev-eyes/backend/internal/automation/proposal"
+	"github.com/rube11/rev-eyes/backend/internal/automation/reminder"
+	"github.com/rube11/rev-eyes/backend/internal/automation/scheduler"
+	"github.com/rube11/rev-eyes/backend/internal/automation/scheduler/registration"
+	"github.com/rube11/rev-eyes/backend/internal/automation/watch"
 	"github.com/rube11/rev-eyes/backend/internal/database"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/notification"
 	"github.com/rube11/rev-eyes/backend/internal/realtime"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
-	"github.com/rube11/rev-eyes/backend/internal/task"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 	"github.com/rube11/rev-eyes/backend/internal/tool/location"
+	"github.com/rube11/rev-eyes/backend/internal/tool/websearch"
 	"github.com/rube11/rev-eyes/backend/internal/web"
 )
 
@@ -53,7 +58,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	taskStore, err := task.NewStore(databasePool)
+	reminderStore, err := reminder.NewStore(databasePool)
+	if err != nil {
+		return err
+	}
+	watchStore, err := watch.NewStore(databasePool)
+	if err != nil {
+		return err
+	}
+	proposalStore, err := proposal.NewStore(databasePool)
 	if err != nil {
 		return err
 	}
@@ -61,7 +74,32 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	taskConfirmer, err := task.NewConfirmer(taskStore)
+	registrationStore, err := registration.NewStore(databasePool)
+	if err != nil {
+		return err
+	}
+	scheduledEventStore, err := scheduler.NewStore(databasePool)
+	if err != nil {
+		return err
+	}
+	scheduleRegistrar, err := registration.NewClient(
+		os.Getenv("SCHEDULE_REGISTRAR_URL"),
+		&http.Client{Timeout: 10 * time.Second},
+	)
+	if err != nil {
+		return err
+	}
+	registrationDispatcher, err := registration.NewDispatcher(
+		registrationStore,
+		scheduleRegistrar,
+	)
+	if err != nil {
+		return err
+	}
+	proposalConfirmer, err := proposal.NewConfirmer(
+		proposalStore,
+		registrationDispatcher.Trigger,
+	)
 	if err != nil {
 		return err
 	}
@@ -70,7 +108,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	tokenVerifier, err := auth.NewSupabaseVerifier(ctx, os.Getenv("SUPABASE_URL"))
+	tokenVerifier, err := auth.NewSupabaseVerifier(
+		ctx,
+		os.Getenv("SUPABASE_URL"),
+		os.Getenv("BETA_ALLOWED_EMAILS"),
+	)
 	if err != nil {
 		return err
 	}
@@ -84,7 +126,7 @@ func run() error {
 		return err
 	}
 
-	classifier, err := assistant.NewOpenAIClassifier(
+	classifier, err := openai.NewClassifier(
 		os.Getenv("OPENAI_API_KEY"),
 		os.Getenv("OPENAI_ROUTER_MODEL"),
 	)
@@ -92,7 +134,7 @@ func run() error {
 		return err
 	}
 
-	transcriber, err := stt.NewDeepGramTranscriber(os.Getenv("DEEPGRAM_API_KEY"))
+	transcriber, err := stt.NewDeepgramTranscriber(os.Getenv("DEEPGRAM_API_KEY"))
 	if err != nil {
 		return err
 	}
@@ -104,11 +146,19 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	taskTool, err := task.NewTool(taskStore)
+	reminderTool, err := reminder.NewTool(reminderStore)
 	if err != nil {
 		return err
 	}
-	for _, candidate := range []tool.Tool{locationTool, taskTool} {
+	webSearchTool, err := websearch.New(os.Getenv("TAVILY_API_KEY"))
+	if err != nil {
+		return err
+	}
+	watchTool, err := watch.NewTool(watchStore)
+	if err != nil {
+		return err
+	}
+	for _, candidate := range []tool.Tool{locationTool, reminderTool, watchTool, webSearchTool} {
 		if err := toolRegistry.Register(candidate); err != nil {
 			return err
 		}
@@ -139,7 +189,7 @@ func run() error {
 		agent,
 		memoryStore,
 		conversationManager,
-		taskConfirmer,
+		proposalConfirmer,
 	)
 	if err != nil {
 		return err
@@ -150,6 +200,45 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	reminderDispatcher, err := reminder.NewDispatcher(reminderStore, notificationService)
+	if err != nil {
+		return err
+	}
+	watchDispatcher, err := watch.NewDispatcher(
+		watchStore,
+		watch.SearchFunc(func(ctx context.Context, query string) ([]watch.Item, error) {
+			results, err := webSearchTool.SearchNews(ctx, query)
+			if err != nil {
+				return nil, err
+			}
+			items := make([]watch.Item, 0, len(results))
+			for _, result := range results {
+				items = append(items, watch.Item{Title: result.Title, URL: result.URL})
+			}
+			return items, nil
+		}),
+		notificationService,
+	)
+	if err != nil {
+		return err
+	}
+	scheduledEventDispatcher, err := scheduler.NewDispatcher(
+		scheduledEventStore,
+		reminderDispatcher,
+		watchDispatcher,
+	)
+	if err != nil {
+		return err
+	}
+	schedulerHandler, err := scheduler.NewHandler(
+		os.Getenv("SCHEDULER_SECRET"),
+		scheduledEventDispatcher,
+	)
+	if err != nil {
+		return err
+	}
+	go registrationDispatcher.Run(ctx)
+	go scheduledEventDispatcher.Run(ctx)
 	realtimeServer := realtime.NewServerWithHub(transcriber, realtimeHub, realtime.Handlers{
 		Authenticate: tickets.Consume,
 		CheckOrigin:  origins.Allows,
@@ -177,7 +266,9 @@ func run() error {
 	})
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", web.Health)
 	mux.Handle("/auth/ws-ticket", origins.Handler(ticketHandler))
+	mux.Handle("/internal/scheduler/run", schedulerHandler)
 	mux.Handle("/", realtimeServer)
 
 	server := &http.Server{
