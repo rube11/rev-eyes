@@ -7,7 +7,9 @@ import (
 )
 
 func TestOriginPolicy(t *testing.T) {
-	policy, err := NewOriginPolicy("https://app.example.com")
+	policy, err := NewOriginPolicy(
+		"https://app.example.com, https://preview.example.com",
+	)
 	if err != nil {
 		t.Fatalf("NewOriginPolicy() error = %v", err)
 	}
@@ -20,6 +22,7 @@ func TestOriginPolicy(t *testing.T) {
 	}{
 		{name: "native client", want: true},
 		{name: "configured frontend", origin: "https://app.example.com", want: true},
+		{name: "configured preview", origin: "https://preview.example.com", want: true},
 		{name: "same origin", origin: "https://api.example.com", host: "api.example.com", want: true},
 		{name: "local development", origin: "http://localhost:5173", want: true},
 		{name: "other origin", origin: "https://evil.example", want: false},
@@ -33,6 +36,20 @@ func TestOriginPolicy(t *testing.T) {
 				t.Fatalf("Allows() = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestOriginPolicyRejectsInvalidConfiguredOrigin(t *testing.T) {
+	t.Parallel()
+
+	for _, allowed := range []string{
+		"https://app.example.com,",
+		"https://app.example.com/path",
+		"https://app.example.com,not-an-origin",
+	} {
+		if _, err := NewOriginPolicy(allowed); err == nil {
+			t.Fatalf("NewOriginPolicy(%q) error = nil", allowed)
+		}
 	}
 }
 

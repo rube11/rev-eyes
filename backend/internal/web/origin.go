@@ -9,20 +9,24 @@ import (
 )
 
 type OriginPolicy struct {
-	allowed string
+	allowed map[string]struct{}
 }
 
-func NewOriginPolicy(allowed string) (OriginPolicy, error) {
-	allowed = strings.TrimSpace(allowed)
-	if allowed == "" {
-		return OriginPolicy{}, nil
+func NewOriginPolicy(allowedList string) (OriginPolicy, error) {
+	policy := OriginPolicy{allowed: make(map[string]struct{})}
+	allowedList = strings.TrimSpace(allowedList)
+	if allowedList == "" {
+		return policy, nil
 	}
 
-	normalized, err := normalizeOrigin(allowed)
-	if err != nil {
-		return OriginPolicy{}, errors.New("invalid FRONTEND_ORIGIN")
+	for _, allowed := range strings.Split(allowedList, ",") {
+		normalized, err := normalizeOrigin(allowed)
+		if err != nil {
+			return OriginPolicy{}, errors.New("invalid FRONTEND_ORIGIN")
+		}
+		policy.allowed[strings.ToLower(normalized)] = struct{}{}
 	}
-	return OriginPolicy{allowed: normalized}, nil
+	return policy, nil
 }
 
 func (p OriginPolicy) Allows(r *http.Request) bool {
@@ -36,8 +40,9 @@ func (p OriginPolicy) Allows(r *http.Request) bool {
 		return false
 	}
 	parsed, _ := url.Parse(normalized)
+	_, configured := p.allowed[strings.ToLower(normalized)]
 
-	return strings.EqualFold(normalized, p.allowed) ||
+	return configured ||
 		strings.EqualFold(parsed.Host, r.Host) ||
 		isLocalhost(parsed.Hostname())
 }
