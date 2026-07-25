@@ -1,0 +1,437 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates one-time reminder and recurring web-watch schedules for rev-eyes.
+
+Parameters:
+  BackendBaseUrl:
+    Type: String
+    Description: Public HTTPS origin for the deployed backend, without a trailing slash.
+    AllowedPattern: '^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$'
+  BackendSourceCidr:
+    Type: String
+    Description: Static IPv4 CIDR allowed to register schedules through the private registrar API.
+    AllowedPattern: '^(?:[0-9]{1,3}\.){3}[0-9]{1,3}/(?:[0-9]|[12][0-9]|3[0-2])$'
+  SchedulerSecretArn:
+    Type: String
+    Description: ARN of the backend-owned secret whose SecretString JSON contains the token field.
+    AllowedPattern: '^arn:(aws|aws-us-gov|aws-cn):secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$'
+  ResourcePrefix:
+    Type: String
+    Default: rev-eyes
+    AllowedPattern: '^[A-Za-z0-9._-]{1,32}$'
+  ScheduleTargetRoleArn:
+    Type: String
+    Description: ARN of the root-managed EventBridge Scheduler target role.
+    AllowedPattern: '^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$'
+  SchedulerInvocationRoleArn:
+    Type: String
+    Description: ARN of the root-managed EventBridge API destination invocation role.
+    AllowedPattern: '^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$'
+  ScheduleRegistrarExecutionRoleArn:
+    Type: String
+    Description: ARN of the root-managed schedule registrar Lambda execution role.
+    AllowedPattern: '^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$'
+
+Resources:
+  ScheduleGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Ref ResourcePrefix
+      Tags:
+        - Key: Application
+          Value: rev-eyes
+
+  ScheduledEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub '${ResourcePrefix}-scheduled-jobs'
+      Description: Receives due reminder and web-watch events from EventBridge Scheduler.
+      Tags:
+        - Key: Application
+          Value: rev-eyes
+
+  SchedulerDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      Tags:
+        - Key: Application
+          Value: rev-eyes
+
+  SchedulerConnection:
+    Type: AWS::Events::Connection
+    Properties:
+      Name: !Sub '${ResourcePrefix}-scheduler'
+      Description: Authorizes EventBridge requests to the rev-eyes backend.
+      AuthorizationType: API_KEY
+      AuthParameters:
+        ApiKeyAuthParameters:
+          ApiKeyName: X-Rev-Eyes-Scheduler-Key
+          ApiKeyValue: !Sub '{{resolve:secretsmanager:${SchedulerSecretArn}:SecretString:token}}'
+
+  SchedulerDestination:
+    Type: AWS::Events::ApiDestination
+    Properties:
+      Name: !Sub '${ResourcePrefix}-scheduler'
+      Description: Invokes the rev-eyes scheduled job trigger.
+      ConnectionArn: !GetAtt SchedulerConnection.Arn
+      HttpMethod: POST
+      InvocationEndpoint: !Sub '${BackendBaseUrl}/internal/scheduler/run'
+      InvocationRateLimitPerSecond: 1
+
+  ScheduledJobDeliveryRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${ResourcePrefix}-scheduled-job-delivery'
+      Description: Delivers due reminder and web-watch events to the rev-eyes backend.
+      EventBusName: !Ref ScheduledEventBus
+      EventPattern:
+        source:
+          - rev-eyes.scheduler
+        detail-type:
+          - ReminderDue
+          - WatchDue
+      State: ENABLED
+      Targets:
+        - Id: SchedulerEndpoint
+          Arn: !GetAtt SchedulerDestination.Arn
+          RoleArn: !Ref SchedulerInvocationRoleArn
+          DeadLetterConfig:
+            Arn: !GetAtt SchedulerDeadLetterQueue.Arn
+          RetryPolicy:
+            MaximumEventAgeInSeconds: 3600
+            MaximumRetryAttempts: 12
+
+  SchedulerDeadLetterQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref SchedulerDeadLetterQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowEventBridgeDelivery
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt SchedulerDeadLetterQueue.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !GetAtt ScheduledJobDeliveryRule.Arn
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: sqs:*
+            Resource: !GetAtt SchedulerDeadLetterQueue.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+                aws:PrincipalIsAWSService: false
+
+  ScheduleRegistrarLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ResourcePrefix}-schedule-registrar'
+      RetentionInDays: 14
+      Tags:
+        - Key: Application
+          Value: rev-eyes
+
+  ScheduleRegistrarFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - ScheduleRegistrarLogGroup
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}-schedule-registrar'
+      Description: Registers rev-eyes reminders and web watches with EventBridge Scheduler.
+      Architectures:
+        - arm64
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !Ref ScheduleRegistrarExecutionRoleArn
+      MemorySize: 128
+      Timeout: 10
+      Environment:
+        Variables:
+          BACKEND_SOURCE_CIDR: !Ref BackendSourceCidr
+          EVENT_BUS_ARN: !GetAtt ScheduledEventBus.Arn
+          EVENT_BUS_NAME: !Ref ScheduledEventBus
+          RESOURCE_PREFIX: !Ref ResourcePrefix
+          SCHEDULE_DLQ_ARN: !GetAtt SchedulerDeadLetterQueue.Arn
+          SCHEDULE_GROUP: !Ref ScheduleGroup
+          SCHEDULE_TARGET_ROLE_ARN: !Ref ScheduleTargetRoleArn
+      Code:
+        ZipFile: |
+          import base64
+          import json
+          import os
+          import re
+          from datetime import datetime, timedelta, timezone
+          from ipaddress import ip_address, ip_network
+
+          import boto3
+          from botocore.config import Config
+
+          sdk_config = Config(
+              retries={"total_max_attempts": 2, "mode": "standard"},
+              connect_timeout=2,
+              read_timeout=3,
+          )
+          events = boto3.client("events", config=sdk_config)
+          scheduler = boto3.client("scheduler", config=sdk_config)
+
+          backend_network = ip_network(os.environ["BACKEND_SOURCE_CIDR"])
+          event_bus_arn = os.environ["EVENT_BUS_ARN"]
+          event_bus_name = os.environ["EVENT_BUS_NAME"]
+          resource_prefix = os.environ["RESOURCE_PREFIX"]
+          schedule_dlq_arn = os.environ["SCHEDULE_DLQ_ARN"]
+          schedule_group = os.environ["SCHEDULE_GROUP"]
+          schedule_target_role_arn = os.environ["SCHEDULE_TARGET_ROLE_ARN"]
+
+          uuid_pattern = re.compile(
+              r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+              r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              re.IGNORECASE,
+          )
+
+          def api_response(status_code, body):
+              return {
+                  "statusCode": status_code,
+                  "headers": {"Content-Type": "application/json"},
+                  "body": json.dumps(body, separators=(",", ":")),
+              }
+
+          def parse_time(value, field):
+              if not isinstance(value, str):
+                  raise ValueError(f"{field} must be an RFC3339 timestamp")
+              parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+              if parsed.tzinfo is None:
+                  raise ValueError(f"{field} must include a timezone")
+              return parsed.astimezone(timezone.utc)
+
+          def event_detail(kind, resource_id):
+              return json.dumps(
+                  {"kind": kind, "resource_id": resource_id},
+                  separators=(",", ":"),
+              )
+
+          def detail_type(kind):
+              return "ReminderDue" if kind == "reminder" else "WatchDue"
+
+          def publish(kind, resource_id):
+              result = events.put_events(
+                  Entries=[{
+                      "EventBusName": event_bus_name,
+                      "Source": "rev-eyes.scheduler",
+                      "DetailType": detail_type(kind),
+                      "Detail": event_detail(kind, resource_id),
+                  }]
+              )
+              if result.get("FailedEntryCount", 0) != 0:
+                  raise RuntimeError("EventBridge rejected the scheduled event")
+
+          def target(kind, resource_id):
+              return {
+                  "Arn": event_bus_arn,
+                  "RoleArn": schedule_target_role_arn,
+                  "EventBridgeParameters": {
+                      "DetailType": detail_type(kind),
+                      "Source": "rev-eyes.scheduler",
+                  },
+                  "Input": event_detail(kind, resource_id),
+                  "DeadLetterConfig": {"Arn": schedule_dlq_arn},
+                  "RetryPolicy": {
+                      "MaximumEventAgeInSeconds": 3600,
+                      "MaximumRetryAttempts": 3,
+                  },
+              }
+
+          def create_schedule(kind, resource_id, expression, **parameters):
+              request = {
+                  "Name": f"{resource_prefix}-{kind}-{resource_id}",
+                  "GroupName": schedule_group,
+                  "ScheduleExpression": expression,
+                  "FlexibleTimeWindow": {"Mode": "OFF"},
+                  "Target": target(kind, resource_id),
+                  "State": "ENABLED",
+                  "ActionAfterCompletion": "DELETE",
+                  "Description": f"Runs rev-eyes {kind} {resource_id}.",
+                  "ClientToken": f"{kind}-{resource_id}",
+              }
+              request.update(parameters)
+              try:
+                  scheduler.create_schedule(**request)
+              except scheduler.exceptions.ConflictException:
+                  return
+
+          def request_body(event):
+              body = event.get("body") or ""
+              if event.get("isBase64Encoded"):
+                  body = base64.b64decode(body, validate=True).decode("utf-8")
+              if len(body) > 16384:
+                  raise ValueError("request body is too large")
+              parsed = json.loads(body)
+              if not isinstance(parsed, dict):
+                  raise ValueError("request body must be a JSON object")
+              return parsed
+
+          def handler(event, _context):
+              source_ip = (
+                  event.get("requestContext", {})
+                  .get("identity", {})
+                  .get("sourceIp", "")
+              )
+              try:
+                  if ip_address(source_ip) not in backend_network:
+                      return api_response(403, {"error": "forbidden"})
+              except ValueError:
+                  return api_response(403, {"error": "forbidden"})
+
+              try:
+                  body = request_body(event)
+                  kind = body.get("kind")
+                  resource_id = body.get("resource_id")
+                  if kind not in {"reminder", "watch"}:
+                      raise ValueError("kind must be reminder or watch")
+                  if not isinstance(resource_id, str) or not uuid_pattern.fullmatch(resource_id):
+                      raise ValueError("resource_id must be a UUID")
+
+                  now = datetime.now(timezone.utc)
+                  if kind == "reminder":
+                      schedule_at = parse_time(body.get("schedule_at"), "schedule_at")
+                      if schedule_at <= now:
+                          publish(kind, resource_id)
+                      else:
+                          if schedule_at.microsecond:
+                              schedule_at = (
+                                  schedule_at + timedelta(seconds=1)
+                              ).replace(microsecond=0)
+                          expression_time = schedule_at.strftime("%Y-%m-%dT%H:%M:%S")
+                          create_schedule(
+                              kind,
+                              resource_id,
+                              f"at({expression_time})",
+                              ScheduleExpressionTimezone="UTC",
+                          )
+                  else:
+                      interval = body.get("interval_minutes")
+                      if isinstance(interval, bool) or not isinstance(interval, int):
+                          raise ValueError("interval_minutes must be an integer")
+                      if interval < 60 or interval > 1440:
+                          raise ValueError("interval_minutes must be between 60 and 1440")
+                      end_at = parse_time(body.get("end_at"), "end_at")
+                      start_at = now + timedelta(minutes=interval)
+                      if start_at < end_at:
+                          create_schedule(
+                              kind,
+                              resource_id,
+                              f"rate({interval} minutes)",
+                              StartDate=start_at,
+                              EndDate=end_at,
+                          )
+                      publish(kind, resource_id)
+              except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as error:
+                  return api_response(400, {"error": str(error)})
+
+              return api_response(200, {"status": "registered"})
+      Tags:
+        - Key: Application
+          Value: rev-eyes
+
+  ScheduleRegistrationApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub '${ResourcePrefix}-schedule-registration'
+      Description: Accepts schedule registrations only from the rev-eyes backend static IP.
+      EndpointConfiguration:
+        IpAddressType: ipv4
+        Types:
+          - REGIONAL
+      Policy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowInvoke
+            Effect: Allow
+            Principal: '*'
+            Action: execute-api:Invoke
+            Resource: execute-api:/*
+          - Sid: DenyOutsideBackend
+            Effect: Deny
+            Principal: '*'
+            Action: execute-api:Invoke
+            Resource: execute-api:/*
+            Condition:
+              NotIpAddress:
+                aws:SourceIp:
+                  - !Ref BackendSourceCidr
+      Tags:
+        - Key: Application
+          Value: rev-eyes
+
+  ScheduleRegistrationResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ScheduleRegistrationApi
+      ParentId: !GetAtt ScheduleRegistrationApi.RootResourceId
+      PathPart: schedules
+
+  ScheduleRegistrationMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ScheduleRegistrationApi
+      ResourceId: !Ref ScheduleRegistrationResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      ApiKeyRequired: false
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ScheduleRegistrarFunction.Arn}/invocations'
+
+  ScheduleRegistrarInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ScheduleRegistrarFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ScheduleRegistrationApi}/*/POST/schedules'
+
+  ScheduleRegistrationDeploymentV1:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ScheduleRegistrationMethod
+    Properties:
+      RestApiId: !Ref ScheduleRegistrationApi
+      Description: Initial schedule registration API deployment.
+      StageName: v1
+      StageDescription:
+        MethodSettings:
+          - HttpMethod: '*'
+            ResourcePath: /*
+            ThrottlingBurstLimit: 2
+            ThrottlingRateLimit: 1
+
+Outputs:
+  ScheduleRegistrarUrl:
+    Description: Source-IP-restricted endpoint used by the backend to register schedules.
+    Value: !Sub 'https://${ScheduleRegistrationApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/v1/schedules'
+  ScheduleGroupName:
+    Description: EventBridge Scheduler group containing rev-eyes schedules.
+    Value: !Ref ScheduleGroup
+  ScheduledEventBusArn:
+    Description: Event bus receiving due reminder and web-watch events.
+    Value: !GetAtt ScheduledEventBus.Arn
+  ScheduledJobDeliveryRuleArn:
+    Description: Rule delivering due scheduled jobs to the backend.
+    Value: !GetAtt ScheduledJobDeliveryRule.Arn
+  SchedulerDestinationArn:
+    Description: API destination invoking the backend scheduled job endpoint.
+    Value: !GetAtt SchedulerDestination.Arn
+  SchedulerDeadLetterQueueUrl:
+    Description: Queue containing failed schedule and backend deliveries.
+    Value: !Ref SchedulerDeadLetterQueue
