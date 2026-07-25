@@ -1,0 +1,62 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ValidateSchedulerTemplate",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:GetTemplateSummary",
+        "cloudformation:ValidateTemplate"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PlanSchedulerStackChanges",
+      "Effect": "Allow",
+      "Action": "cloudformation:CreateChangeSet",
+      "Resource": [
+        "arn:aws:cloudformation:us-west-2:809411919701:stack/rev-eyes-scheduler/*",
+        "arn:aws:cloudformation:us-west-2:809411919701:changeSet/rev-eyes-scheduler-deploy-*/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "cloudformation:RoleARN": "arn:aws:iam::809411919701:role/rev-eyes-scheduler-cloudformation-execution"
+        }
+      }
+    },
+    {
+      "Sid": "ManageSchedulerChangeSets",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:DeleteChangeSet",
+        "cloudformation:DescribeChangeSet",
+        "cloudformation:ExecuteChangeSet"
+      ],
+      "Resource": "arn:aws:cloudformation:us-west-2:809411919701:changeSet/rev-eyes-scheduler-deploy-*/*"
+    },
+    {
+      "Sid": "ReadSchedulerStack",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:DescribeEvents",
+        "cloudformation:DescribeStackEvents",
+        "cloudformation:DescribeStackResources",
+        "cloudformation:DescribeStacks",
+        "cloudformation:GetTemplate",
+        "cloudformation:ListStackResources"
+      ],
+      "Resource": "arn:aws:cloudformation:us-west-2:809411919701:stack/rev-eyes-scheduler/*"
+    },
+    {
+      "Sid": "PassOnlySchedulerCloudFormationRole",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::809411919701:role/rev-eyes-scheduler-cloudformation-execution",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "cloudformation.amazonaws.com"
+        }
+      }
+    }
+  ]
+}
