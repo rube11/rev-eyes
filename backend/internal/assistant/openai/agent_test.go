@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/session"
@@ -61,12 +62,59 @@ func TestAgentReturnsText(t *testing.T) {
 	if request.Model != "test-model" || len(request.Tools) != 1 {
 		t.Fatalf("request = %#v", request)
 	}
+	if !strings.Contains(request.Instructions, "call search_web before answering") {
+		t.Fatalf("instructions = %q", request.Instructions)
+	}
+	if !strings.Contains(request.Instructions, "Use propose_watch once") {
+		t.Fatalf("instructions = %q", request.Instructions)
+	}
+	if !strings.Contains(request.Instructions, "the glasses can render each result separately") {
+		t.Fatalf("instructions = %q", request.Instructions)
+	}
 	if !request.Tools[0].Strict || request.Store {
 		t.Fatalf("tool strict = %v, store = %v", request.Tools[0].Strict, request.Store)
 	}
 	if len(request.Include) != 1 ||
 		request.Include[0] != "reasoning.encrypted_content" {
 		t.Fatalf("include = %#v", request.Include)
+	}
+}
+
+func TestAgentIncludesCurrentLocalTime(t *testing.T) {
+	t.Parallel()
+
+	var request createRequest
+	agent := testAgent(t, nil, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		writeJSON(t, w, map[string]any{
+			"output": []any{map[string]any{
+				"type": "message",
+				"content": []any{map[string]any{
+					"type": "output_text",
+					"text": "Done.",
+				}},
+			}},
+		})
+	})
+	agent.now = func() time.Time {
+		return time.Date(2026, time.July, 21, 18, 30, 0, 0, time.UTC)
+	}
+
+	if _, err := agent.Respond(
+		context.Background(),
+		tool.Scope{TimeZone: "America/Los_Angeles"},
+		"I need to call the dentist tomorrow morning.",
+		session.Conversation{},
+		nil,
+	); err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+
+	want := "Current local date and time: 2026-07-21T11:30:00-07:00 (America/Los_Angeles)."
+	if !strings.Contains(request.Instructions, want) {
+		t.Fatalf("instructions = %q", request.Instructions)
 	}
 }
 
