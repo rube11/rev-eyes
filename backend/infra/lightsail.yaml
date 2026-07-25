@@ -1,0 +1,173 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Runs the rev-eyes backend on a single secured Lightsail instance.
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: Public DNS name that points to the static IP created by this stack.
+    AllowedPattern: '^(?=.{1,253}$)([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$'
+  KeyPairName:
+    Type: String
+    Default: ''
+    Description: Optional existing Lightsail SSH key pair name. Leave blank to use the regional default key.
+    AllowedPattern: '^$|^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$'
+  SshAllowedCidr:
+    Type: String
+    Description: Single trusted IPv4 CIDR allowed to connect over SSH.
+    AllowedPattern: '^(?:[0-9]{1,3}\.){3}[0-9]{1,3}/(?:[0-9]|[12][0-9]|3[0-2])$'
+  AvailabilityZone:
+    Type: String
+    Default: us-west-2a
+    AllowedValues:
+      - us-west-2a
+      - us-west-2b
+      - us-west-2c
+      - us-west-2d
+  BundleId:
+    Type: String
+    Default: micro_3_0
+    AllowedValues:
+      - micro_3_0
+      - small_3_0
+
+Conditions:
+  HasCustomKeyPair: !Not [!Equals [!Ref KeyPairName, '']]
+
+Resources:
+  BackendInstance:
+    Type: AWS::Lightsail::Instance
+    Properties:
+      InstanceName: !Sub '${AWS::StackName}-backend'
+      AvailabilityZone: !Ref AvailabilityZone
+      BlueprintId: ubuntu_24_04
+      BundleId: !Ref BundleId
+      KeyPairName: !If
+        - HasCustomKeyPair
+        - !Ref KeyPairName
+        - !Ref AWS::NoValue
+      Networking:
+        Ports:
+          - FromPort: 22
+            ToPort: 22
+            Protocol: tcp
+            AccessDirection: inbound
+            AccessType: Public
+            Cidrs:
+              - !Ref SshAllowedCidr
+            CidrListAliases:
+              - lightsail-connect
+          - FromPort: 80
+            ToPort: 80
+            Protocol: tcp
+            AccessDirection: inbound
+            AccessType: Public
+            Cidrs:
+              - 0.0.0.0/0
+            Ipv6Cidrs:
+              - ::/0
+          - FromPort: 443
+            ToPort: 443
+            Protocol: tcp
+            AccessDirection: inbound
+            AccessType: Public
+            Cidrs:
+              - 0.0.0.0/0
+            Ipv6Cidrs:
+              - ::/0
+      Tags:
+        - Key: Application
+          Value: rev-eyes
+      UserData: !Sub |
+        #!/bin/sh
+        set -eu
+
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg unattended-upgrades
+
+        curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
+          | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+        curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
+          > /etc/apt/sources.list.d/caddy-stable.list
+        chmod 0644 /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+        chmod 0644 /etc/apt/sources.list.d/caddy-stable.list
+        apt-get update
+        apt-get install -y caddy
+
+        id rev-eyes >/dev/null 2>&1 \
+          || useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin rev-eyes
+        install -d -o root -g root -m 0755 /opt/rev-eyes
+        install -d -o root -g root -m 0700 /etc/rev-eyes
+        install -o root -g root -m 0600 /dev/null /etc/rev-eyes/backend.env
+
+        cat > /etc/systemd/system/rev-eyes.service <<'EOF'
+        [Unit]
+        Description=Rev Eyes backend
+        Wants=network-online.target
+        After=network-online.target
+
+        [Service]
+        Type=simple
+        User=rev-eyes
+        Group=rev-eyes
+        WorkingDirectory=/opt/rev-eyes
+        EnvironmentFile=/etc/rev-eyes/backend.env
+        ExecStart=/opt/rev-eyes/backend
+        Restart=on-failure
+        RestartSec=5s
+        TimeoutStopSec=15s
+        UMask=0077
+        NoNewPrivileges=true
+        PrivateDevices=true
+        PrivateTmp=true
+        ProtectControlGroups=true
+        ProtectHome=true
+        ProtectKernelModules=true
+        ProtectKernelTunables=true
+        ProtectSystem=strict
+        RestrictSUIDSGID=true
+        LockPersonality=true
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+
+        cat > /etc/caddy/Caddyfile <<'EOF'
+        ${DomainName} {
+            reverse_proxy 127.0.0.1:8080
+        }
+        EOF
+
+        cat > /etc/ssh/sshd_config.d/99-rev-eyes.conf <<'EOF'
+        PermitRootLogin no
+        PasswordAuthentication no
+        KbdInteractiveAuthentication no
+        EOF
+
+        cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+        APT::Periodic::Update-Package-Lists "1";
+        APT::Periodic::Unattended-Upgrade "1";
+        EOF
+
+        systemctl daemon-reload
+        systemctl enable rev-eyes.service
+        systemctl reload ssh.service
+        systemctl reload caddy.service
+
+  BackendStaticIp:
+    Type: AWS::Lightsail::StaticIp
+    DependsOn: BackendInstance
+    Properties:
+      StaticIpName: !Sub '${AWS::StackName}-ip'
+      AttachedTo: !Sub '${AWS::StackName}-backend'
+
+Outputs:
+  BackendUrl:
+    Description: Public HTTPS origin for the backend after DNS propagation.
+    Value: !Sub 'https://${DomainName}'
+  InstanceName:
+    Description: Lightsail instance name.
+    Value: !Sub '${AWS::StackName}-backend'
+  StaticIpAddress:
+    Description: IPv4 address to use for the domain A record.
+    Value: !GetAtt BackendStaticIp.IpAddress
