@@ -24,6 +24,7 @@ type Scope struct {
 	UserID      string
 	SessionID   string
 	UtteranceID string
+	TimeZone    string
 }
 
 // Result is the normalized output returned by a tool.

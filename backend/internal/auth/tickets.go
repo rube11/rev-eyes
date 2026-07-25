@@ -7,10 +7,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
@@ -21,6 +23,8 @@ var (
 	ErrInvalidTicket     = errors.New("invalid or expired WebSocket ticket")
 	ErrUserIDRequired    = errors.New("user ID is required")
 	ErrSessionIDRequired = errors.New("session ID is required")
+	ErrTimeZoneRequired  = errors.New("time zone is required")
+	ErrTimeZoneInvalid   = errors.New("time zone is invalid")
 )
 
 type ticketGrant struct {
@@ -50,6 +54,11 @@ func (s *TicketStore) Issue(scope tool.Scope) (string, time.Time, error) {
 	}
 	if scope.SessionID == "" {
 		return "", time.Time{}, ErrSessionIDRequired
+	}
+	var err error
+	scope.TimeZone, err = normalizeTimeZone(scope.TimeZone)
+	if err != nil {
+		return "", time.Time{}, err
 	}
 
 	ticket, err := randomID(32)
@@ -149,6 +158,11 @@ func (h *TicketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		unauthorized(w)
 		return
 	}
+	timeZone, err := requestTimeZone(w, r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	sessionID, err := h.resolveSession(r.Context(), userID)
 	if err != nil {
@@ -158,6 +172,7 @@ func (h *TicketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ticket, expiresAt, err := h.tickets.Issue(tool.Scope{
 		UserID:    userID,
 		SessionID: sessionID,
+		TimeZone:  timeZone,
 	})
 	if err != nil {
 		http.Error(w, "could not issue WebSocket ticket", http.StatusInternalServerError)
@@ -174,6 +189,33 @@ func (h *TicketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Ticket:    ticket,
 		ExpiresAt: expiresAt,
 	})
+}
+
+func requestTimeZone(w http.ResponseWriter, r *http.Request) (string, error) {
+	var input struct {
+		TimeZone string `json:"time_zone"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		return "", errors.New("invalid ticket request")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return "", errors.New("invalid ticket request")
+	}
+	return normalizeTimeZone(input.TimeZone)
+}
+
+func normalizeTimeZone(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", ErrTimeZoneRequired
+	}
+	location, err := time.LoadLocation(value)
+	if err != nil {
+		return "", ErrTimeZoneInvalid
+	}
+	return location.String(), nil
 }
 
 func bearerToken(header string) (string, bool) {

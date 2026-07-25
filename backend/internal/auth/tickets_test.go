@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ func TestTicketStoreCreatesOneTimeScopedTickets(t *testing.T) {
 	issuedScope := tool.Scope{
 		UserID:    " user-123 ",
 		SessionID: " session-123 ",
+		TimeZone:  " America/Los_Angeles ",
 	}
 	ticket, expiresAt, err := store.Issue(issuedScope)
 	if err != nil {
@@ -33,7 +35,9 @@ func TestTicketStoreCreatesOneTimeScopedTickets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Consume() error = %v", err)
 	}
-	if scope.UserID != "user-123" || scope.SessionID != "session-123" {
+	if scope.UserID != "user-123" ||
+		scope.SessionID != "session-123" ||
+		scope.TimeZone != "America/Los_Angeles" {
 		t.Fatalf("scope = %+v", scope)
 	}
 	if _, err := store.Consume(ticket); !errors.Is(err, ErrInvalidTicket) {
@@ -43,6 +47,7 @@ func TestTicketStoreCreatesOneTimeScopedTickets(t *testing.T) {
 	secondTicket, _, err := store.Issue(tool.Scope{
 		UserID:    "user-123",
 		SessionID: "session-123",
+		TimeZone:  "America/Los_Angeles",
 	})
 	if err != nil {
 		t.Fatalf("second Issue() error = %v", err)
@@ -64,6 +69,7 @@ func TestTicketStoreRejectsExpiredTicket(t *testing.T) {
 	ticket, _, err := store.Issue(tool.Scope{
 		UserID:    "user-123",
 		SessionID: "session-123",
+		TimeZone:  "UTC",
 	})
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
@@ -94,8 +100,13 @@ func TestTicketHandlerExchangesBearerTokenForTicket(t *testing.T) {
 		t.Fatalf("NewTicketHandler() error = %v", err)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/auth/ws-ticket", nil)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/auth/ws-ticket",
+		strings.NewReader(`{"time_zone":"America/Los_Angeles"}`),
+	)
 	request.Header.Set("Authorization", "Bearer access-token")
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 
@@ -120,8 +131,32 @@ func TestTicketHandlerExchangesBearerTokenForTicket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Consume() error = %v", err)
 	}
-	if scope.UserID != "user-123" || scope.SessionID != "session-123" {
+	if scope.UserID != "user-123" ||
+		scope.SessionID != "session-123" ||
+		scope.TimeZone != "America/Los_Angeles" {
 		t.Fatalf("scope = %+v", scope)
+	}
+}
+
+func TestTicketStoreRejectsInvalidTimeZone(t *testing.T) {
+	t.Parallel()
+
+	store := NewTicketStore()
+	for _, test := range []struct {
+		timeZone string
+		wantErr  error
+	}{
+		{timeZone: "", wantErr: ErrTimeZoneRequired},
+		{timeZone: "not/a-time-zone", wantErr: ErrTimeZoneInvalid},
+	} {
+		_, _, err := store.Issue(tool.Scope{
+			UserID:    "user-123",
+			SessionID: "session-123",
+			TimeZone:  test.timeZone,
+		})
+		if !errors.Is(err, test.wantErr) {
+			t.Fatalf("Issue(time zone %q) error = %v", test.timeZone, err)
+		}
 	}
 }
 
@@ -150,5 +185,35 @@ func TestTicketHandlerRejectsMissingBearerToken(t *testing.T) {
 
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestTicketHandlerHidesDisallowedEmail(t *testing.T) {
+	t.Parallel()
+
+	handler, err := NewTicketHandler(
+		func(context.Context, string) (string, error) {
+			return "", ErrEmailNotAllowed
+		},
+		func(context.Context, string) (string, error) {
+			t.Fatal("resolveSession() was called")
+			return "", nil
+		},
+		NewTicketStore(),
+	)
+	if err != nil {
+		t.Fatalf("NewTicketHandler() error = %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/auth/ws-ticket", nil)
+	request.Header.Set("Authorization", "Bearer valid-but-disallowed-token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
+	}
+	if !strings.Contains(response.Body.String(), "unauthorized") {
+		t.Fatalf("body = %q", response.Body.String())
 	}
 }
