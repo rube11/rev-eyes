@@ -1,0 +1,79 @@
+let prohibited_high_cost_resources = Resources.*[
+    Type IN [
+        'AWS::AutoScaling::AutoScalingGroup',
+        'AWS::EC2::Instance',
+        'AWS::EC2::NatGateway',
+        'AWS::ECS::Service',
+        'AWS::ElastiCache::CacheCluster',
+        'AWS::OpenSearchService::Domain',
+        'AWS::RDS::DBCluster',
+        'AWS::RDS::DBInstance',
+        'AWS::Redshift::Cluster',
+        'AWS::SageMaker::Endpoint'
+    ]
+]
+
+let lambda_functions = Resources.*[
+    Type == 'AWS::Lambda::Function'
+]
+
+let queues = Resources.*[
+    Type == 'AWS::SQS::Queue'
+]
+
+let registration_apis = Resources.*[
+    Type == 'AWS::ApiGateway::RestApi'
+]
+
+let registration_deployments = Resources.*[
+    Type == 'AWS::ApiGateway::Deployment'
+]
+
+let iam_resources = Resources.*[
+    Type IN [
+        'AWS::IAM::Group',
+        'AWS::IAM::ManagedPolicy',
+        'AWS::IAM::Role',
+        'AWS::IAM::User'
+    ]
+]
+
+rule no_prohibited_high_cost_resources {
+    %prohibited_high_cost_resources empty
+}
+
+rule runtime_iam_is_root_managed {
+    %iam_resources empty
+}
+
+rule lambda_cost_controls when %lambda_functions !empty {
+    %lambda_functions {
+        Properties.MemorySize <= 128
+        Properties.Timeout <= 10
+        Properties.Architectures[*] == 'arm64'
+    }
+}
+
+rule queues_are_encrypted_and_bounded when %queues !empty {
+    %queues {
+        Properties.SqsManagedSseEnabled == true
+        Properties.MessageRetentionPeriod <= 1209600
+    }
+}
+
+rule registration_api_is_regional_ipv4_and_restricted when %registration_apis !empty {
+    %registration_apis {
+        Properties.EndpointConfiguration.Types[*] == 'REGIONAL'
+        Properties.EndpointConfiguration.IpAddressType == 'ipv4'
+        Properties.Policy exists
+    }
+}
+
+rule registration_api_is_rate_limited when %registration_deployments !empty {
+    %registration_deployments {
+        Properties.StageDescription.MethodSettings[*] {
+            ThrottlingBurstLimit <= 2
+            ThrottlingRateLimit <= 1
+        }
+    }
+}
