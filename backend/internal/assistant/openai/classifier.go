@@ -1,4 +1,4 @@
-package assistant
+package openai
 
 import (
 	"bytes"
@@ -14,9 +14,7 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 )
 
-const (
-	openAIResponsesURL = "https://api.openai.com/v1/responses"
-	routerPrompt       = `You classify finalized speech for a wearable assistant.
+const routerPrompt = `You classify finalized speech for a wearable assistant.
 
 Choose exactly one action:
 - ignore: background speech, filler, or speech that requires no processing.
@@ -24,10 +22,11 @@ Choose exactly one action:
 - state_update: current conversational or situational context that should update short-lived assistant state without a response.
 - remember: an explicit user request to remember a durable fact or preference. Never choose remember unless the user explicitly asks for it.
 - propose_task: a potential task inferred from the speech that should be proposed to the user before execution.
+- propose_watch: a request or strong implied interest in monitoring a future public update over time.
 
 Set query to a concise, standalone version of the request. Use an empty query for ignore.
-Set memory_lookup to empty arrays unless the action is respond or propose_task.
-For respond and propose_task, always create a proactive memory lookup:
+Set memory_lookup to empty arrays unless the action is respond, propose_task, or propose_watch.
+For respond, propose_task, and propose_watch, always create a proactive memory lookup:
 - terms: one to five short lowercase words or phrases likely to appear in a relevant memory title or summary. Include useful synonyms, not filler words.
 - topics: zero to three relevant memory topics.
 - kinds: zero or more relevant memory kinds.
@@ -42,11 +41,11 @@ For remember, set query to the memory summary and create one memory card:
 - Include named people, places, organizations, projects, and events as entities.
 - Use only facts stated in the utterance. Never resolve missing context or invent details.
 For propose_task, preserve whether the user implied the action rather than explicitly requested it in query.
+Choose propose_watch only when future web information must be checked repeatedly, not for a one-time current-information question.
 Classify the speech only. Do not answer it.`
-)
 
-// NewOpenAIClassifier creates the function used by Router to classify utterances.
-func NewOpenAIClassifier(apiKey, model string) (func(context.Context, string) (string, error), error) {
+// NewClassifier creates the function used by the activity router.
+func NewClassifier(apiKey, model string) (func(context.Context, string) (string, error), error) {
 	apiKey = strings.TrimSpace(apiKey)
 	model = strings.TrimSpace(model)
 	if apiKey == "" {
@@ -59,12 +58,12 @@ func NewOpenAIClassifier(apiKey, model string) (func(context.Context, string) (s
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	return func(ctx context.Context, utterance string) (string, error) {
-		body, err := json.Marshal(openAIRequest(model, utterance))
+		body, err := json.Marshal(classifierRequest(model, utterance))
 		if err != nil {
 			return "", fmt.Errorf("encode OpenAI request: %w", err)
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, openAIResponsesURL, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, responsesURL, bytes.NewReader(body))
 		if err != nil {
 			return "", fmt.Errorf("create OpenAI request: %w", err)
 		}
@@ -82,10 +81,10 @@ func NewOpenAIClassifier(apiKey, model string) (func(context.Context, string) (s
 			return "", fmt.Errorf("read OpenAI response: %w", err)
 		}
 		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-			return "", openAIStatusError(response.StatusCode, responseBody)
+			return "", classifierStatusError(response.StatusCode, responseBody)
 		}
 
-		var result openAIResponse
+		var result classifierResponse
 		if err := json.Unmarshal(responseBody, &result); err != nil {
 			return "", fmt.Errorf("decode OpenAI response: %w", err)
 		}
@@ -105,7 +104,7 @@ func NewOpenAIClassifier(apiKey, model string) (func(context.Context, string) (s
 	}, nil
 }
 
-func openAIRequest(model, utterance string) map[string]any {
+func classifierRequest(model, utterance string) map[string]any {
 	return map[string]any{
 		"model": model,
 		"input": []map[string]string{
@@ -123,7 +122,7 @@ func openAIRequest(model, utterance string) map[string]any {
 					"properties": map[string]any{
 						"action": map[string]any{
 							"type": "string",
-							"enum": []string{"ignore", "respond", "state_update", "remember", "propose_task"},
+							"enum": []string{"ignore", "respond", "state_update", "remember", "propose_task", "propose_watch"},
 						},
 						"query":         map[string]string{"type": "string"},
 						"memory_lookup": memoryLookupSchema(),
@@ -215,7 +214,7 @@ func memoryCardSchema() map[string]any {
 	}
 }
 
-type openAIResponse struct {
+type classifierResponse struct {
 	Output []struct {
 		Content []struct {
 			Type    string `json:"type"`
@@ -225,7 +224,7 @@ type openAIResponse struct {
 	} `json:"output"`
 }
 
-func openAIStatusError(statusCode int, body []byte) error {
+func classifierStatusError(statusCode int, body []byte) error {
 	var response struct {
 		Error struct {
 			Message string `json:"message"`
