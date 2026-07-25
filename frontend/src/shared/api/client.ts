@@ -7,7 +7,13 @@ type TicketResponse = {
 export async function connectRealtimeSocket(accessToken: string): Promise<WebSocket> {
   const response = await fetch(`${env.apiBaseUrl}/auth/ws-ticket`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}` },
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    }),
   })
   if (!response.ok) {
     throw new Error(`WebSocket ticket request failed (${response.status})`)

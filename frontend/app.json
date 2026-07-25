@@ -11,6 +11,7 @@
       "name": "network",
       "desc": "Connects to Rev Eyes services for authentication and assistant responses.",
       "whitelist": [
+        "https://api.rev-eyes.com",
         "https://ikqdeosysrsynkxbijgn.supabase.co"
       ]
     },
