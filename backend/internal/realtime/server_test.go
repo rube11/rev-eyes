@@ -21,6 +21,7 @@ func (echoTranscriber) Transcribe(
 	ctx context.Context,
 	audio <-chan []byte,
 	completed chan<- string,
+	observe stt.TranscriptObserver,
 ) error {
 	for {
 		select {
@@ -29,6 +30,9 @@ func (echoTranscriber) Transcribe(
 		case chunk, ok := <-audio:
 			if !ok {
 				return nil
+			}
+			if err := observe(string(chunk)); err != nil {
+				return err
 			}
 			select {
 			case completed <- string(chunk):
@@ -182,6 +186,8 @@ func TestServerExchangesScopedLocationAndAssistantMessages(t *testing.T) {
 		t.Fatalf("WriteMessage() error = %v", err)
 	}
 
+	assertServerMessage(t, conn, userTranscriptMessageType, "where am I")
+	assertServerMessageType(t, conn, assistantThinkingMessageType)
 	var response serverMessage
 	if err := conn.ReadJSON(&response); err != nil {
 		t.Fatalf("ReadJSON() error = %v", err)
@@ -213,6 +219,83 @@ func TestServerExchangesScopedLocationAndAssistantMessages(t *testing.T) {
 	}
 	if scope := receive(t, disconnected); scope != expectedScope {
 		t.Fatalf("disconnect scope = %+v, want %+v", scope, expectedScope)
+	}
+}
+
+func TestServerStopsThinkingWhenUtteranceHasNoResponse(t *testing.T) {
+	server := NewServer(echoTranscriber{}, Handlers{
+		Authenticate: func(string) (tool.Scope, error) {
+			return tool.Scope{UserID: "user", SessionID: "session"}, nil
+		},
+		Utterance: func(context.Context, tool.Scope, string) (string, error) {
+			return "", nil
+		},
+	})
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(websocketTestURL(httpServer.URL), nil)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline() error = %v", err)
+	}
+	if err := conn.WriteJSON(map[string]string{"type": listeningStartMessageType}); err != nil {
+		t.Fatalf("WriteJSON() error = %v", err)
+	}
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("never mind")); err != nil {
+		t.Fatalf("WriteMessage() error = %v", err)
+	}
+
+	assertServerMessage(t, conn, userTranscriptMessageType, "never mind")
+	assertServerMessageType(t, conn, assistantThinkingMessageType)
+	assertServerMessageType(t, conn, assistantDoneMessageType)
+}
+
+func TestServerHandlesNotificationAcknowledgement(t *testing.T) {
+	expectedScope := tool.Scope{UserID: "user", SessionID: "session"}
+	type acknowledgement struct {
+		scope          tool.Scope
+		notificationID string
+	}
+	acknowledged := make(chan acknowledgement, 1)
+	server := NewServer(echoTranscriber{}, Handlers{
+		Authenticate: func(string) (tool.Scope, error) {
+			return expectedScope, nil
+		},
+		NotificationAck: func(
+			_ context.Context,
+			scope tool.Scope,
+			notificationID string,
+		) error {
+			acknowledged <- acknowledgement{
+				scope:          scope,
+				notificationID: notificationID,
+			}
+			return nil
+		},
+	})
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(websocketTestURL(httpServer.URL), nil)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	defer conn.Close()
+
+	if err := conn.WriteJSON(map[string]string{
+		"type": notificationAckMessageType,
+		"id":   "notification-1",
+	}); err != nil {
+		t.Fatalf("WriteJSON() error = %v", err)
+	}
+
+	got := receive(t, acknowledged)
+	if got.scope != expectedScope || got.notificationID != "notification-1" {
+		t.Fatalf("acknowledgement = %+v", got)
 	}
 }
 
@@ -309,9 +392,10 @@ func TestServerControlsTranscriptionLifecycle(t *testing.T) {
 		ctx context.Context,
 		audio <-chan []byte,
 		completed chan<- string,
+		observe stt.TranscriptObserver,
 	) error {
 		started <- struct{}{}
-		return echoTranscriber{}.Transcribe(ctx, audio, completed)
+		return echoTranscriber{}.Transcribe(ctx, audio, completed, observe)
 	}), Handlers{
 		Authenticate: func(string) (tool.Scope, error) {
 			return tool.Scope{UserID: "user", SessionID: "session"}, nil
@@ -358,6 +442,8 @@ func TestServerControlsTranscriptionLifecycle(t *testing.T) {
 		if err := conn.WriteMessage(websocket.BinaryMessage, []byte(utterance)); err != nil {
 			t.Fatalf("WriteMessage() error = %v", err)
 		}
+		assertServerMessage(t, conn, userTranscriptMessageType, utterance)
+		assertServerMessageType(t, conn, assistantThinkingMessageType)
 		var response serverMessage
 		if err := conn.ReadJSON(&response); err != nil {
 			t.Fatalf("ReadJSON() error = %v", err)
@@ -379,14 +465,20 @@ func (discardJSONWriter) WriteJSON(any) error {
 	return nil
 }
 
-type transcriberFunc func(context.Context, <-chan []byte, chan<- string) error
+type transcriberFunc func(
+	context.Context,
+	<-chan []byte,
+	chan<- string,
+	stt.TranscriptObserver,
+) error
 
 func (f transcriberFunc) Transcribe(
 	ctx context.Context,
 	audio <-chan []byte,
 	completed chan<- string,
+	observe stt.TranscriptObserver,
 ) error {
-	return f(ctx, audio, completed)
+	return f(ctx, audio, completed, observe)
 }
 
 func assertServerMessageType(t *testing.T, conn *websocket.Conn, want string) {
@@ -398,6 +490,28 @@ func assertServerMessageType(t *testing.T, conn *websocket.Conn, want string) {
 	}
 	if message.Type != want {
 		t.Fatalf("message type = %q, want %q", message.Type, want)
+	}
+}
+
+func assertServerMessage(
+	t *testing.T,
+	conn *websocket.Conn,
+	wantType string,
+	wantText string,
+) {
+	t.Helper()
+
+	var message serverMessage
+	if err := conn.ReadJSON(&message); err != nil {
+		t.Fatalf("ReadJSON() error = %v", err)
+	}
+	if message.Type != wantType || message.Text != wantText {
+		t.Fatalf(
+			"message = %+v, want type %q and text %q",
+			message,
+			wantType,
+			wantText,
+		)
 	}
 }
 

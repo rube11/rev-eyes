@@ -24,21 +24,28 @@ const (
 	listeningStartMessageType = "listening_start"
 	listeningStopMessageType  = "listening_stop"
 
+	assistantDoneMessageType     = "assistant_done"
 	assistantResponseMessageType = "assistant_response"
+	assistantThinkingMessageType = "assistant_thinking"
 	listeningStoppedMessageType  = "listening_stopped"
+	notificationMessageType      = "notification"
+	notificationAckMessageType   = "notification_ack"
+	userTranscriptMessageType    = "user_transcript"
 )
 
 type Authenticator func(ticket string) (tool.Scope, error)
 type UtteranceHandler func(ctx context.Context, scope tool.Scope, utterance string) (string, error)
 type LocationHandler func(ctx context.Context, scope tool.Scope, update LocationUpdate) error
+type NotificationAckHandler func(ctx context.Context, scope tool.Scope, notificationID string) error
 
 type Handlers struct {
-	Authenticate Authenticator
-	CheckOrigin  func(r *http.Request) bool
-	Connect      func(ctx context.Context, scope tool.Scope) error
-	Utterance    UtteranceHandler
-	Location     LocationHandler
-	Disconnect   func(scope tool.Scope)
+	Authenticate    Authenticator
+	CheckOrigin     func(r *http.Request) bool
+	Connect         func(ctx context.Context, scope tool.Scope) error
+	Utterance       UtteranceHandler
+	Location        LocationHandler
+	NotificationAck NotificationAckHandler
+	Disconnect      func(scope tool.Scope)
 }
 
 type LocationUpdate struct {
@@ -49,11 +56,13 @@ type LocationUpdate struct {
 
 type clientMessage struct {
 	Type string `json:"type"`
+	ID   string `json:"id,omitempty"`
 	LocationUpdate
 }
 
 type serverMessage struct {
 	Type  string `json:"type"`
+	ID    string `json:"id,omitempty"`
 	Text  string `json:"text,omitempty"`
 	Error string `json:"error,omitempty"`
 }
@@ -210,6 +219,21 @@ func (s *Server) serveConnection(
 					}
 				}
 
+			case notificationAckMessageType:
+				if s.handlers.NotificationAck == nil {
+					continue
+				}
+				if err := s.handlers.NotificationAck(ctx, scope, message.ID); err != nil {
+					slog.WarnContext(
+						ctx,
+						"rejected notification acknowledgement",
+						"notification_id",
+						message.ID,
+						"error",
+						err,
+					)
+				}
+
 			case listeningStartMessageType:
 				if transcription != nil {
 					continue
@@ -250,7 +274,24 @@ func (s *Server) transcribeConnection(
 	done := make(chan error, 1)
 
 	go func() {
-		err := s.transcriber.Transcribe(ctx, audio, completed)
+		err := s.transcriber.Transcribe(
+			ctx,
+			audio,
+			completed,
+			func(transcript string) error {
+				transcript = strings.TrimSpace(transcript)
+				if transcript == "" {
+					return nil
+				}
+				if err := writer.WriteJSON(serverMessage{
+					Type: userTranscriptMessageType,
+					Text: transcript,
+				}); err != nil {
+					return fmt.Errorf("write user transcript: %w", err)
+				}
+				return nil
+			},
+		)
 		close(completed)
 		done <- err
 	}()
@@ -263,16 +304,31 @@ func (s *Server) transcribeConnection(
 			continue
 		}
 
+		if err := writer.WriteJSON(serverMessage{
+			Type: assistantThinkingMessageType,
+		}); err != nil {
+			return fmt.Errorf("write assistant thinking state: %w", err)
+		}
 		response, err := s.handlers.Utterance(ctx, scope, utterance)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			slog.ErrorContext(ctx, "failed to handle utterance", "error", err)
+			if writeErr := writer.WriteJSON(serverMessage{
+				Type: assistantDoneMessageType,
+			}); writeErr != nil {
+				return fmt.Errorf("write assistant done state: %w", writeErr)
+			}
 			continue
 		}
 		response = strings.TrimSpace(response)
 		if response == "" {
+			if err := writer.WriteJSON(serverMessage{
+				Type: assistantDoneMessageType,
+			}); err != nil {
+				return fmt.Errorf("write assistant done state: %w", err)
+			}
 			continue
 		}
 		if err := writer.WriteJSON(serverMessage{

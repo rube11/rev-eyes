@@ -33,6 +33,7 @@ func (dg *deepgramTranscriber) Transcribe(
 	ctx context.Context,
 	audio <-chan []byte,
 	completed chan<- string,
+	observe TranscriptObserver,
 ) error {
 	if dg.deepgramKey == "" {
 		return errors.New("deepgram API key is required")
@@ -42,6 +43,9 @@ func (dg *deepgramTranscriber) Transcribe(
 	}
 	if completed == nil {
 		return errors.New("completed utterance channel is required")
+	}
+	if observe == nil {
+		return errors.New("transcript observer is required")
 	}
 
 	initDeepgram.Do(client.InitWithDefault)
@@ -63,7 +67,7 @@ func (dg *deepgramTranscriber) Transcribe(
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	handler := newDeepgramHandler(streamCtx, completed)
+	handler := newDeepgramHandler(streamCtx, completed, observe)
 	dgClient, err := client.NewWSUsingCallbackWithCancel(
 		streamCtx,
 		cancel,
