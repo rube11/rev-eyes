@@ -842,38 +842,124 @@ export async function initializeEvenExperience(
 
   async function handleServerMessage(message: ServerMessage) {
     switch (message.type) {
+      case "notification": {
+        await presentNotification(message)
+        return
+      }
+
+      case "user_transcript": {
+        if (!message.text) {
+          return
+        }
+        latestTranscript = message.text
+        if (sleeping) {
+          reportStatus("Sleeping")
+          return
+        }
+        reportStatus(thinking || awaitingResponse ? "Thinking" : "Listening")
+        if (!currentNotification) {
+          await renderTranscript()
+        }
+        return
+      }
+
+      case "assistant_thinking": {
+        awaitingResponse = true
+        if (sleeping) {
+          reportStatus("Sleeping")
+          return
+        }
+        reportStatus("Thinking")
+        await startThinkingAnimation()
+        return
+      }
+
+      case "assistant_done": {
+        awaitingResponse = false
+        clearThinkingAnimation()
+        if (sleeping) {
+          reportStatus("Sleeping")
+          return
+        }
+        reportStatus("Connected")
+        if (currentNotification) {
+          return
+        }
+        if (latestTranscript) {
+          await renderTranscript()
+        } else {
+          await showReady()
+        }
+        return
+      }
+
       case "assistant_response": {
         if (!message.text) {
           return
         }
         onResponse(message.text)
         const presentation = presentGlassesMessage(message.text)
-        popupVisible = presentation.kind === "reminder" ||
-          presentation.kind === "update"
-        const state = listeningState === "listening" ? "LISTENING" : "READY"
-        await renderGlassesPage(buildMessagePage(presentation, state))
+        awaitingResponse = false
+        clearThinkingAnimation()
+        if (listeningState !== "idle") {
+          if (
+            listeningState === "starting" ||
+            listeningState === "listening"
+          ) {
+            sendControl("listening_stop")
+          }
+          listeningState = "idle"
+          await bridge.audioControl(false).catch(() => undefined)
+        }
+
+        const wakesSleepingInterface =
+          presentation.kind === "reminder" || presentation.kind === "update"
+        if (currentNotification) {
+          deferredAssistant = presentation
+          return
+        }
+        if (sleeping && !wakesSleepingInterface) {
+          deferredAssistant = presentation
+          return
+        }
+        sleeping = false
+        visibleAssistant = presentation
+        reportStatus("Connected")
+        await showPresentation(presentation)
         return
       }
 
       case "listening_stopped": {
         const stoppedUnexpectedly =
           listeningState === "starting" || listeningState === "listening"
+        const wasThinking = thinking
+        clearThinkingAnimation()
         listeningState = "idle"
         if (stoppedUnexpectedly) {
           await bridge.audioControl(false).catch(() => undefined)
         }
+        if (sleeping) {
+          awaitingResponse = false
+          reportStatus("Sleeping")
+          return
+        }
         if (message.error) {
-          onStatus(message.error)
-          popupVisible = false
-          await renderGlassesPage(buildSystemPage(
-            "UNAVAILABLE",
-            "MICROPHONE",
-            message.error,
-            "Tap to retry",
-          ))
+          awaitingResponse = false
+          latestTranscript = ""
+          reportStatus(message.error)
+          idlePrompt = "MIC UNAVAILABLE  ·  TAP TO RETRY"
+          if (!currentNotification) {
+            await showIdlePrompt(idlePrompt)
+          }
         } else {
-          onStatus("Connected")
-          if (stoppedUnexpectedly && !popupVisible) {
+          awaitingResponse = false
+          reportStatus("Connected")
+          if (currentNotification) {
+            return
+          }
+          if (wasThinking && latestTranscript) {
+            await renderTranscript()
+          } else if (wasThinking || stoppedUnexpectedly) {
             await showReady()
           }
         }
@@ -881,97 +967,67 @@ export async function initializeEvenExperience(
       }
     }
   }
-  const handleMessage = (event: MessageEvent<string>) => {
-    try {
-      const message = JSON.parse(event.data) as ServerMessage
-      void handleServerMessage(message).catch(() => {
-        onStatus("Glasses command failed")
-      })
-    } catch {
-      // Ignore unknown server messages.
-    }
-  }
-  const handleClose = () => {
-    if (!active) {
-      return
-    }
-    listeningState = "idle"
-    popupVisible = false
-    onStatus("Disconnected")
-    void showConnectionLost().catch(() => undefined)
-    void bridge.audioControl(false).catch(() => undefined)
-    if (locationStarted) {
-      locationStarted = false
-      void bridge.stopAppLocationUpdates().catch(() => undefined)
-    }
-  }
-  socket.addEventListener("message", handleMessage)
-  socket.addEventListener("close", handleClose)
 
-  const handleEvenEvent = async (event: EvenHubEvent) => {
-    const pcm = event.audioEvent?.audioPcm
-    if (
-      pcm &&
-      listeningState === "listening" &&
-      socket.readyState === WebSocket.OPEN
-    ) {
-      socket.send(new Uint8Array(pcm))
+  async function handleClick() {
+    if (currentNotification && surface === "message") {
+      await dismissNotification()
       return
     }
 
-    const listEvent = event.listEvent
-    const listClick =
-      listEvent !== undefined &&
-      (listEvent.eventType ?? OsEventTypeList.CLICK_EVENT) ===
-        OsEventTypeList.CLICK_EVENT
-    const textEvent = event.textEvent
-    const textClick =
-      textEvent !== undefined &&
-      (textEvent.eventType ?? OsEventTypeList.CLICK_EVENT) ===
-        OsEventTypeList.CLICK_EVENT
-    const systemClick =
-      event.sysEvent !== undefined &&
-      (event.sysEvent.eventType ?? OsEventTypeList.CLICK_EVENT) ===
-        OsEventTypeList.CLICK_EVENT
-    if (!listClick && !textClick && !systemClick) {
-      return
-    }
-
-    if (popupVisible) {
-      popupVisible = false
-      if (listeningState === "listening") {
-        await showListening()
-      } else {
-        await showReady()
-      }
+    if (sleeping) {
+      await wakeInterface()
       return
     }
 
     if (listeningState === "listening") {
       listeningState = "stopping"
-      sendControl(socket, "listening_stop")
+      awaitingResponse = true
+      const sent = sendControl("listening_stop")
       await bridge.audioControl(false).catch(() => undefined)
-      onStatus("Connected")
-      await showReady()
+      if (!sent) {
+        listeningState = "idle"
+        awaitingResponse = false
+        reportStatus("Reconnecting")
+        closeQuietly(socket)
+        forceReconnect()
+        await showConnectionLost()
+        return
+      }
+      reportStatus("Thinking")
+      await startThinkingAnimation()
       return
     }
 
+    if (thinking) {
+      return
+    }
+
+    if (surface === "message" && visibleAssistant) {
+      visibleAssistant = undefined
+      await showReady()
+      return
+    }
+    if (surface === "transcript") {
+      await showReady()
+      return
+    }
     if (listeningState !== "idle") {
       return
     }
 
-    if (socket.readyState !== WebSocket.OPEN) {
+    if (!socketIsOpen()) {
+      reportStatus("Reconnecting")
+      forceReconnect()
       await showConnectionLost()
       return
     }
+
+    latestTranscript = ""
+    idlePrompt = undefined
+    visibleAssistant = undefined
     listeningState = "starting"
-    onStatus("Starting microphone")
-    await renderGlassesPage(buildSystemPage(
-      "STARTING",
-      "MICROPHONE",
-      "Opening the glasses microphone…",
-      "Please wait",
-    ))
+    reportStatus("Starting microphone")
+    await setPage(buildCompactPage("STARTING MICROPHONE"), "compact")
     if (!active || listeningState !== "starting") {
       return
     }
@@ -987,70 +1043,83 @@ export async function initializeEvenExperience(
     }
     if (!started) {
       listeningState = "idle"
-      onStatus("Microphone unavailable")
-      await renderGlassesPage(buildSystemPage(
-        "UNAVAILABLE",
-        "MICROPHONE",
-        "Could not start the glasses microphone.",
-        "Tap to retry",
-      ))
+      reportStatus("Microphone unavailable")
+      await showIdlePrompt("MIC UNAVAILABLE  ·  TAP TO RETRY")
       return
     }
-    if (!sendControl(socket, "listening_start")) {
+    if (!sendControl("listening_start")) {
       listeningState = "idle"
       await bridge.audioControl(false).catch(() => undefined)
-      onStatus("Disconnected")
+      reportStatus("Reconnecting")
+      closeQuietly(socket)
+      forceReconnect()
       await showConnectionLost()
       return
     }
     listeningState = "listening"
-    onStatus("Listening")
+    reportStatus("Listening")
     await showListening()
   }
+
   const stopEvents = bridge.onEvenHubEvent((event) => {
-    void handleEvenEvent(event).catch(() => {
-      onStatus("Glasses command failed")
-    })
+    const eventType =
+      event.listEvent?.eventType ??
+      event.textEvent?.eventType ??
+      event.sysEvent?.eventType
+    if (eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
+      teardown()
+      return
+    }
+
+    const pcm = event.audioEvent?.audioPcm
+    if (pcm) {
+      if (listeningState === "listening") {
+        try {
+          safeSend(socket, Uint8Array.from(pcm).buffer)
+        } catch {
+          // Ignore malformed or late audio frames.
+        }
+      }
+      return
+    }
+    if (isLongPressEvent(event)) {
+      suppressClicksUntil = Date.now() + RELEASE_CLICK_SUPPRESSION_MS
+      void enqueueTransition(enterSleep)
+    } else if (isClickEvent(event) && Date.now() >= suppressClicksUntil) {
+      void enqueueTransition(handleClick)
+    }
   })
 
   const stopLocationEvents = bridge.onAppLocationChanged((location) => {
     sendLocation(socket, location)
   })
-  void bridge.startAppLocationUpdates({
-    accuracy: AppLocationAccuracy.Medium,
-    intervalMs: 5000,
-    distanceFilter: 10,
-  }).then(async (started) => {
-    locationStarted = started
-    if (!active || socket.readyState !== WebSocket.OPEN) {
-      if (started) {
-        locationStarted = false
-        await bridge.stopAppLocationUpdates()
-      }
+
+  scheduleReconnect(true)
+
+  function teardown() {
+    if (!active) {
       return
     }
-    if (started) {
-      const location = await bridge.getAppLocation({
-        accuracy: AppLocationAccuracy.Medium,
-        timeoutMs: 5000,
-      })
-      if (active && location) {
-        sendLocation(socket, location)
-      }
-    }
-  }).catch(() => undefined)
-
-  return () => {
     active = false
+    connectGeneration += 1
+    connectionAbort?.abort()
+    connectionAbort = undefined
+    connecting = false
+    clearReconnectTimer()
+    clearThinkingAnimation()
     listeningState = "idle"
     stopEvents()
     stopLocationEvents()
-    socket.removeEventListener("message", handleMessage)
-    socket.removeEventListener("close", handleClose)
-    socket.close()
+    unbindSocket()
+    const closingSocket = socket
+    socket = undefined
+    closeQuietly(closingSocket)
     void bridge.audioControl(false).catch(() => undefined)
     if (locationStarted) {
+      locationStarted = false
       void bridge.stopAppLocationUpdates().catch(() => undefined)
     }
   }
+
+  return teardown
 }
