@@ -3,6 +3,14 @@ import {
   TextContainerProperty,
 } from "@evenrealities/even_hub_sdk"
 
+const DISPLAY_WIDTH = 576
+const DISPLAY_HEIGHT = 288
+const COMPACT_CARD_WIDTH = 220
+const COMPACT_CARD_HEIGHT = 36
+const TRANSCRIPT_CARD_WIDTH = 360
+const TRANSCRIPT_CARD_HEIGHT = 56
+const DISPLAY_MARGIN = 24
+
 export type GlassesMessage =
   | { kind: "answer"; body: string }
   | { kind: "results"; intro: string; items: string[] }
@@ -15,6 +23,13 @@ function truncate(value: string, limit: number): string {
   return characters.length <= limit
     ? characters.join("")
     : `${characters.slice(0, limit - 1).join("")}…`
+}
+
+function tail(value: string, limit: number): string {
+  const characters = Array.from(value.trim())
+  return characters.length <= limit
+    ? characters.join("")
+    : `…${characters.slice(-(limit - 1)).join("")}`
 }
 
 function cleanLine(value: string): string {
@@ -81,127 +96,114 @@ function page(containers: TextContainerProperty[]): RebuildPageContainer {
   })
 }
 
-function chrome(status: string, action: string): TextContainerProperty[] {
-  return [
+export function buildSleepPage(): RebuildPageContainer {
+  return page([
     text({
-      xPosition: 24,
-      yPosition: 12,
-      width: 180,
-      height: 22,
+      xPosition: 0,
+      yPosition: 0,
+      width: DISPLAY_WIDTH,
+      height: DISPLAY_HEIGHT,
       containerID: 1,
-      containerName: "brand",
-      content: "REV EYES",
-      isEventCapture: 0,
-    }),
-    text({
-      xPosition: 438,
-      yPosition: 12,
-      width: 114,
-      height: 22,
-      containerID: 2,
-      containerName: "status",
-      content: status.toUpperCase(),
-      isEventCapture: 0,
-    }),
-    text({
-      xPosition: 24,
-      yPosition: 252,
-      width: 528,
-      height: 24,
-      containerID: 3,
-      containerName: "voice-control",
-      content: action,
+      containerName: "sleep-wake",
+      // Keep an event target mounted without drawing anything in the HUD.
+      content: " ",
       isEventCapture: 1,
     }),
-  ]
+  ])
 }
 
-export function buildSystemPage(
-  status: string,
-  title: string,
-  message: string,
-  action: string,
-): RebuildPageContainer {
+export function buildCompactPage(content: string): RebuildPageContainer {
   return page([
-    ...chrome(status, action),
     text({
-      xPosition: 24,
-      yPosition: 58,
-      width: 528,
-      height: 174,
-      containerID: 4,
-      containerName: "system-message",
-      content: `${title.toUpperCase()}\n\n${truncate(cleanText(message), 220)}`,
-      isEventCapture: 0,
+      xPosition: DISPLAY_WIDTH - COMPACT_CARD_WIDTH - DISPLAY_MARGIN,
+      yPosition: DISPLAY_HEIGHT - COMPACT_CARD_HEIGHT - DISPLAY_MARGIN,
+      width: COMPACT_CARD_WIDTH,
+      height: COMPACT_CARD_HEIGHT,
+      borderWidth: 1,
+      borderRadius: 10,
+      paddingLength: 8,
+      containerID: 1,
+      containerName: "compact-control",
+      content: truncate(cleanText(content).replace(/\n/gu, " "), 28).toUpperCase(),
+      isEventCapture: 1,
     }),
   ])
+}
+
+export function buildTranscriptPage(
+  content: string,
+  thinkingFrame?: number,
+): RebuildPageContainer {
+  const transcriptContent = buildTranscriptContent(content, thinkingFrame)
+  const thinking = thinkingFrame !== undefined
+  const transcript = tail(
+    cleanText(content).replace(/\n/gu, " "),
+    thinking ? 66 : 82,
+  )
+  const width = transcript ? TRANSCRIPT_CARD_WIDTH : COMPACT_CARD_WIDTH
+  const height = transcript ? TRANSCRIPT_CARD_HEIGHT : COMPACT_CARD_HEIGHT
+  return page([
+    text({
+      xPosition: DISPLAY_WIDTH - width - DISPLAY_MARGIN,
+      yPosition: DISPLAY_HEIGHT - height - DISPLAY_MARGIN,
+      width,
+      height,
+      borderWidth: 1,
+      borderRadius: 10,
+      paddingLength: transcript ? 9 : 8,
+      containerID: 1,
+      containerName: "live-transcript",
+      content: transcriptContent,
+      isEventCapture: 1,
+    }),
+  ])
+}
+
+export function buildTranscriptContent(
+  content: string,
+  thinkingFrame?: number,
+): string {
+  const thinking = thinkingFrame !== undefined
+  const label = thinking
+    ? `THINKING ${"·".repeat((thinkingFrame % 3) + 1)}`
+    : "YOU"
+  const transcript = tail(
+    cleanText(content).replace(/\n/gu, " "),
+    thinking ? 66 : 82,
+  )
+  return transcript ? `${label}  /  ${transcript}` : label
 }
 
 function resultText(item: string, index: number): string {
-  const parts = item.split(/\s(?:—|–|-|·|\|)\s/u, 2)
   const number = String(index + 1).padStart(2, "0")
-  return parts.length === 2
-    ? `${number}  ${truncate(parts[0], 42)}\n${truncate(parts[1], 62)}`
-    : `${number}  ${truncate(item, 82)}`
-}
-
-function buildResultsPage(
-  message: Extract<GlassesMessage, { kind: "results" }>,
-  status: string,
-): RebuildPageContainer {
-  const cardHeight = Math.floor((166 - 6 * (message.items.length - 1)) / message.items.length)
-  return page([
-    ...chrome(status, "Tap to talk"),
-    text({
-      xPosition: 24,
-      yPosition: 43,
-      width: 528,
-      height: 22,
-      containerID: 4,
-      containerName: "results-label",
-      content: `RESULTS  /  ${message.intro}`,
-      isEventCapture: 0,
-    }),
-    ...message.items.map((item, index) => text({
-      xPosition: 24,
-      yPosition: 72 + index * (cardHeight + 6),
-      width: 528,
-      height: cardHeight,
-      borderWidth: 1,
-      borderRadius: 10,
-      paddingLength: 9,
-      containerID: 5 + index,
-      containerName: `result-${index + 1}`,
-      content: resultText(item, index),
-      isEventCapture: 0,
-    })),
-  ])
+  return `${number}  ${truncate(item, 52)}`
 }
 
 export function buildMessagePage(
   message: GlassesMessage,
-  status: string,
 ): RebuildPageContainer {
-  if (message.kind === "results") {
-    return buildResultsPage(message, status)
-  }
+  const label = message.kind.toUpperCase()
+  const content = message.kind === "results"
+    ? `${label}  /  ${truncate(message.intro, 44)}\n\n${message.items
+      .map(resultText)
+      .join("\n\n")}`
+    : message.kind === "answer"
+      ? truncate(message.body.replace(/\n+/gu, " "), 300)
+      : `${label}\n\n${truncate(message.body.replace(/\n+/gu, " "), 280)}`
 
-  const popup = message.kind === "reminder" || message.kind === "update"
-  const label = message.kind === "answer" ? "ANSWER" : message.kind.toUpperCase()
   return page([
-    ...chrome(status, popup ? "Tap to dismiss" : "Tap to talk"),
     text({
-      xPosition: popup ? 42 : 24,
-      yPosition: 54,
-      width: popup ? 492 : 528,
-      height: 176,
-      borderWidth: popup ? (message.kind === "reminder" ? 2 : 1) : 0,
-      borderRadius: popup ? 14 : 0,
-      paddingLength: popup ? 16 : 0,
-      containerID: 4,
-      containerName: popup ? `${message.kind}-popup` : "answer",
-      content: `${label}\n\n${message.body}`,
-      isEventCapture: 0,
+      xPosition: DISPLAY_MARGIN,
+      yPosition: 34,
+      width: DISPLAY_WIDTH - DISPLAY_MARGIN * 2,
+      height: 220,
+      borderWidth: 1,
+      borderRadius: 14,
+      paddingLength: 14,
+      containerID: 1,
+      containerName: `${message.kind}-output`,
+      content: `${content}\n\nTAP TO DISMISS`,
+      isEventCapture: 1,
     }),
   ])
 }
