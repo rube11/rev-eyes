@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	validEventID    = "0f3f8d72-ea2e-4e47-a0b5-6c19ed250821"
+	validEventID    = "b6a61f13-a12d-0410-f274-9c228037c2b2"
 	validResourceID = "bc7c2fc8-2d82-4bc4-bb44-e244c788e978"
 )
 
@@ -122,6 +122,30 @@ func TestHandlerRejectsMismatchedEvent(t *testing.T) {
 	request := scheduledRequest(
 		`{"id":"` + validEventID + `","source":"rev-eyes.scheduler",` +
 			`"detail-type":"ReminderDue","detail":{"kind":"watch",` +
+			`"resource_id":"` + validResourceID + `"}}`,
+	)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d", response.Code)
+	}
+}
+
+func TestHandlerRejectsMalformedEventBridgeID(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := NewHandler("secret", recorderFunc(func(
+		context.Context,
+		ScheduledEvent,
+	) error {
+		t.Fatal("Enqueue() was called")
+		return nil
+	}))
+	request := scheduledRequest(
+		`{"id":"not-an-event-id","source":"rev-eyes.scheduler",` +
+			`"detail-type":"ReminderDue","detail":{"kind":"reminder",` +
 			`"resource_id":"` + validResourceID + `"}}`,
 	)
 	response := httptest.NewRecorder()
