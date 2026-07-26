@@ -1015,3 +1015,208 @@ function MemoriesView({
     </>
   )
 }
+
+function WatchRow({ watch }: { watch: WatchItem }) {
+  return (
+    <article className="watch-row">
+      <div className="watch-row__index">
+        <NavIcon view="watches" />
+        <StatusMark active={watch.status === 'active'} />
+      </div>
+      <div className="watch-row__main">
+        <div className="watch-row__heading">
+          <div>
+            <span className={`state-label state-label--${watch.status}`}>
+              {watch.status}
+            </span>
+            <h2>{watch.query}</h2>
+          </div>
+          {watch.nextCheckAt ? (
+            <span className="next-check">
+              Next check
+              <strong>{relativeTime(watch.nextCheckAt)}</strong>
+            </span>
+          ) : null}
+        </div>
+        <p className="watch-condition">
+          <span>If</span> {watch.condition}
+        </p>
+        <dl className="watch-stats">
+          <div>
+            <dt>Cadence</dt>
+            <dd>Every {formatInterval(watch.intervalMinutes)}</dd>
+          </div>
+          <div>
+            <dt>Last checked</dt>
+            <dd>
+              {watch.lastCheckedAt ? relativeTime(watch.lastCheckedAt) : '—'}
+            </dd>
+          </div>
+          <div>
+            <dt>Sources seen</dt>
+            <dd>{watch.seenCount}</dd>
+          </div>
+          <div>
+            <dt>Ends</dt>
+            <dd>{formatDate(watch.expiresAt)}</dd>
+          </div>
+        </dl>
+      </div>
+    </article>
+  )
+}
+
+function WatchesView({ data }: { data: WorkspaceData }) {
+  const watches = [...data.watches].sort((left, right) => {
+    if (left.status === right.status) {
+      return (
+        new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+      )
+    }
+    if (left.status === 'active') return -1
+    if (right.status === 'active') return 1
+    if (left.status === 'proposed') return -1
+    return 1
+  })
+  const activeCount = watches.filter((watch) => watch.status === 'active').length
+
+  return (
+    <>
+      <PageIntro
+        eyebrow="Ongoing checks"
+        title="Watches"
+        description="Updates your assistant is keeping an eye on in the background."
+        action={
+          <div className="count-callout">
+            <strong>{activeCount}</strong>
+            <span>of 5 active</span>
+          </div>
+        }
+      />
+      <div className="watch-list">
+        {watches.length > 0 ? (
+          watches.map((watch) => (
+            <WatchRow key={watch.id} watch={watch} />
+          ))
+        ) : (
+          <EmptyState
+            title="Nothing is being watched"
+            body="Items you ask your assistant to monitor will appear here."
+          />
+        )}
+      </div>
+    </>
+  )
+}
+
+function ProposedTask({ task }: { task: TaskItem }) {
+  return (
+    <article className="proposed-task">
+      <div>
+        <p className="section-label">
+          <StatusMark active />
+          Needs review
+        </p>
+        <h3>{task.title}</h3>
+        <p>{task.schedule}</p>
+      </div>
+      <div className="proposed-task__time">
+        <span>Proposed</span>
+        <strong>{relativeTime(task.createdAt)}</strong>
+      </div>
+    </article>
+  )
+}
+
+function TasksView({ data }: { data: WorkspaceData }) {
+  const proposed = data.tasks
+    .filter((task) => task.status === 'proposed')
+    .sort(
+      (left, right) =>
+        new Date(right.createdAt).getTime() -
+        new Date(left.createdAt).getTime(),
+    )
+  const upcoming = data.tasks
+    .filter((task) => task.status === 'accepted')
+    .sort(
+      (left, right) =>
+        new Date(left.dueAt).getTime() - new Date(right.dueAt).getTime(),
+    )
+  const rejectedCount = data.tasks.filter(
+    (task) => task.status === 'rejected',
+  ).length
+
+  return (
+    <>
+      <PageIntro
+        eyebrow="Plans and reminders"
+        title="Tasks"
+        description="Review suggested actions and see what is already scheduled."
+      />
+
+      <section className="task-section">
+        <div className="section-heading section-heading--bordered">
+          <div>
+            <p className="section-label">Needs a decision</p>
+            <h2>Suggested</h2>
+          </div>
+          <span className="section-count">{proposed.length}</span>
+        </div>
+        {proposed.length > 0 ? (
+          <div className="proposed-list">
+            {proposed.map((task) => (
+              <ProposedTask key={task.id} task={task} />
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            title="No suggestions to review"
+            body="Helpful actions suggested during conversations will appear here."
+          />
+        )}
+      </section>
+
+      <section className="task-section task-section--upcoming">
+        <div className="section-heading section-heading--bordered">
+          <div>
+            <p className="section-label">Confirmed</p>
+            <h2>Upcoming</h2>
+          </div>
+          <span className="section-count">{upcoming.length}</span>
+        </div>
+        {upcoming.length > 0 ? (
+          <div className="timeline">
+            {upcoming.map((task, index) => (
+              <article className="timeline-row" key={task.id}>
+                <div className="timeline-row__rail" aria-hidden="true">
+                  <span>{String(index + 1).padStart(2, '0')}</span>
+                  <i />
+                </div>
+                <time dateTime={task.dueAt}>
+                  <strong>{formatDateTime(task.dueAt)}</strong>
+                  <span>{relativeTime(task.dueAt)}</span>
+                </time>
+                <div>
+                  <h3>{task.title}</h3>
+                  <p>{task.schedule}</p>
+                </div>
+                <span className="state-label state-label--accepted">
+                  scheduled
+                </span>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            title="Nothing upcoming"
+            body="Scheduled reminders will appear here in date order."
+          />
+        )}
+      </section>
+
+      {rejectedCount > 0 ? (
+        <p className="archive-note">{rejectedCount} rejected proposals hidden</p>
+      ) : null}
+    </>
+  )
+}
