@@ -1372,3 +1372,181 @@ function MemoryComposer({
     </div>
   )
 }
+
+export function Workspace({
+  data,
+  email,
+  glassesStatus,
+  latestResponse,
+  dataError,
+  isDemo,
+  onCreateMemory,
+  onSignOut,
+}: WorkspaceProps) {
+  const [view, setView] = useState<WorkspaceView>(initialView)
+  const [composerOpen, setComposerOpen] = useState(false)
+  const [now, setNow] = useState(() => new Date())
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const next = window.location.hash.replace(/^#/u, '')
+      if (isWorkspaceView(next)) {
+        setView(next)
+      }
+    }
+    window.addEventListener('hashchange', handleHashChange)
+    return () => window.removeEventListener('hashchange', handleHashChange)
+  }, [])
+
+  const navigate = (nextView: WorkspaceView) => {
+    setView(nextView)
+    window.history.replaceState(
+      null,
+      '',
+      `${window.location.pathname}${window.location.search}#${nextView}`,
+    )
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const navCount = (item: WorkspaceView): number | undefined => {
+    switch (item) {
+      case 'tasks':
+        return (
+          data.tasks.filter((task) => task.status === 'proposed').length ||
+          undefined
+        )
+      default:
+        return undefined
+    }
+  }
+
+  const connected = connectedFromStatus(glassesStatus)
+  const deviceStatus = friendlyDeviceStatus(glassesStatus)
+  const accountLabel = isDemo ? 'Preview mode' : shorten(email, 24)
+  const accountInitial = isDemo
+    ? 'P'
+    : (email.trim().charAt(0).toUpperCase() || 'A')
+
+  return (
+    <div className="workspace">
+      <aside className="sidebar">
+        <div className="brand-block">
+          <button
+            className="wordmark"
+            type="button"
+            onClick={() => navigate('now')}
+            aria-label="Go to Home"
+          >
+            rev/eyes
+          </button>
+          <span>wearable assistant</span>
+        </div>
+        <nav aria-label="Main navigation">
+          <p className="nav-heading">Menu</p>
+          {navItems.map((item) => {
+            const count = navCount(item.id)
+            return (
+              <button
+                type="button"
+                key={item.id}
+                className={view === item.id ? 'is-active' : ''}
+                aria-current={view === item.id ? 'page' : undefined}
+                onClick={() => navigate(item.id)}
+              >
+                <NavIcon view={item.id} />
+                <span className="nav-label">{item.label}</span>
+                {count !== undefined ? (
+                  <span className="nav-count">{count}</span>
+                ) : null}
+              </button>
+            )
+          })}
+        </nav>
+        <div className="sidebar-foot">
+          <div className="device-status">
+            <StatusMark active={connected} />
+            <div>
+              <strong>Even G2</strong>
+              <span>{deviceStatus}</span>
+            </div>
+          </div>
+          <button
+            className="account-button"
+            type="button"
+            onClick={onSignOut}
+          >
+            <span className="account-avatar">{accountInitial}</span>
+            <span className="account-copy">
+              <strong>{accountLabel}</strong>
+              <small>{isDemo ? 'Exit preview' : 'Sign out'}</small>
+            </span>
+          </button>
+        </div>
+      </aside>
+
+      <main className="workspace-main">
+        <header className="topbar">
+          <div className="topbar__location">
+            <span className="topbar__wordmark">rev/eyes</span>
+            <strong>{viewTitles[view]}</strong>
+          </div>
+          <div className="topbar__right">
+            {isDemo ? <span className="demo-label">Preview</span> : null}
+            <span className="topbar__date">{formatDay(now)}</span>
+            <span className="topbar__time">{formatClock(now)}</span>
+            <span
+              className={`connection-label${
+                connected ? ' connection-label--online' : ''
+              }`}
+            >
+              <StatusMark active={connected} />
+              {deviceStatus}
+            </span>
+          </div>
+        </header>
+
+        {dataError ? (
+          <div className="data-notice" role="status">
+            <span aria-hidden="true">i</span>
+            <p>Some information may be out of date. We’ll keep trying.</p>
+          </div>
+        ) : null}
+
+        <div className={`page${view === 'now' ? ' page--home' : ''}`} key={view}>
+          {view === 'now' ? (
+            <NowView
+              data={data}
+              glassesStatus={glassesStatus}
+              latestResponse={latestResponse}
+              onNavigate={navigate}
+              onAddMemory={() => setComposerOpen(true)}
+              currentTime={now}
+            />
+          ) : null}
+          {view === 'conversations' ? (
+            <ConversationsView data={data} />
+          ) : null}
+          {view === 'memories' ? (
+            <MemoriesView
+              data={data}
+              onAdd={() => setComposerOpen(true)}
+            />
+          ) : null}
+          {view === 'watches' ? <WatchesView data={data} /> : null}
+          {view === 'tasks' ? <TasksView data={data} /> : null}
+        </div>
+      </main>
+
+      <MemoryComposer
+        open={composerOpen}
+        onClose={() => setComposerOpen(false)}
+        onSave={onCreateMemory}
+      />
+    </div>
+  )
+}
