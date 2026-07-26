@@ -1741,3 +1741,132 @@ select:focus-visible {
   font-size: 0.58rem;
   text-align: right;
 }
+
+/* Memory composer */
+
+.composer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: flex-end;
+  background: rgb(11 12 12 / 42%);
+  backdrop-filter: blur(4px);
+  animation: backdrop-in 180ms ease both;
+}
+
+.memory-composer {
+  width: min(600px, 100%);
+  min-height: 100%;
+  padding: clamp(30px, 5vw, 64px);
+  overflow-y: auto;
+  background: var(--white);
+  box-shadow: -20px 0 60px rgb(11 12 12 / 14%);
+  animation: composer-in 280ms ease both;
+}
+
+.memory-composer > header {
+  margin-bottom: clamp(42px, 7vh, 72px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 28px;
+}
+
+.memory-composer h2 {
+  margin: 11px 0 0;
+  font-size: clamp(1.9rem, 4vw, 3.2rem);
+  font-weight: 500;
+  letter-spacing: -0.06em;
+  line-height: 1;
+}
+
+.icon-action {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--white);
+  font-size: 1.2rem;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background 160ms ease;
+}
+
+.icon-action:hover {
+  color: var(--white);
+  background: var(--black);
+}
+
+.memory-composer .field {
+  margin-bottom: 34px;
+}
+
+.memory-composer .field input,
+.memory-composer .field textarea,
+.memory-composer .field select {
+  background: rgb(169 194 190 / 9%);
+}
+
+.field-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.memory-composer form > footer {
+  margin-top: 48px;
+  padding-top: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  border-top: 1px solid var(--black);
+}
+
+.memory-composer form > footer p {
+  max-width: 270px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.6rem;
+  line-height: 1.6;
+}
+
+/* Motion */
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px rgb(11 12 12 / 6%);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgb(11 12 12 / 1%);
+  }
+}
+
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes composer-in {
+  from {
+    transform: translateX(28px);
+  }
+}
