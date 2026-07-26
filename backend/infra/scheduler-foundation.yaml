@@ -214,6 +214,19 @@ Resources:
                   - sqs:TagQueue
                   - sqs:UntagQueue
                 Resource: !Sub 'arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${ApplicationStackName}-*'
+              - Sid: ManageSchedulerAlarms
+                Effect: Allow
+                Action:
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:ListTagsForResource
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:TagResource
+                  - cloudwatch:UntagResource
+                Resource: !Sub 'arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${ApplicationStackName}-*'
+              - Sid: ReadSchedulerAlarms
+                Effect: Allow
+                Action: cloudwatch:DescribeAlarms
+                Resource: '*'
               - Sid: ManageScheduleRegistrarFunction
                 Effect: Allow
                 Action:
