@@ -735,3 +735,283 @@ function NowView({
     </div>
   )
 }
+
+function ConversationsView({ data }: { data: WorkspaceData }) {
+  const [query, setQuery] = useState('')
+  const [selectedId, setSelectedId] = useState(
+    data.conversations[0]?.id ?? '',
+  )
+
+  const filtered = useMemo(() => {
+    const normalized = query.toLowerCase().trim()
+    if (!normalized) {
+      return data.conversations
+    }
+    return data.conversations.filter((conversation) =>
+      [
+        conversation.title,
+        conversation.summary,
+        ...conversation.transcript.map((line) => line.text),
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(normalized),
+    )
+  }, [data.conversations, query])
+
+  const selected =
+    filtered.find((conversation) => conversation.id === selectedId) ??
+    filtered[0]
+
+  return (
+    <>
+      <PageIntro
+        eyebrow="History"
+        title="Conversations"
+        description="Search and revisit what you and your assistant talked about."
+      />
+      <div className="browser-layout conversation-browser">
+        <section className="browser-index" aria-label="Conversation list">
+          <label className="search-field">
+            <span>Search conversations</span>
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Type to filter…"
+            />
+            <kbd>/</kbd>
+          </label>
+          <p className="result-count">
+            {filtered.length}{' '}
+            {filtered.length === 1 ? 'conversation' : 'conversations'}
+          </p>
+          <div className="index-list">
+            {filtered.map((conversation) => (
+              <button
+                className={`index-row${
+                  selected?.id === conversation.id ? ' is-selected' : ''
+                }`}
+                type="button"
+                key={conversation.id}
+                onClick={() => setSelectedId(conversation.id)}
+              >
+                <span className="index-row__date">
+                  {formatDateTime(conversation.lastActivityAt)}
+                </span>
+                <strong>{conversation.title}</strong>
+                <span>{conversation.summary}</span>
+              </button>
+            ))}
+          </div>
+          {filtered.length === 0 ? (
+            <EmptyState
+              title="No matching conversation"
+              body="Try another word or phrase."
+            />
+          ) : null}
+        </section>
+
+        <section className="browser-detail transcript-detail">
+          {selected ? (
+            <>
+              <header className="detail-header">
+                <p className="section-label">
+                  {formatDateTime(selected.startedAt)}
+                </p>
+                <h2>{selected.title}</h2>
+                <div className="detail-meta">
+                  <span>
+                    <StatusMark active={selected.status === 'active'} />
+                    {selected.status}
+                  </span>
+                  <span>{selected.transcript.length} turns</span>
+                </div>
+              </header>
+              <div className="transcript">
+                {selected.transcript.length > 0 ? (
+                  selected.transcript.map((line) => (
+                    <article
+                      className={`transcript-line transcript-line--${line.speaker}`}
+                      key={line.id}
+                    >
+                      <div className="transcript-line__speaker">
+                        <span>
+                          {line.speaker === 'user'
+                            ? 'YOU'
+                            : line.speaker === 'assistant'
+                              ? 'REV'
+                              : '—'}
+                        </span>
+                        <time dateTime={line.startedAt}>
+                          {formatClock(new Date(line.startedAt))}
+                        </time>
+                      </div>
+                      <p>{line.text}</p>
+                    </article>
+                  ))
+                ) : (
+                  <EmptyState
+                    title="Nothing was saved"
+                    body="There is no conversation history for this moment."
+                  />
+                )}
+              </div>
+            </>
+          ) : (
+            <EmptyState
+              title="No conversations yet"
+              body="Your conversations with the assistant will appear here."
+            />
+          )}
+        </section>
+      </div>
+    </>
+  )
+}
+
+function MemoriesView({
+  data,
+  onAdd,
+}: {
+  data: WorkspaceData
+  onAdd: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState('all')
+  const [selectedId, setSelectedId] = useState(data.memories[0]?.id ?? '')
+
+  const filters = useMemo(() => {
+    const topics = new Set(data.memories.flatMap((memory) => memory.topics))
+    return ['all', ...Array.from(topics).slice(0, 5)]
+  }, [data.memories])
+
+  const filtered = useMemo(() => {
+    const normalized = query.toLowerCase().trim()
+    return data.memories.filter((memory) => {
+      const matchesFilter =
+        filter === 'all' ||
+        memory.topics.includes(filter) ||
+        memory.kind === filter
+      const matchesQuery =
+        !normalized ||
+        [memory.title, memory.summary, memory.kind, ...memory.topics]
+          .join(' ')
+          .toLowerCase()
+          .includes(normalized)
+      return matchesFilter && matchesQuery
+    })
+  }, [data.memories, filter, query])
+
+  const selected =
+    filtered.find((memory) => memory.id === selectedId) ?? filtered[0]
+
+  return (
+    <>
+      <PageIntro
+        eyebrow="What your assistant knows"
+        title="Memories"
+        description="Personal details, preferences, people, and goals you want remembered."
+        action={
+          <button className="primary-action" type="button" onClick={onAdd}>
+            <span aria-hidden="true">＋</span> Add memory
+          </button>
+        }
+      />
+      <div className="filter-bar">
+        <label className="search-field search-field--wide">
+          <span>Search memories</span>
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Person, place, preference…"
+          />
+        </label>
+        <div className="filter-set" aria-label="Filter memories">
+          {filters.map((item) => (
+            <button
+              className={filter === item ? 'is-active' : ''}
+              type="button"
+              key={item}
+              onClick={() => setFilter(item)}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="browser-layout memory-browser">
+        <section className="memory-list" aria-label="Memory list">
+          <p className="result-count">
+            {filtered.length} active{' '}
+            {filtered.length === 1 ? 'memory' : 'memories'}
+          </p>
+          {filtered.map((memory) => (
+            <button
+              className={`memory-row${
+                selected?.id === memory.id ? ' is-selected' : ''
+              }`}
+              type="button"
+              key={memory.id}
+              onClick={() => setSelectedId(memory.id)}
+            >
+              <span className="memory-row__kind">{memory.kind}</span>
+              <span className="memory-row__content">
+                <strong>{memory.title}</strong>
+                <span>{memory.summary}</span>
+              </span>
+              <time dateTime={memory.updatedAt}>
+                {relativeTime(memory.updatedAt)}
+              </time>
+            </button>
+          ))}
+          {filtered.length === 0 ? (
+            <EmptyState
+              title="No matching memory"
+              body="Try another search or add a new memory."
+            />
+          ) : null}
+        </section>
+
+        <aside className="memory-inspector" aria-label="Selected memory">
+          {selected ? (
+            <>
+              <p className="section-label">Selected memory</p>
+              <span className="memory-kind">{selected.kind}</span>
+              <h2>{selected.title}</h2>
+              <p className="memory-inspector__summary">{selected.summary}</p>
+              <dl>
+                <div>
+                  <dt>Topics</dt>
+                  <dd>{selected.topics.join(' / ')}</dd>
+                </div>
+                <div>
+                  <dt>Created</dt>
+                  <dd>{formatDate(selected.createdAt)}</dd>
+                </div>
+                <div>
+                  <dt>Updated</dt>
+                  <dd>{relativeTime(selected.updatedAt)}</dd>
+                </div>
+                <div>
+                  <dt>Status</dt>
+                  <dd>
+                    <StatusMark active />
+                    {selected.status}
+                  </dd>
+                </div>
+              </dl>
+            </>
+          ) : (
+            <EmptyState
+              title="No memories yet"
+              body="Add something you want your assistant to remember."
+            />
+          )}
+        </aside>
+      </div>
+    </>
+  )
+}
