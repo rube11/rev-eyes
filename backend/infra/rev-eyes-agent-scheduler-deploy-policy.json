@@ -29,10 +29,18 @@
       "Effect": "Allow",
       "Action": [
         "cloudformation:DeleteChangeSet",
-        "cloudformation:DescribeChangeSet",
-        "cloudformation:ExecuteChangeSet"
+        "cloudformation:DescribeChangeSet"
       ],
       "Resource": "arn:aws:cloudformation:us-west-2:809411919701:changeSet/rev-eyes-scheduler-deploy-*/*"
+    },
+    {
+      "Sid": "ExecuteSchedulerChangeSets",
+      "Effect": "Allow",
+      "Action": "cloudformation:ExecuteChangeSet",
+      "Resource": [
+        "arn:aws:cloudformation:us-west-2:809411919701:stack/rev-eyes-scheduler/*",
+        "arn:aws:cloudformation:us-west-2:809411919701:changeSet/rev-eyes-scheduler-deploy-*/*"
+      ]
     },
     {
       "Sid": "ReadSchedulerStack",
