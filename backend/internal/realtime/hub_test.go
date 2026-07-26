@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/rube11/rev-eyes/backend/internal/stt"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
@@ -18,6 +19,7 @@ func TestHubSendsMessageWhileTranscriptionIdle(t *testing.T) {
 		context.Context,
 		<-chan []byte,
 		chan<- string,
+		stt.TranscriptObserver,
 	) error {
 		started <- struct{}{}
 		return nil
@@ -26,7 +28,7 @@ func TestHubSendsMessageWhileTranscriptionIdle(t *testing.T) {
 			return tool.Scope{UserID: "user-1", SessionID: "session"}, nil
 		},
 		Connect: func(_ context.Context, scope tool.Scope) error {
-			delivered <- hub.Send(scope.UserID, "Time to leave")
+			delivered <- hub.Send(scope.UserID, "notification-1", "Time to leave")
 			return nil
 		},
 	})
@@ -44,7 +46,7 @@ func TestHubSendsMessageWhileTranscriptionIdle(t *testing.T) {
 	if !receive(t, delivered) {
 		t.Fatal("Send() did not deliver during connection setup")
 	}
-	if hub.Send("other-user", "not for this connection") {
+	if hub.Send("other-user", "notification-2", "not for this connection") {
 		t.Fatal("Send() delivered to the wrong user")
 	}
 
@@ -52,7 +54,9 @@ func TestHubSendsMessageWhileTranscriptionIdle(t *testing.T) {
 	if err := conn.ReadJSON(&message); err != nil {
 		t.Fatalf("ReadJSON() error = %v", err)
 	}
-	if message.Type != assistantResponseMessageType || message.Text != "Time to leave" {
+	if message.Type != notificationMessageType ||
+		message.ID != "notification-1" ||
+		message.Text != "Time to leave" {
 		t.Fatalf("message = %+v", message)
 	}
 	select {

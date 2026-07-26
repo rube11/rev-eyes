@@ -42,14 +42,14 @@ func (r *memoryRepository) MarkDelivered(
 
 type memorySender struct {
 	online bool
-	sent   []string
+	sent   []Notification
 }
 
-func (s *memorySender) Send(_ string, text string) bool {
+func (s *memorySender) Send(_ string, notificationID string, text string) bool {
 	if !s.online {
 		return false
 	}
-	s.sent = append(s.sent, text)
+	s.sent = append(s.sent, Notification{ID: notificationID, Text: text})
 	return true
 }
 
@@ -72,12 +72,26 @@ func TestServiceDeliversPendingNotificationOnReconnect(t *testing.T) {
 	if err := service.Flush(context.Background(), "user"); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
-	if len(repository.pending) != 0 || len(sender.sent) != 1 || sender.sent[0] != "Time to leave" {
+	if len(repository.pending) != 1 ||
+		len(sender.sent) != 1 ||
+		sender.sent[0].ID != repository.pending[0].ID ||
+		sender.sent[0].Text != "Time to leave" {
 		t.Fatalf("online state = pending %d, sent %v", len(repository.pending), sender.sent)
+	}
+
+	if err := service.Acknowledge(
+		context.Background(),
+		"user",
+		sender.sent[0].ID,
+	); err != nil {
+		t.Fatalf("Acknowledge() error = %v", err)
+	}
+	if len(repository.pending) != 0 {
+		t.Fatalf("acknowledged state = pending %d", len(repository.pending))
 	}
 }
 
-func TestServiceMarksImmediateDelivery(t *testing.T) {
+func TestServiceKeepsImmediateDeliveryPendingUntilAcknowledged(t *testing.T) {
 	repository := &memoryRepository{}
 	sender := &memorySender{online: true}
 	service, err := NewService(repository, sender)
@@ -88,7 +102,21 @@ func TestServiceMarksImmediateDelivery(t *testing.T) {
 	if err := service.Notify(context.Background(), "user", "Take a break"); err != nil {
 		t.Fatalf("Notify() error = %v", err)
 	}
-	if len(repository.pending) != 0 || len(sender.sent) != 1 {
+	if len(repository.pending) != 1 ||
+		len(sender.sent) != 1 ||
+		sender.sent[0].ID != repository.pending[0].ID ||
+		sender.sent[0].Text != "Take a break" {
 		t.Fatalf("state = pending %d, sent %v", len(repository.pending), sender.sent)
+	}
+
+	if err := service.Acknowledge(
+		context.Background(),
+		"user",
+		sender.sent[0].ID,
+	); err != nil {
+		t.Fatalf("Acknowledge() error = %v", err)
+	}
+	if len(repository.pending) != 0 {
+		t.Fatalf("acknowledged state = pending %d", len(repository.pending))
 	}
 }
