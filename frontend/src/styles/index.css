@@ -792,41 +792,16 @@ select:focus-visible {
 }
 
 .home-focus {
-  min-height: 430px;
+  min-height: 360px;
   padding: clamp(30px, 4.5vw, 62px);
   display: flex;
   flex-direction: column;
-  border-radius: 26px;
+  border-radius: 20px;
   background: var(--primary);
-  animation: home-focus-in 480ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-}
-
-.home-focus__top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  color: rgb(11 12 12 / 62%);
-  font-size: 0.58rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.home-focus__device {
-  min-height: 32px;
-  padding: 0 11px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  border-radius: 999px;
-  background: rgb(255 255 255 / 44%);
-  color: var(--black);
-  letter-spacing: 0;
-  text-transform: none;
 }
 
 .home-focus__body {
-  margin: clamp(48px, 7vh, 76px) 0 clamp(46px, 6vh, 68px);
+  margin: 0 0 clamp(42px, 5vh, 56px);
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.72fr);
   align-items: end;
@@ -878,7 +853,7 @@ select:focus-visible {
 .home-recall {
   margin-top: auto;
   padding: 9px 12px 11px;
-  border-radius: 18px;
+  border-radius: 14px;
   background: var(--white);
   transition: box-shadow 180ms ease;
 }
@@ -890,7 +865,7 @@ select:focus-visible {
 .home-recall__field {
   min-height: 54px;
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 34px;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
 }
@@ -915,27 +890,17 @@ select:focus-visible {
   color: var(--faint);
 }
 
-.home-recall__field button,
-.home-recall__field kbd {
+.home-recall__field button {
   width: 30px;
   height: 30px;
   display: grid;
   place-items: center;
   border-radius: 50%;
-}
-
-.home-recall__field button {
   padding: 0;
   border: 0;
   color: var(--white);
   background: var(--black);
   cursor: pointer;
-}
-
-.home-recall__field kbd {
-  color: var(--muted);
-  background: var(--primary-soft);
-  font-size: 0.61rem;
 }
 
 .home-lenses {
@@ -949,7 +914,6 @@ select:focus-visible {
   padding: 0 10px;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
   border: 0;
   border-radius: 999px;
   color: var(--muted);
@@ -958,14 +922,7 @@ select:focus-visible {
   cursor: pointer;
   transition:
     color 160ms ease,
-    background 160ms ease,
-    transform 160ms ease;
-}
-
-.home-lenses button small {
-  color: inherit;
-  font-size: 0.51rem;
-  opacity: 0.62;
+    background 160ms ease;
 }
 
 .home-lenses button:hover {
@@ -976,7 +933,6 @@ select:focus-visible {
 .home-lenses button.is-active {
   color: var(--white);
   background: var(--black);
-  transform: translateY(-1px);
 }
 
 .home-workbench {
@@ -1040,30 +996,9 @@ select:focus-visible {
   background: transparent;
   text-align: left;
   cursor: pointer;
-  animation: home-item-in 360ms ease both;
   transition:
     background 180ms ease,
     transform 180ms ease;
-}
-
-.home-event:nth-child(2) {
-  animation-delay: 35ms;
-}
-
-.home-event:nth-child(3) {
-  animation-delay: 70ms;
-}
-
-.home-event:nth-child(4) {
-  animation-delay: 105ms;
-}
-
-.home-event:nth-child(5) {
-  animation-delay: 140ms;
-}
-
-.home-event:nth-child(6) {
-  animation-delay: 175ms;
 }
 
 .home-event:hover,
@@ -1080,11 +1015,6 @@ select:focus-visible {
   border-radius: 50%;
   color: var(--black);
   background: var(--primary-soft);
-}
-
-.home-event[data-kind="tasks"] .home-event__icon {
-  color: var(--white);
-  background: var(--black);
 }
 
 .home-event__icon svg {
@@ -1157,13 +1087,11 @@ select:focus-visible {
 
 .home-no-results {
   min-height: 260px;
-  padding: clamp(32px, 5vw, 58px);
+  padding: clamp(32px, 5vw, 58px) 0;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
-  border-radius: 18px;
-  background: var(--primary-soft);
 }
 
 .home-no-results h3 {
@@ -1193,7 +1121,7 @@ select:focus-visible {
 
 .home-action {
   width: 100%;
-  min-height: 124px;
+  min-height: 108px;
   padding: 20px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 30px;
@@ -1201,7 +1129,7 @@ select:focus-visible {
   gap: 18px;
   overflow: hidden;
   border: 0;
-  border-radius: 16px;
+  border-radius: 12px;
   color: var(--black);
   background: var(--primary-soft);
   text-align: left;
@@ -2005,20 +1933,6 @@ select:focus-visible {
   }
 }
 
-@keyframes home-focus-in {
-  from {
-    opacity: 0;
-    transform: translateY(12px) scale(0.992);
-  }
-}
-
-@keyframes home-item-in {
-  from {
-    opacity: 0;
-    transform: translateY(7px);
-  }
-}
-
 @keyframes status-pulse {
   0%,
   100% {
@@ -2202,9 +2116,17 @@ select:focus-visible {
     content: "/";
   }
 
-  .topbar__date,
-  .connection-label {
+  .topbar__date {
     display: none;
+  }
+
+  .connection-label {
+    width: 30px;
+    min-width: 30px;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+    font-size: 0;
   }
 
   .page {
@@ -2232,10 +2154,6 @@ select:focus-visible {
 
   .home-actions {
     position: static;
-  }
-
-  .home-action-stack {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .conversation-browser {
@@ -2358,21 +2276,10 @@ select:focus-visible {
   .home-focus {
     min-height: auto;
     padding: 22px;
-    border-radius: 20px;
-  }
-
-  .home-focus__top {
-    gap: 14px;
-    font-size: 0.51rem;
-  }
-
-  .home-focus__device {
-    min-height: 28px;
-    padding: 0 9px;
   }
 
   .home-focus__body {
-    margin: 42px 0 36px;
+    margin: 0 0 32px;
     gap: 32px;
   }
 
@@ -2388,7 +2295,6 @@ select:focus-visible {
 
   .home-recall {
     padding: 7px 8px 9px;
-    border-radius: 15px;
   }
 
   .home-recall__field {
@@ -2400,10 +2306,6 @@ select:focus-visible {
   .home-recall__field input {
     min-height: 46px;
     font-size: 0.64rem;
-  }
-
-  .home-recall__field kbd {
-    display: none;
   }
 
   .home-lenses {
@@ -2451,14 +2353,6 @@ select:focus-visible {
 
   .home-event__content > span:last-child {
     -webkit-line-clamp: 1;
-  }
-
-  .home-action-stack {
-    grid-template-columns: 1fr;
-  }
-
-  .home-action {
-    min-height: 112px;
   }
 
   .browser-detail {

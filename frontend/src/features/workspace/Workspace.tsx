@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 
 import type {
@@ -320,17 +320,21 @@ type HomeEvent = {
   timestamp: string
 }
 
-type HomeFilter =
-  | 'all'
-  | 'attention'
-  | 'waiting'
-  | 'memories'
-  | 'conversations'
+type HomeAction = {
+  id: string
+  label: string
+  title: string
+  detail: string
+  symbol?: string
+  onClick: () => void
+}
+
+type HomeFilter = 'all' | Exclude<WorkspaceView, 'now'>
 
 const homeFilters: Array<{ id: HomeFilter; label: string }> = [
   { id: 'all', label: 'All context' },
-  { id: 'attention', label: 'Needs action' },
-  { id: 'waiting', label: 'Watching' },
+  { id: 'tasks', label: 'Tasks' },
+  { id: 'watches', label: 'Watches' },
   { id: 'memories', label: 'Memories' },
   { id: 'conversations', label: 'Conversations' },
 ]
@@ -346,7 +350,6 @@ function HomeEventRow({
     <button
       className="home-event"
       type="button"
-      data-kind={event.view}
       onClick={() => onNavigate(event.view)}
     >
       <span className="home-event__icon">
@@ -374,14 +377,12 @@ function HomeEventRow({
 
 function NowView({
   data,
-  glassesStatus,
   latestResponse,
   onNavigate,
   onAddMemory,
   currentTime,
 }: {
   data: WorkspaceData
-  glassesStatus: string
   latestResponse: string
   onNavigate: (view: WorkspaceView) => void
   onAddMemory: () => void
@@ -389,52 +390,27 @@ function NowView({
 }) {
   const [recallQuery, setRecallQuery] = useState('')
   const [recallFilter, setRecallFilter] = useState<HomeFilter>('all')
-  const recallInputRef = useRef<HTMLInputElement>(null)
-  const connected = connectedFromStatus(glassesStatus)
+  const nowTime = currentTime.getTime()
   const activeWatches = data.watches.filter((watch) => watch.status === 'active')
   const proposedTasks = data.tasks.filter((task) => task.status === 'proposed')
   const upcomingTasks = data.tasks
-    .filter((task) => task.status === 'accepted')
+    .filter(
+      (task) =>
+        task.status === 'accepted' &&
+        new Date(task.dueAt).getTime() >= nowTime,
+    )
     .sort(
       (left, right) =>
         new Date(left.dueAt).getTime() - new Date(right.dueAt).getTime(),
     )
   const latestConversation = data.conversations[0]
-  const friendlyStatus = friendlyDeviceStatus(glassesStatus)
-  const hasLatestResponse = Boolean(
-    latestResponse ||
-      latestConversation?.transcript.some(
-        (line) => line.speaker === 'assistant',
-      ),
-  )
-  const displayResponse =
+  const assistantResponse =
     latestResponse ||
     latestConversation?.transcript
       .filter((line) => line.speaker === 'assistant')
-      .at(-1)?.text ||
-    'Your assistant is synced and ready to help.'
-
-  useEffect(() => {
-    const focusRecall = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null
-      const isEditing = target?.matches(
-        'input, textarea, select, [contenteditable="true"]',
-      )
-      if (
-        event.key === '/' &&
-        !isEditing &&
-        !event.altKey &&
-        !event.ctrlKey &&
-        !event.metaKey
-      ) {
-        event.preventDefault()
-        recallInputRef.current?.focus()
-      }
-    }
-
-    window.addEventListener('keydown', focusRecall)
-    return () => window.removeEventListener('keydown', focusRecall)
-  }, [])
+      .at(-1)?.text
+  const displayResponse =
+    assistantResponse || 'Your assistant is synced and ready to help.'
 
   const events: HomeEvent[] = [
     ...data.conversations.map(
@@ -481,19 +457,17 @@ function NowView({
         timestamp: task.createdAt,
       }),
     ),
-    ...activeWatches
-      .filter((watch) => watch.nextCheckAt)
-      .map(
-        (watch): HomeEvent => ({
-          id: `watch-${watch.id}`,
-          view: 'watches',
-          label: 'Next watch check',
-          title: watch.query,
-          body: watch.condition,
-          searchText: watch.condition,
-          timestamp: watch.nextCheckAt ?? watch.createdAt,
-        }),
-      ),
+    ...activeWatches.map(
+      (watch): HomeEvent => ({
+        id: `watch-${watch.id}`,
+        view: 'watches',
+        label: watch.nextCheckAt ? 'Next watch check' : 'Active watch',
+        title: watch.query,
+        body: watch.condition,
+        searchText: watch.condition,
+        timestamp: watch.nextCheckAt ?? watch.createdAt,
+      }),
+    ),
   ]
   const normalizedQuery = recallQuery.trim().toLowerCase()
   const filteredEvents = events.filter((event) => {
@@ -504,15 +478,10 @@ function NowView({
         .toLowerCase()
         .includes(normalizedQuery)
     const matchesFilter =
-      recallFilter === 'all' ||
-      (recallFilter === 'attention' && event.view === 'tasks') ||
-      (recallFilter === 'waiting' && event.view === 'watches') ||
-      (recallFilter === 'memories' && event.view === 'memories') ||
-      (recallFilter === 'conversations' && event.view === 'conversations')
+      recallFilter === 'all' || event.view === recallFilter
     return matchesQuery && matchesFilter
   })
   const recallActive = normalizedQuery.length > 0 || recallFilter !== 'all'
-  const nowTime = currentTime.getTime()
   const visibleEvents = [...filteredEvents]
     .sort(
       (left, right) =>
@@ -522,49 +491,77 @@ function NowView({
           new Date(left.timestamp).getTime(),
     )
     .slice(0, recallActive ? 8 : 6)
-  const filterCounts: Record<HomeFilter, number> = {
-    all: events.length,
-    attention: events.filter((event) => event.view === 'tasks').length,
-    waiting: events.filter((event) => event.view === 'watches').length,
-    memories: events.filter((event) => event.view === 'memories').length,
-    conversations: events.filter((event) => event.view === 'conversations')
-      .length,
-  }
   const resetRecall = () => {
     setRecallQuery('')
     setRecallFilter('all')
   }
-  const attentionSummary = proposedTasks.length
-    ? `${proposedTasks.length} suggested ${
-        proposedTasks.length === 1 ? 'task needs' : 'tasks need'
-      } your review.`
-    : upcomingTasks[0]
-      ? `Your next reminder is ${relativeTime(upcomingTasks[0].dueAt)}.`
-      : activeWatches.length
-        ? `${activeWatches.length} ${
-            activeWatches.length === 1 ? 'watch is' : 'watches are'
-          } running quietly in the background.`
-        : 'Nothing needs your attention right now.'
+  const nextTask = upcomingTasks[0]
+  let homeSummary = 'Nothing needs your attention right now.'
+  if (proposedTasks.length) {
+    homeSummary = `${proposedTasks.length} suggested ${
+      proposedTasks.length === 1 ? 'task needs' : 'tasks need'
+    } your review.`
+  } else if (nextTask) {
+    homeSummary = `Your next reminder is ${relativeTime(nextTask.dueAt)}.`
+  } else if (activeWatches.length) {
+    homeSummary = `${activeWatches.length} ${
+      activeWatches.length === 1 ? 'watch is' : 'watches are'
+    } running quietly in the background.`
+  }
+
+  const nextActions: HomeAction[] = []
+  if (proposedTasks.length) {
+    nextActions.push({
+      id: 'proposed-tasks',
+      label: 'Decision',
+      title: `Review ${proposedTasks.length} suggested ${
+        proposedTasks.length === 1 ? 'task' : 'tasks'
+      }`,
+      detail: proposedTasks[0].title,
+      onClick: () => onNavigate('tasks'),
+    })
+  }
+  if (nextTask) {
+    nextActions.push({
+      id: 'next-reminder',
+      label: `Reminder · ${formatDateTime(nextTask.dueAt)}`,
+      title: 'Open your next reminder',
+      detail: nextTask.title,
+      onClick: () => onNavigate('tasks'),
+    })
+  }
+  if (activeWatches.length) {
+    nextActions.push({
+      id: 'active-watches',
+      label: `${activeWatches.length} ${
+        activeWatches.length === 1 ? 'active watch' : 'active watches'
+      }`,
+      title: 'See what you’re waiting on',
+      detail: activeWatches[0].query,
+      onClick: () => onNavigate('watches'),
+    })
+  }
+  nextActions.push({
+    id: 'new-memory',
+    label: 'Memory',
+    title: 'Remember something new',
+    detail: 'Add a fact, preference, person, or plan.',
+    symbol: '＋',
+    onClick: onAddMemory,
+  })
 
   return (
     <div className="home">
       <section className="home-focus" aria-labelledby="home-title">
-        <div className="home-focus__top">
-          <span>{formatDay(currentTime)}</span>
-          <span className="home-focus__device">
-            <StatusMark active={connected} />
-            Even G2 / {friendlyStatus}
-          </span>
-        </div>
         <div className="home-focus__body">
           <div className="home-focus__heading">
             <p className="section-label">Now</p>
             <h1 id="home-title">{greetingForTime(currentTime)}.</h1>
-            <p>{attentionSummary}</p>
+            <p>{homeSummary}</p>
           </div>
           <div className="home-focus__handoff">
             <span>
-              {hasLatestResponse ? 'Last from your assistant' : 'Assistant state'}
+              {assistantResponse ? 'Last from your assistant' : 'Assistant'}
             </span>
             <p>{shorten(displayResponse, 210)}</p>
           </div>
@@ -578,16 +575,9 @@ function NowView({
           >
             <SearchIcon />
             <input
-              ref={recallInputRef}
               type="search"
               value={recallQuery}
               onChange={(event) => setRecallQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') {
-                  setRecallQuery('')
-                  event.currentTarget.blur()
-                }
-              }}
               aria-label="Search your history"
               placeholder="Search people, decisions, reminders, anything…"
             />
@@ -599,9 +589,7 @@ function NowView({
               >
                 ×
               </button>
-            ) : (
-              <kbd aria-hidden="true">/</kbd>
-            )}
+            ) : null}
           </form>
           <div
             className="home-lenses"
@@ -616,8 +604,7 @@ function NowView({
                 aria-pressed={recallFilter === filter.id}
                 onClick={() => setRecallFilter(filter.id)}
               >
-                <span>{filter.label}</span>
-                <small>{filterCounts[filter.id]}</small>
+                {filter.label}
               </button>
             ))}
           </div>
@@ -686,70 +673,21 @@ function NowView({
             </div>
           </header>
           <div className="home-action-stack">
-            {proposedTasks.length > 0 ? (
+            {nextActions.map((action) => (
               <button
+                key={action.id}
                 className="home-action"
                 type="button"
-                onClick={() => onNavigate('tasks')}
+                onClick={action.onClick}
               >
                 <span className="home-action__copy">
-                  <small>Decision</small>
-                  <strong>
-                    Review {proposedTasks.length} suggested{' '}
-                    {proposedTasks.length === 1 ? 'task' : 'tasks'}
-                  </strong>
-                  <span>{shorten(proposedTasks[0].title, 72)}</span>
+                  <small>{action.label}</small>
+                  <strong>{action.title}</strong>
+                  <span>{shorten(action.detail, 72)}</span>
                 </span>
-                <i aria-hidden="true">→</i>
+                <i aria-hidden="true">{action.symbol ?? '→'}</i>
               </button>
-            ) : null}
-            {upcomingTasks[0] ? (
-              <button
-                className="home-action"
-                type="button"
-                onClick={() => onNavigate('tasks')}
-              >
-                <span className="home-action__copy">
-                  <small>
-                    Reminder · {formatDateTime(upcomingTasks[0].dueAt)}
-                  </small>
-                  <strong>Open your next reminder</strong>
-                  <span>{shorten(upcomingTasks[0].title, 72)}</span>
-                </span>
-                <i aria-hidden="true">→</i>
-              </button>
-            ) : null}
-            {activeWatches.length > 0 ? (
-              <button
-                className="home-action"
-                type="button"
-                onClick={() => onNavigate('watches')}
-              >
-                <span className="home-action__copy">
-                  <small>
-                    {activeWatches.length}{' '}
-                    {activeWatches.length === 1
-                      ? 'active watch'
-                      : 'active watches'}
-                  </small>
-                  <strong>See what you’re waiting on</strong>
-                  <span>{shorten(activeWatches[0].query, 72)}</span>
-                </span>
-                <i aria-hidden="true">→</i>
-              </button>
-            ) : null}
-            <button
-              className="home-action"
-              type="button"
-              onClick={onAddMemory}
-            >
-              <span className="home-action__copy">
-                <small>Memory</small>
-                <strong>Remember something new</strong>
-                <span>Add a fact, preference, person, or plan.</span>
-              </span>
-              <i aria-hidden="true">＋</i>
-            </button>
+            ))}
           </div>
         </aside>
       </div>
@@ -1542,7 +1480,6 @@ export function Workspace({
           {view === 'now' ? (
             <NowView
               data={data}
-              glassesStatus={glassesStatus}
               latestResponse={latestResponse}
               onNavigate={navigate}
               onAddMemory={() => setComposerOpen(true)}
