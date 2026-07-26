@@ -355,7 +355,10 @@ function HomeEventRow({
       <span className="home-event__content">
         <span className="home-event__meta">
           <small>{event.label}</small>
-          <time dateTime={event.timestamp} title={formatDateTime(event.timestamp)}>
+          <time
+            dateTime={event.timestamp}
+            title={formatDateTime(event.timestamp)}
+          >
             {relativeTime(event.timestamp)}
           </time>
         </span>
@@ -363,7 +366,7 @@ function HomeEventRow({
         <span>{shorten(event.body, 120)}</span>
       </span>
       <span className="home-event__arrow" aria-hidden="true">
-        ↗
+        →
       </span>
     </button>
   )
@@ -417,7 +420,13 @@ function NowView({
       const isEditing = target?.matches(
         'input, textarea, select, [contenteditable="true"]',
       )
-      if (event.key === '/' && !isEditing) {
+      if (
+        event.key === '/' &&
+        !isEditing &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey
+      ) {
         event.preventDefault()
         recallInputRef.current?.focus()
       }
@@ -647,14 +656,22 @@ function NowView({
             ))}
             {filteredEvents.length === 0 ? (
               <div className="home-no-results">
-                <p className="section-label">No match yet</p>
-                <h3>Try a broader word.</h3>
-                <p>
-                  Search a person, topic, place, or decision—or return to all
-                  of your context.
+                <p className="section-label">
+                  {recallActive ? 'No match yet' : 'No context yet'}
                 </p>
-                <button type="button" onClick={resetRecall}>
-                  Show all context
+                <h3>
+                  {recallActive ? 'Try a broader word.' : 'Start with a memory.'}
+                </h3>
+                <p>
+                  {recallActive
+                    ? 'Search a person, topic, place, or decision—or return to all of your context.'
+                    : 'Add something useful and your assistant will keep it close for later.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={recallActive ? resetRecall : onAddMemory}
+                >
+                  {recallActive ? 'Show all context' : 'Remember something'}
                 </button>
               </div>
             ) : null}
@@ -693,7 +710,9 @@ function NowView({
                 onClick={() => onNavigate('tasks')}
               >
                 <span className="home-action__copy">
-                  <small>Reminder · {formatDateTime(upcomingTasks[0].dueAt)}</small>
+                  <small>
+                    Reminder · {formatDateTime(upcomingTasks[0].dueAt)}
+                  </small>
                   <strong>Open your next reminder</strong>
                   <span>{shorten(upcomingTasks[0].title, 72)}</span>
                 </span>
@@ -709,7 +728,9 @@ function NowView({
                 <span className="home-action__copy">
                   <small>
                     {activeWatches.length}{' '}
-                    {activeWatches.length === 1 ? 'active watch' : 'active watches'}
+                    {activeWatches.length === 1
+                      ? 'active watch'
+                      : 'active watches'}
                   </small>
                   <strong>See what you’re waiting on</strong>
                   <span>{shorten(activeWatches[0].query, 72)}</span>
