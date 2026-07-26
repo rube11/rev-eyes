@@ -1,1 +1,132 @@
-/* Rev Eyes visual system is added in focused sections below. */
+:root {
+  font-family:
+    "SFMono-Regular", "SF Mono", "Roboto Mono", "Cascadia Code", Menlo,
+    Consolas, "Liberation Mono", monospace;
+  color: #0b0c0c;
+  background: #ffffff;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  --primary: #a9c2be;
+  --white: #ffffff;
+  --black: #0b0c0c;
+  --muted: rgb(11 12 12 / 58%);
+  --faint: rgb(11 12 12 / 38%);
+  --line: rgb(11 12 12 / 14%);
+  --line-strong: rgb(11 12 12 / 28%);
+  --primary-soft: rgb(169 194 190 / 22%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100svh;
+  overflow-x: hidden;
+  background: var(--white);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--black);
+  outline-offset: 3px;
+}
+
+::selection {
+  color: var(--black);
+  background: var(--primary);
+}
+
+.status-mark {
+  width: 8px;
+  height: 8px;
+  display: inline-block;
+  flex: 0 0 auto;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  opacity: 0.4;
+}
+
+.status-mark--active {
+  border-color: var(--black);
+  background: var(--black);
+  opacity: 1;
+}
+
+.section-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.form-error {
+  margin: 0;
+  padding: 12px 14px;
+  border-left: 3px solid var(--black);
+  color: var(--black);
+  background: var(--primary-soft);
+  font-size: 0.72rem;
+  line-height: 1.55;
+}
+
+/* Loading */
+
+.boot-screen {
+  min-height: 100svh;
+  padding: clamp(28px, 5vw, 72px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  color: var(--black);
+  background: var(--primary);
+}
+
+.boot-screen__brand {
+  font-size: clamp(1.35rem, 3vw, 2.1rem);
+  font-weight: 700;
+  letter-spacing: -0.08em;
+}
+
+.boot-screen__status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.boot-screen__status .status-mark {
+  animation: status-pulse 1.6s ease-in-out infinite;
+}
