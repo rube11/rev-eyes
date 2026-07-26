@@ -290,44 +290,557 @@ export async function initializeEvenExperience(
   onResponse: (text: string) => void,
   onStatus: (status: string) => void,
 ): Promise<() => void> {
-  const bridge = await ensurePage()
-  onStatus("Connecting")
-  await renderGlassesPage(buildSystemPage(
-    "CONNECTING",
-    "SECURE LINK",
-    "Connecting to your assistant…",
-    "Please wait",
-  ))
-
-  const socket = await connectRealtimeSocket(accessToken)
+  if (pageSuspended) {
+    pageSuspended = false
+    startup = undefined
+  }
   let active = true
+  let transitionTail: Promise<void> = Promise.resolve()
+  let socket: WebSocket | undefined
+  let socketBinding: SocketBinding | undefined
   let listeningState: ListeningState = "idle"
+  let surface: DisplaySurface = "compact"
+  let transcriptLayoutHasBody = false
   let locationStarted = false
-  let popupVisible = false
+  let awaitingResponse = false
+  let sleeping = false
+  let visibleAssistant: GlassesMessage | undefined
+  let deferredAssistant: GlassesMessage | undefined
+  let currentNotification: NotificationPresentation | undefined
+  const notificationQueue: NotificationPresentation[] = []
+  const seenNotificationIds = new Set<string>()
+  const dismissedNotificationIds = new Set<string>()
+  let idlePrompt: string | undefined
+  let latestTranscript = ""
+  let thinking = false
+  let thinkingFrame = 0
+  let thinkingTimer: ReturnType<typeof setTimeout> | undefined
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined
+  let reconnectAttempt = 0
+  let connecting = false
+  let connectGeneration = 0
+  let connectionAbort: AbortController | undefined
+  let suppressClicksUntil = 0
 
-  const showReady = () => renderGlassesPage(buildSystemPage(
-    "READY",
-    "ASK ANYTHING",
-    "Tap below, then speak naturally.",
-    "Tap to talk",
-  ))
-  const showListening = () => renderGlassesPage(buildSystemPage(
-    "LISTENING",
-    "I'M LISTENING",
-    "Speak naturally. Tap again when you're done.",
-    "Tap when done",
-  ))
-  const showConnectionLost = () => renderGlassesPage(buildSystemPage(
-    "OFFLINE",
-    "CONNECTION LOST",
-    "Reopen the phone app to reconnect.",
-    "Open phone to continue",
-  ))
+  onStatus("Connecting")
+  await renderGlassesPage(buildCompactPage("CONNECTING"))
+  const bridge = await getBridge()
 
-  onStatus("Connected")
-  await showReady()
+  function reportStatus(status: string) {
+    if (active) {
+      onStatus(status)
+    }
+  }
 
-  const handleServerMessage = async (message: ServerMessage) => {
+  function enqueueTransition(transition: () => Promise<void>): Promise<void> {
+    const result = transitionTail.then(async () => {
+      if (active) {
+        await transition()
+      }
+    })
+    transitionTail = result.catch(() => {
+      reportStatus("Glasses command failed")
+    })
+    return transitionTail
+  }
+
+  function socketIsOpen() {
+    return socket?.readyState === WebSocket.OPEN
+  }
+
+  function sendControl(type: string) {
+    return safeSendJson(socket, { type })
+  }
+
+  function clearThinkingAnimation() {
+    thinking = false
+    if (thinkingTimer !== undefined) {
+      clearTimeout(thinkingTimer)
+      thinkingTimer = undefined
+    }
+  }
+
+  function clearReconnectTimer() {
+    if (reconnectTimer !== undefined) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = undefined
+    }
+  }
+
+  async function setPage(
+    page: RebuildPageContainer,
+    nextSurface: DisplaySurface,
+  ) {
+    if (!active) {
+      return
+    }
+    await renderGlassesPage(page)
+    if (active) {
+      surface = nextSurface
+    }
+  }
+
+  async function renderTranscript() {
+    if (!active || currentNotification) {
+      return
+    }
+    const frame = thinking ? thinkingFrame : undefined
+    const hasBody = latestTranscript.trim().length > 0
+    const canUpgrade =
+      surface === "transcript" && transcriptLayoutHasBody === hasBody
+
+    if (canUpgrade) {
+      const upgraded = await upgradeTranscriptText(
+        buildTranscriptContent(latestTranscript, frame),
+      )
+      if (upgraded || !active) {
+        return
+      }
+    }
+
+    await setPage(
+      buildTranscriptPage(latestTranscript, frame),
+      "transcript",
+    )
+    if (active) {
+      transcriptLayoutHasBody = hasBody
+    }
+  }
+
+  function scheduleThinkingFrame() {
+    if (
+      !active ||
+      !thinking ||
+      currentNotification ||
+      thinkingTimer !== undefined
+    ) {
+      return
+    }
+    thinkingTimer = setTimeout(() => {
+      thinkingTimer = undefined
+      void enqueueTransition(async () => {
+        if (!thinking || currentNotification) {
+          return
+        }
+        thinkingFrame = (thinkingFrame + 1) % 3
+        await renderTranscript()
+        scheduleThinkingFrame()
+      })
+    }, THINKING_FRAME_DELAY_MS)
+  }
+
+  async function startThinkingAnimation() {
+    if (currentNotification || thinking) {
+      return
+    }
+    thinking = true
+    thinkingFrame = 0
+    await renderTranscript()
+    scheduleThinkingFrame()
+  }
+
+  async function showReady() {
+    clearThinkingAnimation()
+    awaitingResponse = false
+    latestTranscript = ""
+    idlePrompt = undefined
+    visibleAssistant = undefined
+    await setPage(buildCompactPage("TAP TO TALK"), "compact")
+  }
+
+  async function showListening() {
+    clearThinkingAnimation()
+    visibleAssistant = undefined
+    if (latestTranscript) {
+      await renderTranscript()
+      return
+    }
+    await setPage(
+      buildCompactPage("LISTENING  ·  TAP TO FINISH"),
+      "compact",
+    )
+  }
+
+  async function showConnectionLost() {
+    clearThinkingAnimation()
+    await setPage(
+      buildCompactPage("OFFLINE  ·  RECONNECTING"),
+      "offline",
+    )
+  }
+
+  async function showPresentation(presentation: GlassesMessage) {
+    clearThinkingAnimation()
+    await setPage(buildMessagePage(presentation), "message")
+  }
+
+  async function showIdlePrompt(prompt: string) {
+    clearThinkingAnimation()
+    idlePrompt = prompt
+    await setPage(buildCompactPage(prompt), "compact")
+  }
+
+  async function enterSleep() {
+    if (sleeping) {
+      return
+    }
+
+    clearThinkingAnimation()
+    latestTranscript = ""
+    sleeping = true
+    visibleAssistant = undefined
+    if (listeningState !== "idle") {
+      awaitingResponse =
+        listeningState === "listening" || listeningState === "stopping"
+      sendControl("listening_stop")
+      listeningState = "idle"
+      await bridge.audioControl(false).catch(() => undefined)
+    }
+    reportStatus("Sleeping")
+    await setPage(buildSleepPage(), "sleep")
+  }
+
+  async function wakeInterface() {
+    if (!sleeping) {
+      return
+    }
+
+    sleeping = false
+    if (!socketIsOpen()) {
+      reportStatus("Reconnecting")
+      forceReconnect()
+      await showConnectionLost()
+      return
+    }
+
+    reportStatus("Connected")
+    if (currentNotification) {
+      await showPresentation(currentNotification.message)
+      return
+    }
+    if (deferredAssistant) {
+      visibleAssistant = deferredAssistant
+      deferredAssistant = undefined
+      await showPresentation(visibleAssistant)
+      return
+    }
+    await showReady()
+  }
+
+  async function restoreAfterNotifications() {
+    if (currentNotification) {
+      await showPresentation(currentNotification.message)
+      return
+    }
+    if (sleeping) {
+      reportStatus("Sleeping")
+      await setPage(buildSleepPage(), "sleep")
+      return
+    }
+    if (!socketIsOpen()) {
+      reportStatus("Reconnecting")
+      await showConnectionLost()
+      return
+    }
+    if (deferredAssistant) {
+      visibleAssistant = deferredAssistant
+      deferredAssistant = undefined
+      reportStatus("Connected")
+      await showPresentation(visibleAssistant)
+      return
+    }
+    if (listeningState === "listening" || listeningState === "starting") {
+      reportStatus(listeningState === "listening" ? "Listening" : "Starting microphone")
+      await showListening()
+      return
+    }
+    if (awaitingResponse) {
+      reportStatus("Thinking")
+      await startThinkingAnimation()
+      return
+    }
+    if (idlePrompt) {
+      await showIdlePrompt(idlePrompt)
+      return
+    }
+    if (latestTranscript) {
+      reportStatus("Connected")
+      await renderTranscript()
+      return
+    }
+    reportStatus("Connected")
+    await showReady()
+  }
+
+  async function presentNotification(message: ServerMessage) {
+    const id = message.id?.trim()
+    const text = message.text?.trim()
+    if (!id || !text) {
+      return
+    }
+
+    if (dismissedNotificationIds.has(id)) {
+      safeSendJson(socket, { type: "notification_ack", id })
+      return
+    }
+    if (seenNotificationIds.has(id)) {
+      return
+    }
+
+    seenNotificationIds.add(id)
+    onResponse(text)
+    const notification = {
+      id,
+      message: presentGlassesMessage(text),
+    }
+    if (currentNotification) {
+      notificationQueue.push(notification)
+      if (sleeping) {
+        sleeping = false
+        reportStatus("Connected")
+        await showPresentation(currentNotification.message)
+      }
+      return
+    }
+
+    currentNotification = notification
+    if (visibleAssistant) {
+      deferredAssistant = visibleAssistant
+      visibleAssistant = undefined
+    }
+    sleeping = false
+    reportStatus("Connected")
+    await showPresentation(notification.message)
+  }
+
+  async function dismissNotification() {
+    if (!currentNotification || surface !== "message") {
+      return
+    }
+
+    const dismissed = currentNotification
+    dismissedNotificationIds.add(dismissed.id)
+    safeSendJson(socket, {
+      type: "notification_ack",
+      id: dismissed.id,
+    })
+    currentNotification = notificationQueue.shift()
+    await restoreAfterNotifications()
+  }
+
+  async function startLocationUpdates(expectedSocket: WebSocket) {
+    if (locationStarted || socket !== expectedSocket || !socketIsOpen()) {
+      return
+    }
+    const started = await bridge.startAppLocationUpdates({
+      accuracy: AppLocationAccuracy.Medium,
+      intervalMs: 5000,
+      distanceFilter: 10,
+    }).catch(() => false)
+    if (
+      !active ||
+      socket !== expectedSocket ||
+      expectedSocket.readyState !== WebSocket.OPEN
+    ) {
+      if (started) {
+        await bridge.stopAppLocationUpdates().catch(() => undefined)
+      }
+      return
+    }
+    locationStarted = started
+    if (started) {
+      void bridge.getAppLocation({
+        accuracy: AppLocationAccuracy.Medium,
+        timeoutMs: 5000,
+      }).then((location) => {
+        if (
+          active &&
+          socket === expectedSocket &&
+          expectedSocket.readyState === WebSocket.OPEN &&
+          location
+        ) {
+          sendLocation(expectedSocket, location)
+        }
+      }).catch(() => undefined)
+    }
+  }
+
+  async function stopLocationUpdates() {
+    if (!locationStarted) {
+      return
+    }
+    locationStarted = false
+    await bridge.stopAppLocationUpdates().catch(() => undefined)
+  }
+
+  function unbindSocket(expectedSocket?: WebSocket) {
+    if (!socketBinding || (expectedSocket && socketBinding.socket !== expectedSocket)) {
+      return
+    }
+    socketBinding.socket.removeEventListener("message", socketBinding.handleMessage)
+    socketBinding.socket.removeEventListener("close", socketBinding.handleClose)
+    socketBinding = undefined
+  }
+
+  async function handleSocketClosed(closedSocket: WebSocket) {
+    if (socket !== closedSocket) {
+      return
+    }
+    unbindSocket(closedSocket)
+    socket = undefined
+    clearThinkingAnimation()
+    awaitingResponse = false
+    latestTranscript = ""
+    idlePrompt = undefined
+    const wasListening = listeningState !== "idle"
+    listeningState = "idle"
+    if (wasListening) {
+      await bridge.audioControl(false).catch(() => undefined)
+    }
+    await stopLocationUpdates()
+    scheduleReconnect()
+
+    if (sleeping) {
+      reportStatus("Sleeping")
+    } else {
+      reportStatus("Reconnecting")
+      await showConnectionLost()
+    }
+  }
+
+  function bindSocket(nextSocket: WebSocket) {
+    const handleMessage = (event: MessageEvent<unknown>) => {
+      const message = parseServerMessage(event.data)
+      if (!message) {
+        return
+      }
+      void enqueueTransition(async () => {
+        if (socket === nextSocket) {
+          await handleServerMessage(message)
+        }
+      })
+    }
+    const handleClose = () => {
+      void enqueueTransition(async () => {
+        await handleSocketClosed(nextSocket)
+      })
+    }
+    socketBinding = { socket: nextSocket, handleMessage, handleClose }
+    nextSocket.addEventListener("message", handleMessage)
+    nextSocket.addEventListener("close", handleClose)
+  }
+
+  async function handleConnected(nextSocket: WebSocket) {
+    if (nextSocket.readyState !== WebSocket.OPEN) {
+      closeQuietly(nextSocket)
+      scheduleReconnect()
+      return
+    }
+
+    clearReconnectTimer()
+    reconnectAttempt = 0
+    if (socket && socket !== nextSocket) {
+      unbindSocket(socket)
+      closeQuietly(socket)
+    }
+    socket = nextSocket
+    bindSocket(nextSocket)
+
+    if (sleeping) {
+      reportStatus("Sleeping")
+      if (surface !== "sleep") {
+        await setPage(buildSleepPage(), "sleep")
+      }
+    } else {
+      reportStatus("Connected")
+      if (currentNotification) {
+        await showPresentation(currentNotification.message)
+      } else if (deferredAssistant) {
+        visibleAssistant = deferredAssistant
+        deferredAssistant = undefined
+        await showPresentation(visibleAssistant)
+      } else if (visibleAssistant) {
+        await showPresentation(visibleAssistant)
+      } else {
+        await showReady()
+      }
+    }
+    await startLocationUpdates(nextSocket)
+  }
+
+  function startConnectionAttempt() {
+    if (!active || connecting || socketIsOpen()) {
+      return
+    }
+    connecting = true
+    const generation = ++connectGeneration
+    const controller = new AbortController()
+    connectionAbort = controller
+
+    void (async () => {
+      try {
+        const nextSocket = await connectRealtimeSocket(accessToken, {
+          signal: controller.signal,
+          timeoutMs: CONNECTION_TIMEOUT_MS,
+        })
+        if (!active || generation !== connectGeneration) {
+          closeQuietly(nextSocket)
+          return
+        }
+        connecting = false
+        connectionAbort = undefined
+        await enqueueTransition(async () => {
+          await handleConnected(nextSocket)
+        })
+      } catch {
+        if (!active || generation !== connectGeneration) {
+          return
+        }
+        connecting = false
+        connectionAbort = undefined
+        await enqueueTransition(async () => {
+          if (sleeping) {
+            reportStatus("Sleeping")
+          } else {
+            reportStatus("Reconnecting")
+            if (surface !== "offline") {
+              await showConnectionLost()
+            }
+          }
+        })
+        scheduleReconnect()
+      }
+    })()
+  }
+
+  function scheduleReconnect(immediate = false) {
+    if (
+      !active ||
+      connecting ||
+      socketIsOpen() ||
+      reconnectTimer !== undefined
+    ) {
+      return
+    }
+    const delay = immediate ? 0 : reconnectDelay(reconnectAttempt)
+    if (!immediate) {
+      reconnectAttempt += 1
+    }
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined
+      startConnectionAttempt()
+    }, delay)
+  }
+
+  function forceReconnect() {
+    if (!active || connecting || socketIsOpen()) {
+      return
+    }
+    clearReconnectTimer()
+    scheduleReconnect(true)
+  }
+
+  async function handleServerMessage(message: ServerMessage) {
     switch (message.type) {
       case "assistant_response": {
         if (!message.text) {
