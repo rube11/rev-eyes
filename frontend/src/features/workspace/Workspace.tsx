@@ -1220,3 +1220,155 @@ function TasksView({ data }: { data: WorkspaceData }) {
     </>
   )
 }
+
+function MemoryComposer({
+  open,
+  onClose,
+  onSave,
+}: {
+  open: boolean
+  onClose: () => void
+  onSave: (input: NewMemoryInput) => Promise<void>
+}) {
+  const [title, setTitle] = useState('')
+  const [summary, setSummary] = useState('')
+  const [kind, setKind] = useState<MemoryKind>('fact')
+  const [topic, setTopic] = useState('personal')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose, open])
+
+  if (!open) {
+    return null
+  }
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setSaving(true)
+    setError('')
+    try {
+      await onSave({ title, summary, kind, topic })
+      setTitle('')
+      setSummary('')
+      setKind('fact')
+      setTopic('personal')
+      onClose()
+    } catch {
+      setError('We could not save this memory. Please try again.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div
+      className="composer-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose()
+        }
+      }}
+    >
+      <section
+        className="memory-composer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="memory-composer-title"
+      >
+        <header>
+          <div>
+            <p className="section-label">New memory</p>
+            <h2 id="memory-composer-title">Add a memory</h2>
+          </div>
+          <button
+            className="icon-action"
+            type="button"
+            onClick={onClose}
+            aria-label="Close memory form"
+          >
+            ×
+          </button>
+        </header>
+        <form onSubmit={submit}>
+          <label className="field">
+            <span>Title</span>
+            <input
+              autoFocus
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              maxLength={120}
+              placeholder="A short label"
+              required
+            />
+          </label>
+          <label className="field">
+            <span>What should the glasses remember?</span>
+            <textarea
+              value={summary}
+              onChange={(event) => setSummary(event.target.value)}
+              maxLength={500}
+              rows={6}
+              placeholder="Write the detail in a way that will be useful later."
+              required
+            />
+            <small>{summary.length} / 500</small>
+          </label>
+          <div className="field-pair">
+            <label className="field">
+              <span>Kind</span>
+              <select
+                value={kind}
+                onChange={(event) =>
+                  setKind(event.target.value as MemoryKind)
+                }
+              >
+                {memoryKinds.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Topic</span>
+              <select
+                value={topic}
+                onChange={(event) => setTopic(event.target.value)}
+              >
+                {memoryTopics.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {error ? (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          ) : null}
+          <footer>
+            <p>Your assistant can use this in future conversations.</p>
+            <button className="primary-action" type="submit" disabled={saving}>
+              {saving ? 'Saving…' : 'Save memory'}
+            </button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  )
+}
