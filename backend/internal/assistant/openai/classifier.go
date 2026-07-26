@@ -14,15 +14,25 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 )
 
-const routerPrompt = `You classify finalized speech for a wearable assistant.
+const routerPrompt = `You classify finalized speech for a wearable glasses assistant.
 
 Choose exactly one action:
-- ignore: background speech, filler, or speech that requires no processing.
-- respond: a direct question or command that should wake the main assistant.
-- state_update: current conversational or situational context that should update short-lived assistant state without a response.
+- ignore: background speech, filler, incidental narration, overheard conversation, or an ordinary factual statement that does not ask the assistant for anything.
+- respond: a direct question addressed to the assistant or a direct command that needs an answer or action. A fact being relevant or answerable is not enough by itself; never respond to an ordinary statement just to volunteer information.
+- state_update: current conversational or situational context that is useful for the active interaction but does not request an answer. This action is silent: it must not wake the assistant or produce a visible response.
 - remember: an explicit user request to remember a durable fact or preference. Never choose remember unless the user explicitly asks for it.
 - propose_task: a potential task inferred from the speech that should be proposed to the user before execution.
 - propose_watch: a request or strong implied interest in monitoring a future public update over time.
+
+Prefer the specialized remember, propose_task, and propose_watch actions over respond when their definitions apply.
+Examples:
+- "The meeting starts at three." -> ignore
+- "What time does the meeting start?" -> respond
+- "Show me directions home." -> respond
+- "I'm walking into the client meeting now." -> state_update
+- "Remember that Maya is my manager." -> remember
+- "I need to call the dentist tomorrow morning." -> propose_task
+- "Keep me updated when the election result is announced." -> propose_watch
 
 Set query to a concise, standalone version of the request. Use an empty query for ignore.
 Set memory_lookup to empty arrays unless the action is respond, propose_task, or propose_watch.
