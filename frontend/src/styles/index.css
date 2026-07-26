@@ -1482,3 +1482,262 @@ select:focus-visible {
   line-height: 1.45;
   text-transform: capitalize;
 }
+
+/* Watches */
+
+.count-callout {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.count-callout strong {
+  font-size: clamp(1.8rem, 3vw, 2.7rem);
+  font-weight: 500;
+  letter-spacing: -0.06em;
+}
+
+.count-callout span {
+  color: var(--muted);
+  font-size: 0.58rem;
+}
+
+.watch-list {
+  border-bottom: 1px solid var(--black);
+}
+
+.watch-row {
+  padding: clamp(30px, 4vw, 50px) 0;
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: clamp(22px, 4vw, 48px);
+  border-top: 1px solid var(--black);
+}
+
+.watch-row__index {
+  padding-top: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 0.6rem;
+}
+
+.watch-row__index svg {
+  width: 20px;
+  height: 20px;
+}
+
+.watch-row__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 36px;
+}
+
+.watch-row h2 {
+  margin: 10px 0 0;
+  font-size: clamp(1.2rem, 2.4vw, 2.4rem);
+  font-weight: 500;
+  letter-spacing: -0.05em;
+  line-height: 1.1;
+}
+
+.state-label {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.56rem;
+  letter-spacing: 0.05em;
+  text-transform: capitalize;
+}
+
+.state-label--active,
+.state-label--accepted,
+.state-label--proposed {
+  padding: 4px 7px;
+  border-radius: 4px;
+  color: var(--black);
+  background: var(--primary-soft);
+}
+
+.next-check {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.54rem;
+  text-align: right;
+}
+
+.next-check strong {
+  color: var(--black);
+  font-size: 0.66rem;
+  font-weight: 500;
+}
+
+.watch-condition {
+  margin: 24px 0 34px;
+  color: rgb(11 12 12 / 78%);
+  font-size: 0.71rem;
+  line-height: 1.65;
+}
+
+.watch-condition span {
+  margin-right: 10px;
+  color: var(--muted);
+  font-size: 0.56rem;
+  text-transform: uppercase;
+}
+
+.watch-stats {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+}
+
+.watch-stats div {
+  padding: 15px 18px 0 0;
+  display: grid;
+  gap: 7px;
+}
+
+.watch-stats dt {
+  color: var(--muted);
+  font-size: 0.54rem;
+}
+
+.watch-stats dd {
+  margin: 0;
+  font-size: 0.63rem;
+  line-height: 1.45;
+}
+
+/* Tasks */
+
+.task-section + .task-section {
+  margin-top: clamp(70px, 9vw, 120px);
+}
+
+.proposed-list {
+  display: grid;
+  gap: 8px;
+  padding-top: 16px;
+}
+
+.proposed-task {
+  min-height: 132px;
+  padding: 24px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 36px;
+  border-radius: 10px;
+  background: var(--primary-soft);
+}
+
+.proposed-task .section-label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--black);
+}
+
+.proposed-task h3 {
+  margin: 17px 0 8px;
+  font-size: clamp(1rem, 1.8vw, 1.45rem);
+  font-weight: 500;
+  letter-spacing: -0.035em;
+}
+
+.proposed-task p:not(.section-label) {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.64rem;
+}
+
+.proposed-task__time {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.55rem;
+  text-align: right;
+}
+
+.proposed-task__time strong {
+  color: var(--black);
+  font-size: 0.62rem;
+  font-weight: 500;
+}
+
+.timeline-row {
+  min-height: 118px;
+  display: grid;
+  grid-template-columns: 48px 170px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: clamp(18px, 3vw, 42px);
+  border-bottom: 1px solid var(--line);
+}
+
+.timeline-row__rail {
+  height: 100%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.58rem;
+}
+
+.timeline-row__rail i {
+  width: 1px;
+  height: 100%;
+  position: absolute;
+  right: 0;
+  background: var(--line);
+}
+
+.timeline-row__rail i::after {
+  width: 8px;
+  height: 8px;
+  position: absolute;
+  top: calc(50% - 4px);
+  left: -4px;
+  border-radius: 50%;
+  content: "";
+  background: var(--primary);
+}
+
+.timeline-row time {
+  display: grid;
+  gap: 6px;
+}
+
+.timeline-row time strong {
+  font-size: 0.61rem;
+  font-weight: 600;
+}
+
+.timeline-row time span,
+.timeline-row p {
+  color: var(--muted);
+  font-size: 0.57rem;
+}
+
+.timeline-row h3 {
+  margin: 0 0 7px;
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.timeline-row p {
+  margin: 0;
+}
+
+.archive-note {
+  margin: 40px 0 0;
+  color: var(--muted);
+  font-size: 0.58rem;
+  text-align: right;
+}
