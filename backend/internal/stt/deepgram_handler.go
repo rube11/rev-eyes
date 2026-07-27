@@ -15,17 +15,24 @@ type deepgramHandler struct {
 
 	mu         sync.RWMutex
 	transcript string
+	lastUpdate string
 	ctx        context.Context
 	completed  chan<- string
+	observe    TranscriptObserver
 	finalized  chan struct{}
 	finalize   sync.Once
 }
 
-func newDeepgramHandler(ctx context.Context, completed chan<- string) *deepgramHandler {
+func newDeepgramHandler(
+	ctx context.Context,
+	completed chan<- string,
+	observe TranscriptObserver,
+) *deepgramHandler {
 	return &deepgramHandler{
 		DefaultCallbackHandler: websocket.NewDefaultCallbackHandler(),
 		ctx:                    ctx,
 		completed:              completed,
+		observe:                observe,
 		finalized:              make(chan struct{}),
 	}
 }
@@ -36,25 +43,47 @@ func (h *deepgramHandler) Message(message *msginterfaces.MessageResponse) error 
 	}
 
 	var text string
-	if message.IsFinal && len(message.Channel.Alternatives) > 0 {
+	if len(message.Channel.Alternatives) > 0 {
 		text = strings.TrimSpace(message.Channel.Alternatives[0].Transcript)
 	}
 
+	var update string
 	var utterance string
 	h.mu.Lock()
-	if text != "" {
+	if message.IsFinal && text != "" {
 		if h.transcript != "" {
 			h.transcript += " "
 		}
 		h.transcript += text
 	}
+	if message.IsFinal {
+		update = h.transcript
+	} else if text != "" {
+		update = strings.TrimSpace(h.transcript + " " + text)
+	}
 
-	if (message.SpeechFinal || message.FromFinalize) && h.transcript != "" {
+	// SpeechFinal marks a natural pause in Deepgram's endpointing. The user may
+	// continue speaking after it, so only the explicit stream finalization that
+	// follows tap-to-finish may publish and clear the complete utterance.
+	if message.FromFinalize && h.transcript != "" {
 		utterance = h.transcript
 		h.transcript = ""
 	}
+	if update == h.lastUpdate {
+		update = ""
+	} else if update != "" {
+		h.lastUpdate = update
+	}
+	if utterance != "" {
+		h.lastUpdate = ""
+	}
 	h.mu.Unlock()
 
+	if update != "" {
+		if err := h.observe(update); err != nil {
+			return err
+		}
+	}
 	if utterance != "" {
 		select {
 		case h.completed <- utterance:

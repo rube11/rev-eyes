@@ -21,6 +21,10 @@ let queues = Resources.*[
     Type == 'AWS::SQS::Queue'
 ]
 
+let alarms = Resources.*[
+    Type == 'AWS::CloudWatch::Alarm'
+]
+
 let registration_apis = Resources.*[
     Type == 'AWS::ApiGateway::RestApi'
 ]
@@ -58,6 +62,18 @@ rule queues_are_encrypted_and_bounded when %queues !empty {
     %queues {
         Properties.SqsManagedSseEnabled == true
         Properties.MessageRetentionPeriod <= 1209600
+    }
+}
+
+rule failed_deliveries_are_detected {
+    %alarms !empty
+    %alarms {
+        Properties.Namespace == 'AWS/SQS'
+        Properties.MetricName == 'ApproximateNumberOfMessagesVisible'
+        Properties.Statistic == 'Maximum'
+        Properties.Threshold == 0
+        Properties.ComparisonOperator == 'GreaterThanThreshold'
+        Properties.TreatMissingData == 'notBreaching'
     }
 }
 

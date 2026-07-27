@@ -34,7 +34,10 @@ var (
 	ErrSecretRequired   = errors.New("SCHEDULER_SECRET is required")
 	ErrRecorderRequired = errors.New("scheduled event recorder is required")
 	ErrEventInvalid     = errors.New("scheduled event is invalid")
-	uuidPattern         = regexp.MustCompile(
+	eventIDPattern      = regexp.MustCompile(
+		`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
+	)
+	resourceIDPattern = regexp.MustCompile(
 		`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`,
 	)
 )
@@ -47,8 +50,8 @@ type ScheduledEvent struct {
 }
 
 func (e ScheduledEvent) validate() error {
-	if !uuidPattern.MatchString(strings.TrimSpace(e.ID)) ||
-		!uuidPattern.MatchString(strings.TrimSpace(e.ResourceID)) {
+	if !eventIDPattern.MatchString(strings.TrimSpace(e.ID)) ||
+		!resourceIDPattern.MatchString(strings.TrimSpace(e.ResourceID)) {
 		return ErrEventInvalid
 	}
 	if e.Job != JobReminder && e.Job != JobWatch {

@@ -33,11 +33,12 @@ func NewHub() *Hub {
 	return &Hub{connections: make(map[string]map[*connection]struct{})}
 }
 
-// Send delivers an assistant message and reports whether any active connection received it.
-func (h *Hub) Send(userID, text string) bool {
+// Send delivers a notification and reports whether any active connection received it.
+func (h *Hub) Send(userID, notificationID, text string) bool {
 	userID = strings.TrimSpace(userID)
+	notificationID = strings.TrimSpace(notificationID)
 	text = strings.TrimSpace(text)
-	if userID == "" || text == "" {
+	if userID == "" || notificationID == "" || text == "" {
 		return false
 	}
 
@@ -55,7 +56,8 @@ func (h *Hub) Send(userID, text string) bool {
 	delivered := false
 	for _, conn := range connections {
 		if err := conn.WriteJSON(serverMessage{
-			Type: assistantResponseMessageType,
+			Type: notificationMessageType,
+			ID:   notificationID,
 			Text: text,
 		}); err != nil {
 			slog.Debug("failed to send realtime message", "user_id", userID, "error", err)

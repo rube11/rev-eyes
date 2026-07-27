@@ -3,7 +3,6 @@ package notification
 import (
 	"context"
 	"errors"
-	"fmt"
 )
 
 var (
@@ -18,7 +17,7 @@ type Repository interface {
 }
 
 type Sender interface {
-	Send(userID, text string) bool
+	Send(userID, notificationID, text string) bool
 }
 
 type Service struct {
@@ -42,28 +41,26 @@ func (s *Service) Notify(ctx context.Context, userID, text string) error {
 	if err != nil {
 		return err
 	}
-	if !s.sender.Send(userID, notification.Text) {
-		return nil
-	}
-	if err := s.repository.MarkDelivered(ctx, userID, notification.ID); err != nil {
-		return fmt.Errorf("record notification delivery: %w", err)
-	}
+	s.sender.Send(userID, notification.ID, notification.Text)
 	return nil
 }
 
-// Flush delivers pending messages in order until the user disconnects.
+// Flush replays pending messages in order until the user disconnects.
+// Messages remain pending until the glasses acknowledge that the user dismissed them.
 func (s *Service) Flush(ctx context.Context, userID string) error {
 	notifications, err := s.repository.Pending(ctx, userID)
 	if err != nil {
 		return err
 	}
 	for _, notification := range notifications {
-		if !s.sender.Send(userID, notification.Text) {
+		if !s.sender.Send(userID, notification.ID, notification.Text) {
 			return nil
-		}
-		if err := s.repository.MarkDelivered(ctx, userID, notification.ID); err != nil {
-			return fmt.Errorf("record notification delivery: %w", err)
 		}
 	}
 	return nil
+}
+
+// Acknowledge records a notification only after the user dismisses it.
+func (s *Service) Acknowledge(ctx context.Context, userID, notificationID string) error {
+	return s.repository.MarkDelivered(ctx, userID, notificationID)
 }

@@ -245,6 +245,13 @@ func run() error {
 		Connect: func(ctx context.Context, scope tool.Scope) error {
 			return notificationService.Flush(ctx, scope.UserID)
 		},
+		NotificationAck: func(
+			ctx context.Context,
+			scope tool.Scope,
+			notificationID string,
+		) error {
+			return notificationService.Acknowledge(ctx, scope.UserID, notificationID)
+		},
 		Utterance: func(ctx context.Context, scope tool.Scope, utterance string) (string, error) {
 			return handleUtterance(
 				ctx,

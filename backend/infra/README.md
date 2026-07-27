@@ -31,6 +31,10 @@ infra/deploy-scheduler.sh deploy \
 
 The deploy script creates a named change set, prints every resource change,
 and then executes it through the bounded CloudFormation role.
+The application stack also creates a
+`rev-eyes-scheduler-dead-letter-queue-not-empty` CloudWatch alarm. If it enters
+`ALARM`, at least one reminder or watch exhausted its delivery retries and is
+waiting in the scheduler dead-letter queue.
 
 ## Backend deployment
 

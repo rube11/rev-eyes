@@ -82,7 +82,9 @@ Resources:
               - Sid: InvokeSchedulerDestination
                 Effect: Allow
                 Action: events:InvokeApiDestination
-                Resource: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:api-destination/${ResourcePrefix}-scheduler/*'
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:api-destination/${ResourcePrefix}-scheduler'
+                  - !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:api-destination/${ResourcePrefix}-scheduler/*'
       Tags:
         - Key: Application
           Value: rev-eyes
@@ -196,7 +198,9 @@ Resources:
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/${ResourcePrefix}-scheduled-jobs'
                   - !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${ResourcePrefix}-scheduled-jobs/${ResourcePrefix}-scheduled-job-delivery'
+                  - !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:connection/${ResourcePrefix}-scheduler'
                   - !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:connection/${ResourcePrefix}-scheduler/*'
+                  - !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:api-destination/${ResourcePrefix}-scheduler'
                   - !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:api-destination/${ResourcePrefix}-scheduler/*'
               - Sid: ManageSchedulerDeadLetterQueue
                 Effect: Allow
@@ -210,6 +214,19 @@ Resources:
                   - sqs:TagQueue
                   - sqs:UntagQueue
                 Resource: !Sub 'arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${ApplicationStackName}-*'
+              - Sid: ManageSchedulerAlarms
+                Effect: Allow
+                Action:
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:ListTagsForResource
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:TagResource
+                  - cloudwatch:UntagResource
+                Resource: !Sub 'arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${ApplicationStackName}-*'
+              - Sid: ReadSchedulerAlarms
+                Effect: Allow
+                Action: cloudwatch:DescribeAlarms
+                Resource: '*'
               - Sid: ManageScheduleRegistrarFunction
                 Effect: Allow
                 Action:
@@ -217,7 +234,11 @@ Resources:
                   - lambda:DeleteFunction
                   - lambda:GetFunction
                   - lambda:GetFunctionConfiguration
+                  - lambda:GetFunctionCodeSigningConfig
+                  - lambda:GetFunctionRecursionConfig
+                  - lambda:GetFunctionScalingConfig
                   - lambda:GetPolicy
+                  - lambda:GetRuntimeManagementConfig
                   - lambda:ListTags
                   - lambda:UpdateFunctionCode
                   - lambda:UpdateFunctionConfiguration

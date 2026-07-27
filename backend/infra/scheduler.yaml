@@ -133,6 +133,27 @@ Resources:
                 aws:SecureTransport: false
                 aws:PrincipalIsAWSService: false
 
+  SchedulerDeadLetterQueueAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-dead-letter-queue-not-empty'
+      AlarmDescription: A scheduled job could not be delivered after all retries.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt SchedulerDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Application
+          Value: rev-eyes
+
   ScheduleRegistrarLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -435,3 +456,6 @@ Outputs:
   SchedulerDeadLetterQueueUrl:
     Description: Queue containing failed schedule and backend deliveries.
     Value: !Ref SchedulerDeadLetterQueue
+  SchedulerDeadLetterQueueAlarmName:
+    Description: CloudWatch alarm that detects failed schedule or backend deliveries.
+    Value: !Ref SchedulerDeadLetterQueueAlarm
