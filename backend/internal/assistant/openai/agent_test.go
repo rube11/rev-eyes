@@ -68,6 +68,12 @@ func TestAgentReturnsText(t *testing.T) {
 	if !strings.Contains(request.Instructions, "Use propose_watch once") {
 		t.Fatalf("instructions = %q", request.Instructions)
 	}
+	if !strings.Contains(request.Instructions, "explicitly asks to create a reminder") {
+		t.Fatalf("instructions = %q", request.Instructions)
+	}
+	if strings.Contains(request.Instructions, "explicit reminder commands") {
+		t.Fatalf("instructions still exclude explicit reminders = %q", request.Instructions)
+	}
 	if !strings.Contains(request.Instructions, "the glasses can render each result separately") {
 		t.Fatalf("instructions = %q", request.Instructions)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,6 +58,9 @@ func TestToolCreatesPendingReminderProposal(t *testing.T) {
 	}
 	if proposalTool.Spec().Name != "propose_task" || proposalTool.Spec().ReadOnly {
 		t.Fatalf("spec = %#v", proposalTool.Spec())
+	}
+	if !strings.Contains(proposalTool.Spec().Description, "explicitly requests one") {
+		t.Fatalf("description = %q", proposalTool.Spec().Description)
 	}
 }
 

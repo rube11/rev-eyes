@@ -53,7 +53,7 @@ func NewTool(proposer Proposer) (*Tool, error) {
 func (t *Tool) Spec() tool.Spec {
 	return tool.Spec{
 		Name:        "propose_task",
-		Description: "Propose one timed reminder when the user implies a concrete future action but has not explicitly asked to create it. The proposal remains inactive until the user confirms it.",
+		Description: "Propose one timed reminder when the user explicitly requests one or implies a concrete future action with usable timing. The proposal remains inactive until the user confirms it.",
 		Parameters:  json.RawMessage(parametersSchema),
 		ReadOnly:    false,
 	}

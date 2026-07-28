@@ -21,7 +21,7 @@ Choose exactly one action:
 - respond: a direct question addressed to the assistant or a direct command that needs an answer or action. A fact being relevant or answerable is not enough by itself; never respond to an ordinary statement just to volunteer information.
 - state_update: current conversational or situational context that is useful for the active interaction but does not request an answer. This action is silent: it must not wake the assistant or produce a visible response.
 - remember: an explicit user request to remember a durable fact or preference. Never choose remember unless the user explicitly asks for it.
-- propose_task: a potential task inferred from the speech that should be proposed to the user before execution.
+- propose_task: an explicit reminder request or a potential task inferred from the speech that should be proposed to the user before execution.
 - propose_watch: a request or strong implied interest in monitoring a future public update over time.
 
 Prefer the specialized remember, propose_task, and propose_watch actions over respond when their definitions apply.
@@ -32,6 +32,7 @@ Examples:
 - "I'm walking into the client meeting now." -> state_update
 - "Remember that Maya is my manager." -> remember
 - "I need to call the dentist tomorrow morning." -> propose_task
+- "Remind me to call the dentist tomorrow at nine." -> propose_task
 - "Keep me updated when the election result is announced." -> propose_watch
 
 Set query to a concise, standalone version of the request. Use an empty query for ignore.
@@ -50,7 +51,7 @@ For remember, set query to the memory summary and create one memory card:
 - Add useful details as lowercase snake_case keys with short values.
 - Include named people, places, organizations, projects, and events as entities.
 - Use only facts stated in the utterance. Never resolve missing context or invent details.
-For propose_task, preserve whether the user implied the action rather than explicitly requested it in query.
+For propose_task, preserve whether the user explicitly requested a reminder or implied the action in query.
 Choose propose_watch only when future web information must be checked repeatedly, not for a one-time current-information question.
 Classify the speech only. Do not answer it.`
 

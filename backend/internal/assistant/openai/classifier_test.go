@@ -36,7 +36,7 @@ func TestClassifierRequestPreservesRoutingContract(t *testing.T) {
 		"never respond to an ordinary statement just to volunteer information",
 		"This action is silent: it must not wake the assistant or produce a visible response.",
 		"Never choose remember unless the user explicitly asks for it.",
-		"a potential task inferred from the speech",
+		"an explicit reminder request or a potential task inferred from the speech",
 		"future public update over time",
 		"Prefer the specialized remember, propose_task, and propose_watch actions over respond",
 		`"The meeting starts at three." -> ignore`,
@@ -44,6 +44,7 @@ func TestClassifierRequestPreservesRoutingContract(t *testing.T) {
 		`"I'm walking into the client meeting now." -> state_update`,
 		`"Remember that Maya is my manager." -> remember`,
 		`"I need to call the dentist tomorrow morning." -> propose_task`,
+		`"Remind me to call the dentist tomorrow at nine." -> propose_task`,
 		`"Keep me updated when the election result is announced." -> propose_watch`,
 	}
 	for _, rule := range wantPromptRules {
