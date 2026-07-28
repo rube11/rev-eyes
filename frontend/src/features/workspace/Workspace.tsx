@@ -88,17 +88,6 @@ function formatDay(value: Date): string {
   }).format(value)
 }
 
-function greetingForTime(value: Date): string {
-  const hour = value.getHours()
-  if (hour < 12) {
-    return 'Good morning'
-  }
-  if (hour < 18) {
-    return 'Good afternoon'
-  }
-  return 'Good evening'
-}
-
 function formatDateTime(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
     month: 'short',
@@ -377,13 +366,11 @@ function HomeEventRow({
 
 function NowView({
   data,
-  latestResponse,
   onNavigate,
   onAddMemory,
   currentTime,
 }: {
   data: WorkspaceData
-  latestResponse: string
   onNavigate: (view: WorkspaceView) => void
   onAddMemory: () => void
   currentTime: Date
@@ -403,15 +390,6 @@ function NowView({
       (left, right) =>
         new Date(left.dueAt).getTime() - new Date(right.dueAt).getTime(),
     )
-  const latestConversation = data.conversations[0]
-  const assistantResponse =
-    latestResponse ||
-    latestConversation?.transcript
-      .filter((line) => line.speaker === 'assistant')
-      .at(-1)?.text
-  const displayResponse =
-    assistantResponse || 'Your assistant is synced and ready to help.'
-
   const events: HomeEvent[] = [
     ...data.conversations.map(
       (conversation): HomeEvent => ({
@@ -496,18 +474,43 @@ function NowView({
     setRecallFilter('all')
   }
   const nextTask = upcomingTasks[0]
-  let homeSummary = 'Nothing needs your attention right now.'
+  let homeSummary = `${events.length} saved ${
+    events.length === 1 ? 'item' : 'items'
+  } in your context.`
   if (proposedTasks.length) {
     homeSummary = `${proposedTasks.length} suggested ${
       proposedTasks.length === 1 ? 'task needs' : 'tasks need'
     } your review.`
   } else if (nextTask) {
-    homeSummary = `Your next reminder is ${relativeTime(nextTask.dueAt)}.`
+    homeSummary = `Next reminder ${relativeTime(nextTask.dueAt)}.`
   } else if (activeWatches.length) {
     homeSummary = `${activeWatches.length} ${
-      activeWatches.length === 1 ? 'watch is' : 'watches are'
-    } running quietly in the background.`
+      activeWatches.length === 1 ? 'active watch' : 'active watches'
+    }.`
   }
+
+  const homeStats = [
+    {
+      id: 'conversations' as const,
+      label: 'Conversations',
+      value: data.conversations.length,
+    },
+    {
+      id: 'memories' as const,
+      label: 'Memories',
+      value: data.memories.length,
+    },
+    {
+      id: 'watches' as const,
+      label: 'Active watches',
+      value: activeWatches.length,
+    },
+    {
+      id: 'tasks' as const,
+      label: 'Open tasks',
+      value: proposedTasks.length + upcomingTasks.length,
+    },
+  ]
 
   const nextActions: HomeAction[] = []
   if (proposedTasks.length) {
@@ -555,15 +558,21 @@ function NowView({
       <section className="home-focus" aria-labelledby="home-title">
         <div className="home-focus__body">
           <div className="home-focus__heading">
-            <p className="section-label">Now</p>
-            <h1 id="home-title">{greetingForTime(currentTime)}.</h1>
-            <p>{homeSummary}</p>
+            <p className="section-label">Overview</p>
+            <h1 id="home-title">{homeSummary}</h1>
           </div>
-          <div className="home-focus__handoff">
-            <span>
-              {assistantResponse ? 'Last from your assistant' : 'Assistant'}
-            </span>
-            <p>{shorten(displayResponse, 210)}</p>
+          <div className="home-stats" aria-label="Workspace totals">
+            {homeStats.map((item) => (
+              <button
+                className="home-stat"
+                type="button"
+                key={item.id}
+                onClick={() => onNavigate(item.id)}
+              >
+                <strong>{item.value}</strong>
+                <span>{item.label}</span>
+              </button>
+            ))}
           </div>
         </div>
 
@@ -615,11 +624,8 @@ function NowView({
         <section className="home-stream" aria-labelledby="home-stream-title">
           <header className="home-section-head">
             <div>
-              <p className="section-label">
-                {recallActive ? 'Recall results' : 'Recent & upcoming'}
-              </p>
               <h2 id="home-stream-title">
-                {recallActive ? 'What matches' : 'Around now'}
+                {recallActive ? 'Search results' : 'Recent & upcoming'}
               </h2>
             </div>
             <div className="home-section-head__meta">
@@ -643,23 +649,18 @@ function NowView({
             ))}
             {filteredEvents.length === 0 ? (
               <div className="home-no-results">
-                <p className="section-label">
-                  {recallActive ? 'No match yet' : 'No context yet'}
-                </p>
-                <h3>
-                  {recallActive ? 'Try a broader word.' : 'Start with a memory.'}
-                </h3>
                 <p>
                   {recallActive
-                    ? 'Search a person, topic, place, or decision—or return to all of your context.'
-                    : 'Add something useful and your assistant will keep it close for later.'}
+                    ? normalizedQuery
+                      ? `No results for "${recallQuery.trim()}".`
+                      : 'No items in this category.'
+                    : 'No saved conversations, memories, reminders, or watches.'}
                 </p>
-                <button
-                  type="button"
-                  onClick={recallActive ? resetRecall : onAddMemory}
-                >
-                  {recallActive ? 'Show all context' : 'Remember something'}
-                </button>
+                {recallActive ? (
+                  <button type="button" onClick={resetRecall}>
+                    Clear search and filters
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -668,8 +669,7 @@ function NowView({
         <aside className="home-actions" aria-labelledby="home-actions-title">
           <header className="home-section-head">
             <div>
-              <p className="section-label">Ready for you</p>
-              <h2 id="home-actions-title">Next actions</h2>
+              <h2 id="home-actions-title">Actions</h2>
             </div>
           </header>
           <div className="home-action-stack">
@@ -1336,7 +1336,6 @@ export function Workspace({
   data,
   email,
   glassesStatus,
-  latestResponse,
   dataError,
   isDemo,
   onCreateMemory,
@@ -1480,7 +1479,6 @@ export function Workspace({
           {view === 'now' ? (
             <NowView
               data={data}
-              latestResponse={latestResponse}
               onNavigate={navigate}
               onAddMemory={() => setComposerOpen(true)}
               currentTime={now}
