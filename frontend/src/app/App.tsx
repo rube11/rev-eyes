@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { FocusEvent, FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 
 import {
@@ -67,22 +67,6 @@ function LoadingScreen({ label = 'Opening your assistant' }: { label?: string })
   )
 }
 
-function AuthGlasses() {
-  return (
-    <svg
-      className="auth-glasses"
-      viewBox="0 0 420 170"
-      fill="none"
-      aria-hidden="true"
-    >
-      <path d="M8 62 44 76M412 62l-36 14" />
-      <path d="M47 74c10-23 42-31 83-25 40 5 60 22 63 50 2 32-20 54-67 56-50 3-74-17-80-51-2-12-2-22 1-30Z" />
-      <path d="M373 74c-10-23-42-31-83-25-40 5-60 22-63 50-2 32 20 54 67 56 50 3 74-17 80-51 2-12 2-22-1-30Z" />
-      <path d="M192 91c10-11 26-11 36 0" />
-    </svg>
-  )
-}
-
 function SignIn({
   email,
   password,
@@ -100,15 +84,62 @@ function SignIn({
   onPasswordChange: (value: string) => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
 }) {
+  const authRef = useRef<HTMLElement>(null)
+  const focusRevealTimer = useRef<number | undefined>(undefined)
+
+  useEffect(() => {
+    const viewport = window.visualViewport
+    let animationFrame: number | undefined
+
+    const keepFocusedFieldVisible = () => {
+      if (animationFrame !== undefined) {
+        window.cancelAnimationFrame(animationFrame)
+      }
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = undefined
+        const focused = document.activeElement
+        if (
+          focused instanceof HTMLInputElement &&
+          authRef.current?.contains(focused)
+        ) {
+          focused.scrollIntoView({ block: 'center', inline: 'nearest' })
+        }
+      })
+    }
+
+    viewport?.addEventListener('resize', keepFocusedFieldVisible)
+    return () => {
+      viewport?.removeEventListener('resize', keepFocusedFieldVisible)
+      if (animationFrame !== undefined) {
+        window.cancelAnimationFrame(animationFrame)
+      }
+      if (focusRevealTimer.current !== undefined) {
+        window.clearTimeout(focusRevealTimer.current)
+      }
+    }
+  }, [])
+
+  const handleFieldFocus = (event: FocusEvent<HTMLInputElement>) => {
+    const field = event.currentTarget
+    if (focusRevealTimer.current !== undefined) {
+      window.clearTimeout(focusRevealTimer.current)
+    }
+    focusRevealTimer.current = window.setTimeout(() => {
+      focusRevealTimer.current = undefined
+      if (document.activeElement === field) {
+        field.scrollIntoView({ block: 'center', inline: 'nearest' })
+      }
+    }, 250)
+  }
+
   return (
-    <main className="auth">
+    <main className="auth" ref={authRef}>
       <section className="auth-brand">
         <div className="auth-brand__top">
           <span className="auth-wordmark">rev/eyes</span>
           <span className="auth-edition">Wearable assistant</span>
         </div>
         <div className="auth-brand__statement">
-          <AuthGlasses />
           <h1>Your assistant, in one place.</h1>
           <p>
             Revisit conversations, manage memories, and see what is coming up.
@@ -133,6 +164,7 @@ function SignIn({
               autoComplete="email"
               value={email}
               onChange={(event) => onEmailChange(event.target.value)}
+              onFocus={handleFieldFocus}
               placeholder="you@example.com"
               required
             />
@@ -144,6 +176,7 @@ function SignIn({
               autoComplete="current-password"
               value={password}
               onChange={(event) => onPasswordChange(event.target.value)}
+              onFocus={handleFieldFocus}
               placeholder="••••••••••••"
               required
             />
