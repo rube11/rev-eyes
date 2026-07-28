@@ -93,8 +93,8 @@ func TestHandleUtterancePersistsFinalizedTranscriptInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleUtterance() error = %v", err)
 	}
-	if response != "Here you go." {
-		t.Fatalf("response = %q", response)
+	if response.Text != "Here you go." || response.AwaitingConfirmation {
+		t.Fatalf("response = %+v", response)
 	}
 
 	want := []string{
@@ -104,6 +104,60 @@ func TestHandleUtterancePersistsFinalizedTranscriptInOrder(t *testing.T) {
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestHandleUtteranceMarksProposalsAwaitingConfirmation(t *testing.T) {
+	for _, action := range []assistant.Action{
+		assistant.ActionProposeTask,
+		assistant.ActionProposeWatch,
+	} {
+		t.Run(string(action), func(t *testing.T) {
+			transcripts := fakeTranscriptStore{
+				append: func(
+					context.Context,
+					tool.Scope,
+					session.Speaker,
+					string,
+				) (string, error) {
+					return "utterance-123", nil
+				},
+			}
+			service := fakeUtteranceService{
+				handle: func(
+					context.Context,
+					tool.Scope,
+					string,
+					string,
+				) (assistant.Outcome, error) {
+					return assistant.Outcome{
+						Decision: assistant.Decision{Action: action},
+						Response: "Should I do that?",
+					}, nil
+				},
+			}
+			memories := fakeMemoryStore{
+				remember: func(context.Context, tool.Scope, string, memory.Card) error {
+					t.Fatal("Remember() was called")
+					return nil
+				},
+			}
+
+			response, err := handleUtterance(
+				context.Background(),
+				tool.Scope{UserID: "user-123", SessionID: "session-123"},
+				"Please do something later.",
+				service,
+				transcripts,
+				memories,
+			)
+			if err != nil {
+				t.Fatalf("handleUtterance() error = %v", err)
+			}
+			if response.Text != "Should I do that?" || !response.AwaitingConfirmation {
+				t.Fatalf("response = %+v", response)
+			}
+		})
 	}
 }
 
@@ -177,8 +231,8 @@ func TestHandleUtterancePersistsExplicitMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleUtterance() error = %v", err)
 	}
-	if response != memoryAcknowledgment {
-		t.Fatalf("response = %q", response)
+	if response.Text != memoryAcknowledgment || response.AwaitingConfirmation {
+		t.Fatalf("response = %+v", response)
 	}
 
 	want := []string{

@@ -252,7 +252,11 @@ func run() error {
 		) error {
 			return notificationService.Acknowledge(ctx, scope.UserID, notificationID)
 		},
-		Utterance: func(ctx context.Context, scope tool.Scope, utterance string) (string, error) {
+		Utterance: func(
+			ctx context.Context,
+			scope tool.Scope,
+			utterance string,
+		) (realtime.UtteranceResult, error) {
 			return handleUtterance(
 				ctx,
 				scope,

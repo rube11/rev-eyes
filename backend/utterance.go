@@ -8,6 +8,7 @@ import (
 
 	"github.com/rube11/rev-eyes/backend/internal/assistant"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
+	"github.com/rube11/rev-eyes/backend/internal/realtime"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
@@ -33,21 +34,21 @@ func handleUtterance(
 	service utteranceService,
 	transcripts transcriptStore,
 	memories memoryStore,
-) (string, error) {
+) (realtime.UtteranceResult, error) {
 	utteranceID, err := transcripts.Append(ctx, scope, session.SpeakerUser, utterance)
 	if err != nil {
-		return "", fmt.Errorf("persist user utterance: %w", err)
+		return realtime.UtteranceResult{}, fmt.Errorf("persist user utterance: %w", err)
 	}
 
 	outcome, err := service.HandleUtterance(ctx, scope, utteranceID, utterance)
 	if err != nil {
-		return "", err
+		return realtime.UtteranceResult{}, err
 	}
 
 	response := outcome.Response
 	if outcome.Decision.Action == assistant.ActionRemember {
 		if outcome.Decision.Memory == nil {
-			return "", errors.New("remember decision has no memory card")
+			return realtime.UtteranceResult{}, errors.New("remember decision has no memory card")
 		}
 		if err := memories.Remember(
 			ctx,
@@ -55,7 +56,7 @@ func handleUtterance(
 			utteranceID,
 			*outcome.Decision.Memory,
 		); err != nil {
-			return "", fmt.Errorf("persist memory: %w", err)
+			return realtime.UtteranceResult{}, fmt.Errorf("persist memory: %w", err)
 		}
 		response = memoryAcknowledgment
 	}
@@ -67,7 +68,7 @@ func handleUtterance(
 			session.SpeakerAssistant,
 			response,
 		); err != nil {
-			return "", fmt.Errorf("persist assistant utterance: %w", err)
+			return realtime.UtteranceResult{}, fmt.Errorf("persist assistant utterance: %w", err)
 		}
 	}
 
@@ -75,5 +76,9 @@ func handleUtterance(
 		"action", outcome.Decision.Action,
 		"responded", response != "",
 	)
-	return response, nil
+	return realtime.UtteranceResult{
+		Text: response,
+		AwaitingConfirmation: outcome.Decision.Action == assistant.ActionProposeTask ||
+			outcome.Decision.Action == assistant.ActionProposeWatch,
+	}, nil
 }

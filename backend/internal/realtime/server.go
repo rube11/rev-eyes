@@ -34,7 +34,16 @@ const (
 )
 
 type Authenticator func(ticket string) (tool.Scope, error)
-type UtteranceHandler func(ctx context.Context, scope tool.Scope, utterance string) (string, error)
+type UtteranceResult struct {
+	Text                 string
+	AwaitingConfirmation bool
+}
+
+type UtteranceHandler func(
+	ctx context.Context,
+	scope tool.Scope,
+	utterance string,
+) (UtteranceResult, error)
 type LocationHandler func(ctx context.Context, scope tool.Scope, update LocationUpdate) error
 type NotificationAckHandler func(ctx context.Context, scope tool.Scope, notificationID string) error
 
@@ -61,10 +70,11 @@ type clientMessage struct {
 }
 
 type serverMessage struct {
-	Type  string `json:"type"`
-	ID    string `json:"id,omitempty"`
-	Text  string `json:"text,omitempty"`
-	Error string `json:"error,omitempty"`
+	Type                 string `json:"type"`
+	ID                   string `json:"id,omitempty"`
+	Text                 string `json:"text,omitempty"`
+	Error                string `json:"error,omitempty"`
+	AwaitingConfirmation bool   `json:"awaiting_confirmation,omitempty"`
 }
 
 type jsonWriter interface {
@@ -309,7 +319,7 @@ func (s *Server) transcribeConnection(
 		}); err != nil {
 			return fmt.Errorf("write assistant thinking state: %w", err)
 		}
-		response, err := s.handlers.Utterance(ctx, scope, utterance)
+		result, err := s.handlers.Utterance(ctx, scope, utterance)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -322,7 +332,7 @@ func (s *Server) transcribeConnection(
 			}
 			continue
 		}
-		response = strings.TrimSpace(response)
+		response := strings.TrimSpace(result.Text)
 		if response == "" {
 			if err := writer.WriteJSON(serverMessage{
 				Type: assistantDoneMessageType,
@@ -332,8 +342,9 @@ func (s *Server) transcribeConnection(
 			continue
 		}
 		if err := writer.WriteJSON(serverMessage{
-			Type: assistantResponseMessageType,
-			Text: response,
+			Type:                 assistantResponseMessageType,
+			Text:                 response,
+			AwaitingConfirmation: result.AwaitingConfirmation,
 		}); err != nil {
 			return fmt.Errorf("write assistant response: %w", err)
 		}

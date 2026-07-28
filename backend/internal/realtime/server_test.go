@@ -53,10 +53,10 @@ func TestTranscribeConnectionKeepsUtterancesWithConnectionContext(t *testing.T) 
 			ctx context.Context,
 			scope tool.Scope,
 			utterance string,
-		) (string, error) {
+		) (UtteranceResult, error) {
 			connection := ctx.Value(connectionKey{}).(string)
 			received <- connection + ":" + scope.SessionID + ":" + utterance
-			return "", nil
+			return UtteranceResult{}, nil
 		},
 	})
 
@@ -147,9 +147,12 @@ func TestServerExchangesScopedLocationAndAssistantMessages(t *testing.T) {
 			_ context.Context,
 			scope tool.Scope,
 			utterance string,
-		) (string, error) {
+		) (UtteranceResult, error) {
 			utteranceScopes <- scope
-			return "reply to " + utterance, nil
+			return UtteranceResult{
+				Text:                 "reply to " + utterance,
+				AwaitingConfirmation: true,
+			}, nil
 		},
 		Disconnect: func(scope tool.Scope) {
 			disconnected <- scope
@@ -192,7 +195,9 @@ func TestServerExchangesScopedLocationAndAssistantMessages(t *testing.T) {
 	if err := conn.ReadJSON(&response); err != nil {
 		t.Fatalf("ReadJSON() error = %v", err)
 	}
-	if response.Type != assistantResponseMessageType || response.Text != "reply to where am I" {
+	if response.Type != assistantResponseMessageType ||
+		response.Text != "reply to where am I" ||
+		!response.AwaitingConfirmation {
 		t.Fatalf("response = %+v", response)
 	}
 
@@ -227,8 +232,8 @@ func TestServerStopsThinkingWhenUtteranceHasNoResponse(t *testing.T) {
 		Authenticate: func(string) (tool.Scope, error) {
 			return tool.Scope{UserID: "user", SessionID: "session"}, nil
 		},
-		Utterance: func(context.Context, tool.Scope, string) (string, error) {
-			return "", nil
+		Utterance: func(context.Context, tool.Scope, string) (UtteranceResult, error) {
+			return UtteranceResult{}, nil
 		},
 	})
 	httpServer := httptest.NewServer(server)
@@ -329,11 +334,15 @@ func TestDisconnectCancelsUtterance(t *testing.T) {
 		Authenticate: func(string) (tool.Scope, error) {
 			return tool.Scope{UserID: "user", SessionID: "session"}, nil
 		},
-		Utterance: func(ctx context.Context, _ tool.Scope, _ string) (string, error) {
+		Utterance: func(
+			ctx context.Context,
+			_ tool.Scope,
+			_ string,
+		) (UtteranceResult, error) {
 			close(started)
 			<-ctx.Done()
 			close(canceled)
-			return "", ctx.Err()
+			return UtteranceResult{}, ctx.Err()
 		},
 	})
 	httpServer := httptest.NewServer(server)
@@ -404,8 +413,12 @@ func TestServerControlsTranscriptionLifecycle(t *testing.T) {
 			processed <- struct{}{}
 			return nil
 		},
-		Utterance: func(_ context.Context, _ tool.Scope, utterance string) (string, error) {
-			return "reply to " + utterance, nil
+		Utterance: func(
+			_ context.Context,
+			_ tool.Scope,
+			utterance string,
+		) (UtteranceResult, error) {
+			return UtteranceResult{Text: "reply to " + utterance}, nil
 		},
 	})
 	httpServer := httptest.NewServer(server)
