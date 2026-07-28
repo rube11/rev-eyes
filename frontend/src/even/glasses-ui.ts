@@ -181,6 +181,7 @@ function resultText(item: string, index: number): string {
 
 export function buildMessagePage(
   message: GlassesMessage,
+  action = "TAP TO DISMISS",
 ): RebuildPageContainer {
   const label = message.kind.toUpperCase()
   const content = message.kind === "results"
@@ -202,7 +203,7 @@ export function buildMessagePage(
       paddingLength: 14,
       containerID: 1,
       containerName: `${message.kind}-output`,
-      content: `${content}\n\nTAP TO DISMISS`,
+      content: `${content}\n\n${action}`,
       isEventCapture: 1,
     }),
   ])

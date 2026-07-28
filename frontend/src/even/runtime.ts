@@ -29,6 +29,7 @@ type ServerMessage = {
   id?: string
   text?: string
   error?: string
+  awaitingConfirmation?: boolean
 }
 
 type ListeningState = "idle" | "starting" | "listening" | "stopping"
@@ -36,6 +37,10 @@ type DisplaySurface = "compact" | "message" | "offline" | "sleep" | "transcript"
 type NotificationPresentation = {
   id: string
   message: GlassesMessage
+}
+type AssistantPresentation = {
+  message: GlassesMessage
+  awaitingConfirmation: boolean
 }
 type SocketBinding = {
   socket: WebSocket
@@ -213,6 +218,11 @@ function parseServerMessage(data: unknown): ServerMessage | undefined {
       error: "error" in value && typeof value.error === "string"
         ? value.error
         : undefined,
+      awaitingConfirmation:
+        "awaiting_confirmation" in value &&
+        typeof value.awaiting_confirmation === "boolean"
+          ? value.awaiting_confirmation
+          : undefined,
     }
   } catch {
     return undefined
@@ -304,8 +314,8 @@ export async function initializeEvenExperience(
   let locationStarted = false
   let awaitingResponse = false
   let sleeping = false
-  let visibleAssistant: GlassesMessage | undefined
-  let deferredAssistant: GlassesMessage | undefined
+  let visibleAssistant: AssistantPresentation | undefined
+  let deferredAssistant: AssistantPresentation | undefined
   let currentNotification: NotificationPresentation | undefined
   const notificationQueue: NotificationPresentation[] = []
   const seenNotificationIds = new Set<string>()
@@ -474,6 +484,19 @@ export async function initializeEvenExperience(
     await setPage(buildMessagePage(presentation), "message")
   }
 
+  async function showAssistantPresentation(
+    presentation: AssistantPresentation,
+  ) {
+    clearThinkingAnimation()
+    await setPage(
+      buildMessagePage(
+        presentation.message,
+        presentation.awaitingConfirmation ? "TAP TO RESPOND" : "TAP TO DISMISS",
+      ),
+      "message",
+    )
+  }
+
   async function showIdlePrompt(prompt: string) {
     clearThinkingAnimation()
     idlePrompt = prompt
@@ -521,7 +544,7 @@ export async function initializeEvenExperience(
     if (deferredAssistant) {
       visibleAssistant = deferredAssistant
       deferredAssistant = undefined
-      await showPresentation(visibleAssistant)
+      await showAssistantPresentation(visibleAssistant)
       return
     }
     await showReady()
@@ -546,7 +569,7 @@ export async function initializeEvenExperience(
       visibleAssistant = deferredAssistant
       deferredAssistant = undefined
       reportStatus("Connected")
-      await showPresentation(visibleAssistant)
+      await showAssistantPresentation(visibleAssistant)
       return
     }
     if (listeningState === "listening" || listeningState === "starting") {
@@ -758,9 +781,9 @@ export async function initializeEvenExperience(
       } else if (deferredAssistant) {
         visibleAssistant = deferredAssistant
         deferredAssistant = undefined
-        await showPresentation(visibleAssistant)
+        await showAssistantPresentation(visibleAssistant)
       } else if (visibleAssistant) {
-        await showPresentation(visibleAssistant)
+        await showAssistantPresentation(visibleAssistant)
       } else {
         await showReady()
       }
@@ -898,7 +921,10 @@ export async function initializeEvenExperience(
           return
         }
         onResponse(message.text)
-        const presentation = presentGlassesMessage(message.text)
+        const presentation: AssistantPresentation = {
+          message: presentGlassesMessage(message.text),
+          awaitingConfirmation: message.awaitingConfirmation === true,
+        }
         awaitingResponse = false
         clearThinkingAnimation()
         if (listeningState !== "idle") {
@@ -913,7 +939,8 @@ export async function initializeEvenExperience(
         }
 
         const wakesSleepingInterface =
-          presentation.kind === "reminder" || presentation.kind === "update"
+          presentation.message.kind === "reminder" ||
+          presentation.message.kind === "update"
         if (currentNotification) {
           deferredAssistant = presentation
           return
@@ -925,7 +952,7 @@ export async function initializeEvenExperience(
         sleeping = false
         visibleAssistant = presentation
         reportStatus("Connected")
-        await showPresentation(presentation)
+        await showAssistantPresentation(presentation)
         return
       }
 
@@ -1003,9 +1030,12 @@ export async function initializeEvenExperience(
     }
 
     if (surface === "message" && visibleAssistant) {
+      const shouldRespond = visibleAssistant.awaitingConfirmation
       visibleAssistant = undefined
-      await showReady()
-      return
+      if (!shouldRespond) {
+        await showReady()
+        return
+      }
     }
     if (surface === "transcript") {
       await showReady()
