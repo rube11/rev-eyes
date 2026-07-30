@@ -20,9 +20,9 @@ if [[ ! "$frontend_origins" =~ ^${origin_pattern}(,${origin_pattern})*$ ]]; then
   exit 2
 fi
 
-migration_name=0013_harden_scheduled_jobs_and_watch_limits.sql
+migration_name=0014_move_workspace_commands_to_go.sql
 migration_source="migrations/$migration_name"
-migration_unit="rev-eyes-migrate-0013-$(date +%s)"
+migration_unit="rev-eyes-migrate-0014-$(date +%s)"
 backend_binary=$(mktemp)
 migration_binary=$(mktemp)
 trap 'rm -f "$backend_binary" "$migration_binary"' EXIT

@@ -38,8 +38,13 @@ waiting in the scheduler dead-letter queue.
 
 ## Backend deployment
 
-Deploy migration 0013 and the backend without copying or printing environment
-secrets:
+For the workspace command migration, rerun the foundation bootstrap first so
+the registrar role can delete schedules. Then deploy the scheduler stack before
+deploying the backend.
+
+Deploy migration 0014 and the backend without copying or printing environment
+secrets. Migration 0014 expands the schedule outbox for cancellation while
+leaving the existing workspace RPCs available during the frontend cutover:
 
 ```bash
 infra/deploy-backend-code.sh \
@@ -53,6 +58,11 @@ root-owned `/etc/rev-eyes/backend.env` file on the server. The deployment
 updates only `BETA_ALLOWED_EMAILS` and `FRONTEND_ORIGIN`; it does not copy or
 print the other environment values. It also backs up both the current binary
 and environment file before restarting.
+
+After the new frontend is live and its workspace actions are verified, apply
+`migrations/0015_retire_workspace_command_rpcs.sql` with the installed
+`/opt/rev-eyes/migrate` binary. This keeps the old frontend functional until
+the Go command endpoints have completed their production cutover.
 
 `BETA_ALLOWED_EMAILS` is enforced from the signed Supabase access token before
 the backend creates a session or WebSocket ticket. Use a comma-separated list
