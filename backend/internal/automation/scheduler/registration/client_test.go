@@ -2,6 +2,7 @@ package registration
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +30,7 @@ func TestClientRegistersReminder(t *testing.T) {
 	dueAt := time.Now().Add(time.Hour)
 	err = client.Register(context.Background(), Registration{
 		ID:         "registration-id",
+		Operation:  OperationRegister,
 		Kind:       KindReminder,
 		ResourceID: "resource-id",
 		ScheduleAt: &dueAt,
@@ -70,6 +72,7 @@ func TestClientReturnsRegistrarError(t *testing.T) {
 	endAt := time.Now().Add(24 * time.Hour)
 	err := client.Register(context.Background(), Registration{
 		ID:              "registration-id",
+		Operation:       OperationRegister,
 		Kind:            KindWatch,
 		ResourceID:      "resource-id",
 		IntervalMinutes: 60,
@@ -77,5 +80,40 @@ func TestClientReturnsRegistrarError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Register() error = nil")
+	}
+}
+
+func TestClientSendsScheduleCancellation(t *testing.T) {
+	t.Parallel()
+
+	var gotOperation Operation
+	server := httptest.NewTLSServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		var body Registration
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("Decode() error = %v", err)
+		}
+		gotOperation = body.Operation
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	err = client.Register(context.Background(), Registration{
+		ID:         "cancellation-id",
+		Operation:  OperationCancel,
+		Kind:       KindWatch,
+		ResourceID: "resource-id",
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if gotOperation != OperationCancel {
+		t.Fatalf("operation = %q", gotOperation)
 	}
 }
