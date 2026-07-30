@@ -5,6 +5,10 @@ export type WorkspaceView =
   | 'watches'
   | 'tasks'
 
+export type AutomationKind = 'reminder' | 'watch'
+
+export type ProposalDecision = 'accepted' | 'rejected'
+
 export type Speaker = 'user' | 'assistant' | 'unknown'
 
 export type TranscriptItem = {

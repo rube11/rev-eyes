@@ -1,9 +1,12 @@
 import { supabase } from '../../shared/api/supabase'
+import { env } from '../../shared/config/env'
 import type {
+  AutomationKind,
   ConversationItem,
   MemoryItem,
   MemoryKind,
   NewMemoryInput,
+  ProposalDecision,
   TaskItem,
   TranscriptItem,
   WatchItem,
@@ -245,6 +248,83 @@ export async function saveMemory(
   }
 
   return mapMemory(data as MemoryRow)
+}
+
+function workspaceActionError(code: string, status: number): string {
+  if (status === 401) {
+    return 'Please sign in again to update this item.'
+  }
+  if (code === 'reminder_time_passed') {
+    return 'That reminder time has already passed.'
+  }
+  if (code === 'watch_expired') {
+    return 'That watch has already expired.'
+  }
+  if (code === 'watch_limit_reached') {
+    return 'You can have at most five active watches.'
+  }
+  if (code === 'not_found') {
+    return 'This item changed or was already removed. Refresh and try again.'
+  }
+  return 'We could not update this item. Please try again.'
+}
+
+async function runWorkspaceAction(
+  accessToken: string,
+  path: string,
+  init: RequestInit,
+): Promise<void> {
+  const response = await fetch(`${env.apiBaseUrl}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+    },
+  })
+  if (response.ok) {
+    return
+  }
+
+  let code = ''
+  try {
+    const body = (await response.json()) as { error?: unknown }
+    if (typeof body.error === 'string') {
+      code = body.error
+    }
+  } catch {
+    // Use the stable fallback below when the backend did not return JSON.
+  }
+  throw new Error(workspaceActionError(code, response.status))
+}
+
+export async function resolveWorkspaceProposal(
+  accessToken: string,
+  kind: AutomationKind,
+  resourceId: string,
+  decision: ProposalDecision,
+): Promise<void> {
+  await runWorkspaceAction(
+    accessToken,
+    `/workspace/automations/${encodeURIComponent(kind)}/${encodeURIComponent(resourceId)}/decision`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ decision }),
+    },
+  )
+}
+
+export async function deleteWorkspaceAutomation(
+  accessToken: string,
+  kind: AutomationKind,
+  resourceId: string,
+): Promise<void> {
+  await runWorkspaceAction(
+    accessToken,
+    `/workspace/automations/${encodeURIComponent(kind)}/${encodeURIComponent(resourceId)}`,
+    {
+      method: 'DELETE',
+    },
+  )
 }
 
 const minute = 60_000
