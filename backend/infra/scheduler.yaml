@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Creates one-time reminder and recurring web-watch schedules for rev-eyes.
+Description: Creates and cancels one-time reminder and recurring web-watch schedules for rev-eyes.
 
 Parameters:
   BackendBaseUrl:
@@ -169,7 +169,7 @@ Resources:
       - ScheduleRegistrarLogGroup
     Properties:
       FunctionName: !Sub '${ResourcePrefix}-schedule-registrar'
-      Description: Registers rev-eyes reminders and web watches with EventBridge Scheduler.
+      Description: Registers and cancels rev-eyes reminders and web watches with EventBridge Scheduler.
       Architectures:
         - arm64
       Runtime: python3.13
@@ -244,6 +244,9 @@ Resources:
           def detail_type(kind):
               return "ReminderDue" if kind == "reminder" else "WatchDue"
 
+          def schedule_name(kind, resource_id):
+              return f"{resource_prefix}-{kind}-{resource_id}"
+
           def publish(kind, resource_id):
               result = events.put_events(
                   Entries=[{
@@ -274,7 +277,7 @@ Resources:
 
           def create_schedule(kind, resource_id, expression, **parameters):
               request = {
-                  "Name": f"{resource_prefix}-{kind}-{resource_id}",
+                  "Name": schedule_name(kind, resource_id),
                   "GroupName": schedule_group,
                   "ScheduleExpression": expression,
                   "FlexibleTimeWindow": {"Mode": "OFF"},
@@ -288,6 +291,16 @@ Resources:
               try:
                   scheduler.create_schedule(**request)
               except scheduler.exceptions.ConflictException:
+                  return
+
+          def delete_schedule(kind, resource_id):
+              try:
+                  scheduler.delete_schedule(
+                      Name=schedule_name(kind, resource_id),
+                      GroupName=schedule_group,
+                      ClientToken=f"cancel-{kind}-{resource_id}",
+                  )
+              except scheduler.exceptions.ResourceNotFoundException:
                   return
 
           def request_body(event):
@@ -315,12 +328,18 @@ Resources:
 
               try:
                   body = request_body(event)
+                  operation = body.get("operation", "register")
                   kind = body.get("kind")
                   resource_id = body.get("resource_id")
+                  if operation not in {"register", "cancel"}:
+                      raise ValueError("operation must be register or cancel")
                   if kind not in {"reminder", "watch"}:
                       raise ValueError("kind must be reminder or watch")
                   if not isinstance(resource_id, str) or not uuid_pattern.fullmatch(resource_id):
                       raise ValueError("resource_id must be a UUID")
+                  if operation == "cancel":
+                      delete_schedule(kind, resource_id)
+                      return api_response(200, {"status": "cancelled"})
 
                   now = datetime.now(timezone.utc)
                   if kind == "reminder":
@@ -368,7 +387,7 @@ Resources:
     Type: AWS::ApiGateway::RestApi
     Properties:
       Name: !Sub '${ResourcePrefix}-schedule-registration'
-      Description: Accepts schedule registrations only from the rev-eyes backend static IP.
+      Description: Accepts schedule operations only from the rev-eyes backend static IP.
       EndpointConfiguration:
         IpAddressType: ipv4
         Types:
@@ -439,7 +458,7 @@ Resources:
 
 Outputs:
   ScheduleRegistrarUrl:
-    Description: Source-IP-restricted endpoint used by the backend to register schedules.
+    Description: Source-IP-restricted endpoint used by the backend to manage schedules.
     Value: !Sub 'https://${ScheduleRegistrationApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/v1/schedules'
   ScheduleGroupName:
     Description: EventBridge Scheduler group containing rev-eyes schedules.

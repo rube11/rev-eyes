@@ -8,11 +8,15 @@ import {
 } from '../even/runtime'
 import {
   createDemoWorkspaceData,
+  deleteWorkspaceAutomation,
   loadWorkspaceData,
+  resolveWorkspaceProposal,
   saveMemory,
 } from '../features/workspace/workspaceData'
 import type {
+  AutomationKind,
   NewMemoryInput,
+  ProposalDecision,
   WorkspaceData,
 } from '../features/workspace/workspaceTypes'
 import { Workspace } from '../features/workspace/Workspace'
@@ -473,6 +477,90 @@ function App() {
     setWorkspaceRefreshRequest((current) => current + 1)
   }
 
+  const resolveAutomation = async (
+    kind: AutomationKind,
+    resourceId: string,
+    decision: ProposalDecision,
+  ) => {
+    if (!isDemoMode) {
+      if (!session?.access_token) {
+        throw new Error('Please sign in again to update this item.')
+      }
+      await resolveWorkspaceProposal(
+        session.access_token,
+        kind,
+        resourceId,
+        decision,
+      )
+    }
+
+    const resolvedAt = new Date().toISOString()
+    setWorkspaceData((current) => {
+      if (!current) {
+        return current
+      }
+      if (kind === 'reminder') {
+        return {
+          ...current,
+          tasks: current.tasks.map((task) =>
+            task.id === resourceId
+              ? { ...task, status: decision, resolvedAt }
+              : task,
+          ),
+        }
+      }
+      return {
+        ...current,
+        watches: current.watches.map((watch) =>
+          watch.id === resourceId
+            ? {
+                ...watch,
+                status: decision === 'accepted' ? 'active' : 'rejected',
+                nextCheckAt:
+                  decision === 'accepted' ? resolvedAt : undefined,
+              }
+            : watch,
+        ),
+      }
+    })
+
+    if (!isDemoMode) {
+      setWorkspaceRefreshRequest((current) => current + 1)
+    }
+  }
+
+  const deleteAutomation = async (
+    kind: AutomationKind,
+    resourceId: string,
+  ) => {
+    if (!isDemoMode) {
+      if (!session?.access_token) {
+        throw new Error('Please sign in again to delete this item.')
+      }
+      await deleteWorkspaceAutomation(session.access_token, kind, resourceId)
+    }
+
+    setWorkspaceData((current) =>
+      current
+        ? {
+            ...current,
+            tasks:
+              kind === 'reminder'
+                ? current.tasks.filter((task) => task.id !== resourceId)
+                : current.tasks,
+            watches:
+              kind === 'watch'
+                ? current.watches.filter((watch) => watch.id !== resourceId)
+                : current.watches,
+          }
+        : current,
+    )
+
+    if (!isDemoMode) {
+      setWorkspaceRefreshRequest((current) => current + 1)
+    }
+  }
+
   const signOut = () => {
     if (isDemoMode) {
       const url = new URL(window.location.href)
@@ -493,6 +581,8 @@ function App() {
         latestResponse={latestResponse}
         isDemo
         onCreateMemory={createMemory}
+        onDeleteAutomation={deleteAutomation}
+        onResolveAutomation={resolveAutomation}
         onSignOut={signOut}
       />
     ) : (
@@ -531,6 +621,8 @@ function App() {
       dataError={dataError}
       isDemo={false}
       onCreateMemory={createMemory}
+      onDeleteAutomation={deleteAutomation}
+      onResolveAutomation={resolveAutomation}
       onSignOut={signOut}
     />
   )

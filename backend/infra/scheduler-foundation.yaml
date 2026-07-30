@@ -97,7 +97,7 @@ Resources:
     UpdateReplacePolicy: Retain
     Properties:
       RoleName: !Sub '${ResourcePrefix}-scheduler-registrar'
-      Description: Registers bounded rev-eyes schedules and publishes immediate jobs.
+      Description: Registers and cancels bounded rev-eyes schedules and publishes immediate jobs.
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -111,9 +111,11 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Sid: CreateApplicationSchedules
+              - Sid: ManageApplicationSchedules
                 Effect: Allow
-                Action: scheduler:CreateSchedule
+                Action:
+                  - scheduler:CreateSchedule
+                  - scheduler:DeleteSchedule
                 Resource: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${ResourcePrefix}/*'
               - Sid: PassScheduleTargetRole
                 Effect: Allow

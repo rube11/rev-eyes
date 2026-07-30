@@ -16,10 +16,14 @@ import (
 const maxErrorBodyBytes = 4096
 
 type Kind string
+type Operation string
 
 const (
 	KindReminder Kind = "reminder"
 	KindWatch    Kind = "watch"
+
+	OperationRegister Operation = "register"
+	OperationCancel   Operation = "cancel"
 )
 
 var (
@@ -31,6 +35,7 @@ var (
 
 type Registration struct {
 	ID              string     `json:"-"`
+	Operation       Operation  `json:"operation"`
 	Kind            Kind       `json:"kind"`
 	ResourceID      string     `json:"resource_id"`
 	ScheduleAt      *time.Time `json:"schedule_at,omitempty"`
@@ -41,6 +46,18 @@ type Registration struct {
 
 func (r Registration) validate() error {
 	if strings.TrimSpace(r.ID) == "" || strings.TrimSpace(r.ResourceID) == "" {
+		return ErrRegistrationInvalid
+	}
+	if r.Operation == OperationCancel {
+		if r.Kind != KindReminder && r.Kind != KindWatch {
+			return ErrRegistrationInvalid
+		}
+		if r.ScheduleAt != nil || r.IntervalMinutes != 0 || r.EndAt != nil {
+			return ErrRegistrationInvalid
+		}
+		return nil
+	}
+	if r.Operation != OperationRegister {
 		return ErrRegistrationInvalid
 	}
 	switch r.Kind {

@@ -60,6 +60,7 @@ func TestDispatcherRegistersPendingSchedules(t *testing.T) {
 	repository := &repositoryStub{
 		pending: []Registration{{
 			ID:         "registration-id",
+			Operation:  OperationRegister,
 			Kind:       KindReminder,
 			ResourceID: "resource-id",
 			ScheduleAt: timePointer(time.Now().Add(time.Hour)),
@@ -88,6 +89,7 @@ func TestDispatcherRecordsRegistrationFailure(t *testing.T) {
 	repository := &repositoryStub{
 		pending: []Registration{{
 			ID:         "registration-id",
+			Operation:  OperationRegister,
 			Kind:       KindReminder,
 			ResourceID: "resource-id",
 			ScheduleAt: timePointer(time.Now().Add(time.Hour)),

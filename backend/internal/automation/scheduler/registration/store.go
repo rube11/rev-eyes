@@ -60,6 +60,7 @@ func (s *Store) Claim(ctx context.Context, limit int) ([]Registration, error) {
 		 where registration.id = selected.id
 		 returning
 		     registration.id::text,
+		     registration.operation,
 		     registration.kind,
 		     registration.resource_id::text,
 		     registration.schedule_at,
@@ -79,6 +80,7 @@ func (s *Store) Claim(ctx context.Context, limit int) ([]Registration, error) {
 		var registration Registration
 		if err := rows.Scan(
 			&registration.ID,
+			&registration.Operation,
 			&registration.Kind,
 			&registration.ResourceID,
 			&registration.ScheduleAt,

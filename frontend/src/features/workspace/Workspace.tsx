@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 
 import type {
+  AutomationKind,
   MemoryKind,
   NewMemoryInput,
+  ProposalDecision,
   TaskItem,
   WatchItem,
   WorkspaceData,
@@ -18,6 +20,15 @@ type WorkspaceProps = {
   dataError?: string
   isDemo: boolean
   onCreateMemory: (input: NewMemoryInput) => Promise<void>
+  onDeleteAutomation: (
+    kind: AutomationKind,
+    resourceId: string,
+  ) => Promise<void>
+  onResolveAutomation: (
+    kind: AutomationKind,
+    resourceId: string,
+    decision: ProposalDecision,
+  ) => Promise<void>
   onSignOut: () => void
 }
 
@@ -233,24 +244,6 @@ function NavIcon({ view }: { view: WorkspaceView }) {
   )
 }
 
-function SearchIcon() {
-  return (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      aria-hidden="true"
-    >
-      <circle cx="10.5" cy="10.5" r="6.5" />
-      <path d="m15.5 15.5 5 5" />
-    </svg>
-  )
-}
-
 function StatusMark({ active = false }: { active?: boolean }) {
   return (
     <span
@@ -299,65 +292,65 @@ function PageIntro({
   )
 }
 
-type HomeEvent = {
+type DaybookEntry = {
   id: string
   view: Exclude<WorkspaceView, 'now'>
   label: string
   title: string
   body: string
-  searchText: string
   timestamp: string
 }
 
-type HomeAction = {
-  id: string
-  label: string
-  title: string
-  detail: string
-  symbol?: string
-  onClick: () => void
+function formatDaybookDate(value: string, currentTime: Date): string {
+  const date = new Date(value)
+  const currentDay = new Date(
+    currentTime.getFullYear(),
+    currentTime.getMonth(),
+    currentTime.getDate(),
+  ).getTime()
+  const entryDay = new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+  ).getTime()
+  const difference = Math.round((entryDay - currentDay) / 86_400_000)
+
+  if (difference === 0) return 'Today'
+  if (difference === -1) return 'Yesterday'
+  if (difference === 1) return 'Tomorrow'
+
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  }).format(date)
 }
 
-type HomeFilter = 'all' | Exclude<WorkspaceView, 'now'>
-
-const homeFilters: Array<{ id: HomeFilter; label: string }> = [
-  { id: 'all', label: 'All context' },
-  { id: 'tasks', label: 'Tasks' },
-  { id: 'watches', label: 'Watches' },
-  { id: 'memories', label: 'Memories' },
-  { id: 'conversations', label: 'Conversations' },
-]
-
-function HomeEventRow({
-  event,
+function DaybookRow({
+  entry,
+  currentTime,
   onNavigate,
 }: {
-  event: HomeEvent
+  entry: DaybookEntry
+  currentTime: Date
   onNavigate: (view: WorkspaceView) => void
 }) {
   return (
     <button
-      className="home-event"
+      className="home-daybook-row"
       type="button"
-      onClick={() => onNavigate(event.view)}
+      onClick={() => onNavigate(entry.view)}
     >
-      <span className="home-event__icon">
-        <NavIcon view={event.view} />
+      <time dateTime={entry.timestamp}>
+        <strong>{formatClock(new Date(entry.timestamp))}</strong>
+        <span>{formatDaybookDate(entry.timestamp, currentTime)}</span>
+      </time>
+      <span className="home-daybook-row__content">
+        <small>{entry.label}</small>
+        <strong>{entry.title}</strong>
+        <span>{shorten(entry.body, 120)}</span>
       </span>
-      <span className="home-event__content">
-        <span className="home-event__meta">
-          <small>{event.label}</small>
-          <time
-            dateTime={event.timestamp}
-            title={formatDateTime(event.timestamp)}
-          >
-            {relativeTime(event.timestamp)}
-          </time>
-        </span>
-        <strong>{event.title}</strong>
-        <span>{shorten(event.body, 120)}</span>
-      </span>
-      <span className="home-event__arrow" aria-hidden="true">
+      <span className="home-daybook-row__arrow" aria-hidden="true">
         →
       </span>
     </button>
@@ -375,322 +368,230 @@ function NowView({
   onAddMemory: () => void
   currentTime: Date
 }) {
-  const [recallQuery, setRecallQuery] = useState('')
-  const [recallFilter, setRecallFilter] = useState<HomeFilter>('all')
   const nowTime = currentTime.getTime()
   const activeWatches = data.watches.filter((watch) => watch.status === 'active')
-  const proposedTasks = data.tasks.filter((task) => task.status === 'proposed')
-  const upcomingTasks = data.tasks
-    .filter(
-      (task) =>
-        task.status === 'accepted' &&
-        new Date(task.dueAt).getTime() >= nowTime,
+  const proposedTasks = data.tasks
+    .filter((task) => task.status === 'proposed')
+    .sort(
+      (left, right) =>
+        new Date(right.createdAt).getTime() -
+        new Date(left.createdAt).getTime(),
     )
+  const confirmedTasks = data.tasks.filter(
+    (task) => task.status === 'accepted',
+  )
+  const pastDueTasks = confirmedTasks
+    .filter((task) => new Date(task.dueAt).getTime() < nowTime)
+    .sort(
+      (left, right) =>
+        new Date(right.dueAt).getTime() - new Date(left.dueAt).getTime(),
+    )
+  const upcomingTasks = confirmedTasks
+    .filter((task) => new Date(task.dueAt).getTime() >= nowTime)
     .sort(
       (left, right) =>
         new Date(left.dueAt).getTime() - new Date(right.dueAt).getTime(),
     )
-  const events: HomeEvent[] = [
-    ...data.conversations.map(
-      (conversation): HomeEvent => ({
-        id: `conversation-${conversation.id}`,
-        view: 'conversations',
-        label: 'Conversation',
-        title: conversation.title,
-        body: conversation.summary,
-        searchText: conversation.transcript.map((line) => line.text).join(' '),
-        timestamp: conversation.lastActivityAt,
-      }),
-    ),
-    ...data.memories.map(
-      (memory): HomeEvent => ({
-        id: `memory-${memory.id}`,
-        view: 'memories',
-        label: 'Memory updated',
-        title: memory.title,
-        body: memory.summary,
-        searchText: [memory.kind, ...memory.topics].join(' '),
-        timestamp: memory.updatedAt,
-      }),
-    ),
-    ...upcomingTasks.map(
-      (task): HomeEvent => ({
-        id: `task-${task.id}`,
+  const recentMemories = [...data.memories].sort(
+    (left, right) =>
+      new Date(right.updatedAt).getTime() -
+      new Date(left.updatedAt).getTime(),
+  )
+  const recentConversations = [...data.conversations]
+    .sort(
+      (left, right) =>
+        new Date(right.lastActivityAt).getTime() -
+        new Date(left.lastActivityAt).getTime(),
+    )
+    .slice(0, 4)
+
+  const overdueTask = pastDueTasks[0]
+  const nextTask = upcomingTasks[0]
+  let focusLabel = 'Daily docket'
+  let focusTitle =
+    String(data.conversations.length + data.memories.length) + ' saved items'
+  let focusMeta = 'Nothing needs immediate attention.'
+  let focusView: Exclude<WorkspaceView, 'now'> | undefined
+  let focusActionLabel = ''
+
+  if (overdueTask) {
+    focusLabel = 'Past due · ' + relativeTime(overdueTask.dueAt)
+    focusTitle = overdueTask.title
+    focusMeta = 'Scheduled for ' + formatDateTime(overdueTask.dueAt)
+    focusView = 'tasks'
+    focusActionLabel = 'Open reminder'
+  } else if (proposedTasks.length) {
+    focusLabel = 'Needs a decision'
+    focusTitle =
+      String(proposedTasks.length) +
+      ' suggested ' +
+      (proposedTasks.length === 1 ? 'task' : 'tasks')
+    focusMeta = proposedTasks[0].title
+    focusView = 'tasks'
+    focusActionLabel = 'Review tasks'
+  } else if (nextTask) {
+    focusLabel = 'Next reminder'
+    focusTitle = nextTask.title
+    focusMeta =
+      formatDateTime(nextTask.dueAt) + ' · ' + relativeTime(nextTask.dueAt)
+    focusView = 'tasks'
+    focusActionLabel = 'Open reminder'
+  } else if (activeWatches.length) {
+    focusLabel = 'Active watch'
+    focusTitle = activeWatches[0].query
+    focusMeta = activeWatches[0].condition
+    focusView = 'watches'
+    focusActionLabel = 'View watch'
+  }
+
+  const daybookEntries: DaybookEntry[] = [
+    ...proposedTasks.slice(0, 1).map(
+      (task): DaybookEntry => ({
+        id: 'proposal-' + task.id,
         view: 'tasks',
-        label: 'Upcoming reminder',
+        label: 'Needs review',
         title: task.title,
         body: task.schedule,
-        searchText: task.schedule,
-        timestamp: task.dueAt,
-      }),
-    ),
-    ...proposedTasks.map(
-      (task): HomeEvent => ({
-        id: `proposal-${task.id}`,
-        view: 'tasks',
-        label: 'Task suggested',
-        title: task.title,
-        body: task.schedule,
-        searchText: task.schedule,
         timestamp: task.createdAt,
       }),
     ),
-    ...activeWatches.map(
-      (watch): HomeEvent => ({
-        id: `watch-${watch.id}`,
+    ...upcomingTasks.slice(0, 1).map(
+      (task): DaybookEntry => ({
+        id: 'task-' + task.id,
+        view: 'tasks',
+        label: 'Scheduled reminder',
+        title: task.title,
+        body: task.schedule,
+        timestamp: task.dueAt,
+      }),
+    ),
+    ...recentMemories.slice(0, 1).map(
+      (memory): DaybookEntry => ({
+        id: 'memory-' + memory.id,
+        view: 'memories',
+        label: 'Context updated',
+        title: memory.title,
+        body: memory.summary,
+        timestamp: memory.updatedAt,
+      }),
+    ),
+    ...activeWatches.slice(0, 1).map(
+      (watch): DaybookEntry => ({
+        id: 'watch-' + watch.id,
         view: 'watches',
         label: watch.nextCheckAt ? 'Next watch check' : 'Active watch',
         title: watch.query,
         body: watch.condition,
-        searchText: watch.condition,
         timestamp: watch.nextCheckAt ?? watch.createdAt,
       }),
     ),
-  ]
-  const normalizedQuery = recallQuery.trim().toLowerCase()
-  const filteredEvents = events.filter((event) => {
-    const matchesQuery =
-      !normalizedQuery ||
-      [event.label, event.title, event.body, event.searchText]
-        .join(' ')
-        .toLowerCase()
-        .includes(normalizedQuery)
-    const matchesFilter =
-      recallFilter === 'all' || event.view === recallFilter
-    return matchesQuery && matchesFilter
-  })
-  const recallActive = normalizedQuery.length > 0 || recallFilter !== 'all'
-  const visibleEvents = [...filteredEvents]
-    .sort(
-      (left, right) =>
-        Math.abs(new Date(left.timestamp).getTime() - nowTime) -
-          Math.abs(new Date(right.timestamp).getTime() - nowTime) ||
-        new Date(right.timestamp).getTime() -
-          new Date(left.timestamp).getTime(),
-    )
-    .slice(0, recallActive ? 8 : 6)
-  const resetRecall = () => {
-    setRecallQuery('')
-    setRecallFilter('all')
-  }
-  const nextTask = upcomingTasks[0]
-  let homeSummary = `${events.length} saved ${
-    events.length === 1 ? 'item' : 'items'
-  } in your context.`
-  if (proposedTasks.length) {
-    homeSummary = `${proposedTasks.length} suggested ${
-      proposedTasks.length === 1 ? 'task needs' : 'tasks need'
-    } your review.`
-  } else if (nextTask) {
-    homeSummary = `Next reminder ${relativeTime(nextTask.dueAt)}.`
-  } else if (activeWatches.length) {
-    homeSummary = `${activeWatches.length} ${
-      activeWatches.length === 1 ? 'active watch' : 'active watches'
-    }.`
-  }
+  ].sort(
+    (left, right) =>
+      new Date(left.timestamp).getTime() -
+      new Date(right.timestamp).getTime(),
+  )
 
-  const homeStats = [
-    {
-      id: 'conversations' as const,
-      label: 'Conversations',
-      value: data.conversations.length,
-    },
-    {
-      id: 'memories' as const,
-      label: 'Memories',
-      value: data.memories.length,
-    },
-    {
-      id: 'watches' as const,
-      label: 'Active watches',
-      value: activeWatches.length,
-    },
-    {
-      id: 'tasks' as const,
-      label: 'Open tasks',
-      value: proposedTasks.length + upcomingTasks.length,
-    },
-  ]
+  const daybookSummary =
+    String(pastDueTasks.length).padStart(2, '0') +
+    ' past due · ' +
+    String(proposedTasks.length).padStart(2, '0') +
+    ' need review · ' +
+    String(activeWatches.length).padStart(2, '0') +
+    ' active watches'
 
-  const nextActions: HomeAction[] = []
-  if (proposedTasks.length) {
-    nextActions.push({
-      id: 'proposed-tasks',
-      label: 'Decision',
-      title: `Review ${proposedTasks.length} suggested ${
-        proposedTasks.length === 1 ? 'task' : 'tasks'
-      }`,
-      detail: proposedTasks[0].title,
-      onClick: () => onNavigate('tasks'),
-    })
-  }
-  if (nextTask) {
-    nextActions.push({
-      id: 'next-reminder',
-      label: `Reminder · ${formatDateTime(nextTask.dueAt)}`,
-      title: 'Open your next reminder',
-      detail: nextTask.title,
-      onClick: () => onNavigate('tasks'),
-    })
-  }
-  if (activeWatches.length) {
-    nextActions.push({
-      id: 'active-watches',
-      label: `${activeWatches.length} ${
-        activeWatches.length === 1 ? 'active watch' : 'active watches'
-      }`,
-      title: 'See what you’re waiting on',
-      detail: activeWatches[0].query,
-      onClick: () => onNavigate('watches'),
-    })
-  }
-  nextActions.push({
-    id: 'new-memory',
-    label: 'Memory',
-    title: 'Remember something new',
-    detail: 'Add a fact, preference, person, or plan.',
-    symbol: '＋',
-    onClick: onAddMemory,
-  })
+  const longDay = new Intl.DateTimeFormat(undefined, {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  }).format(currentTime)
 
   return (
-    <div className="home">
-      <section className="home-focus" aria-labelledby="home-title">
-        <div className="home-focus__body">
-          <div className="home-focus__heading">
-            <p className="section-label">Overview</p>
-            <h1 id="home-title">{homeSummary}</h1>
-          </div>
-          <div className="home-stats" aria-label="Workspace totals">
-            {homeStats.map((item) => (
-              <button
-                className="home-stat"
-                type="button"
-                key={item.id}
-                onClick={() => onNavigate(item.id)}
-              >
-                <strong>{item.value}</strong>
-                <span>{item.label}</span>
-              </button>
-            ))}
-          </div>
+    <div className="home home--daybook">
+      <section className="home-docket" aria-labelledby="home-title">
+        <span className="home-docket__index" aria-hidden="true">
+          01
+        </span>
+        <div className="home-docket__heading">
+          <p className="section-label">{focusLabel}</p>
+          <h1 id="home-title">{focusTitle}</h1>
+          <p>{focusMeta}</p>
         </div>
+        {focusView ? (
+          <button
+            className="home-command home-command--primary"
+            type="button"
+            onClick={() => onNavigate(focusView)}
+          >
+            {focusActionLabel}
+            <span aria-hidden="true">→</span>
+          </button>
+        ) : null}
+      </section>
 
-        <div className="home-recall">
-          <form
-            className="home-recall__field"
-            role="search"
-            onSubmit={(event) => event.preventDefault()}
-          >
-            <SearchIcon />
-            <input
-              type="search"
-              value={recallQuery}
-              onChange={(event) => setRecallQuery(event.target.value)}
-              aria-label="Search your history"
-              placeholder="Search people, decisions, reminders, anything…"
-            />
-            {recallQuery ? (
-              <button
-                type="button"
-                onClick={() => setRecallQuery('')}
-                aria-label="Clear recall search"
-              >
-                ×
-              </button>
-            ) : null}
-          </form>
-          <div
-            className="home-lenses"
-            role="group"
-            aria-label="Filter recall results"
-          >
-            {homeFilters.map((filter) => (
-              <button
-                type="button"
-                key={filter.id}
-                className={recallFilter === filter.id ? 'is-active' : ''}
-                aria-pressed={recallFilter === filter.id}
-                onClick={() => setRecallFilter(filter.id)}
-              >
-                {filter.label}
-              </button>
-            ))}
+      <section className="home-daybook" aria-labelledby="home-daybook-title">
+        <header className="home-daybook__date">
+          <div>
+            <p className="section-label">Today</p>
+            <h2 id="home-daybook-title">{longDay}</h2>
+          </div>
+          <p>{daybookSummary}</p>
+        </header>
+
+        <div className="home-daybook__planner">
+          {daybookEntries.length > 0 ? (
+            daybookEntries.map((entry) => (
+              <DaybookRow
+                key={entry.id}
+                entry={entry}
+                currentTime={currentTime}
+                onNavigate={onNavigate}
+              />
+            ))
+          ) : (
+            <p className="home-daybook__clear">No scheduled context today.</p>
+          )}
+          <div className="home-daybook__add">
+            <span className="section-label">Later</span>
+            <button className="home-command" type="button" onClick={onAddMemory}>
+              <span aria-hidden="true">＋</span>
+              Add something to remember
+            </button>
           </div>
         </div>
       </section>
 
-      <div className="home-workbench">
-        <section className="home-stream" aria-labelledby="home-stream-title">
-          <header className="home-section-head">
-            <div>
-              <h2 id="home-stream-title">
-                {recallActive ? 'Search results' : 'Recent & upcoming'}
-              </h2>
-            </div>
-            <div className="home-section-head__meta">
-              <span aria-live="polite">
-                {visibleEvents.length} of {filteredEvents.length}
-              </span>
-              {recallActive ? (
-                <button type="button" onClick={resetRecall}>
-                  Reset
-                </button>
-              ) : null}
-            </div>
-          </header>
-          <div className="home-event-list">
-            {visibleEvents.map((event) => (
-              <HomeEventRow
-                key={event.id}
-                event={event}
-                onNavigate={onNavigate}
-              />
-            ))}
-            {filteredEvents.length === 0 ? (
-              <div className="home-no-results">
-                <p>
-                  {recallActive
-                    ? normalizedQuery
-                      ? `No results for "${recallQuery.trim()}".`
-                      : 'No items in this category.'
-                    : 'No saved conversations, memories, reminders, or watches.'}
-                </p>
-                {recallActive ? (
-                  <button type="button" onClick={resetRecall}>
-                    Clear search and filters
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
+      <section className="home-margins" aria-labelledby="home-margins-title">
+        <header className="home-margins__head">
+          <div>
+            <p className="section-label">Yesterday's margins</p>
+            <h2 id="home-margins-title">Loose context</h2>
           </div>
-        </section>
-
-        <aside className="home-actions" aria-labelledby="home-actions-title">
-          <header className="home-section-head">
-            <div>
-              <h2 id="home-actions-title">Actions</h2>
-            </div>
-          </header>
-          <div className="home-action-stack">
-            {nextActions.map((action) => (
+          <span>{recentConversations.length} recent conversations</span>
+        </header>
+        <div className="home-margins__list">
+          {recentConversations.length > 0 ? (
+            recentConversations.map((conversation) => (
               <button
-                key={action.id}
-                className="home-action"
+                className="home-margin-row"
                 type="button"
-                onClick={action.onClick}
+                key={conversation.id}
+                onClick={() => onNavigate('conversations')}
               >
-                <span className="home-action__copy">
-                  <small>{action.label}</small>
-                  <strong>{action.title}</strong>
-                  <span>{shorten(action.detail, 72)}</span>
+                <time dateTime={conversation.lastActivityAt}>
+                  {relativeTime(conversation.lastActivityAt)}
+                </time>
+                <span>
+                  <strong>{conversation.title}</strong>
+                  <span>{shorten(conversation.summary, 150)}</span>
                 </span>
-                <i aria-hidden="true">{action.symbol ?? '→'}</i>
+                <span aria-hidden="true">→</span>
               </button>
-            ))}
-          </div>
-        </aside>
-      </div>
+            ))
+          ) : (
+            <p className="home-margins__empty">No loose context yet.</p>
+          )}
+        </div>
+      </section>
     </div>
   )
 }
@@ -975,7 +876,143 @@ function MemoriesView({
   )
 }
 
-function WatchRow({ watch }: { watch: WatchItem }) {
+type AutomationActionState = 'approve' | 'decline' | 'delete'
+
+function AutomationActions({
+  itemLabel,
+  approveDisabledReason,
+  deletePrompt,
+  onApprove,
+  onDecline,
+  onDelete,
+}: {
+  itemLabel: string
+  approveDisabledReason?: string
+  deletePrompt: string
+  onApprove?: () => Promise<void>
+  onDecline?: () => Promise<void>
+  onDelete: () => Promise<void>
+}) {
+  const [pending, setPending] = useState<AutomationActionState>()
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [error, setError] = useState('')
+  const busy = pending !== undefined
+
+  const runAction = async (
+    action: AutomationActionState,
+    operation: () => Promise<void>,
+  ) => {
+    setPending(action)
+    setError('')
+    try {
+      await operation()
+      setConfirmingDelete(false)
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : 'We could not update this item. Please try again.',
+      )
+    } finally {
+      setPending(undefined)
+    }
+  }
+
+  return (
+    <div className="automation-actions" aria-live="polite">
+      {confirmingDelete ? (
+        <div className="automation-actions__confirm">
+          <span>{deletePrompt}</span>
+          <button
+            className="automation-action"
+            type="button"
+            disabled={busy}
+            onClick={() => setConfirmingDelete(false)}
+          >
+            Keep
+          </button>
+          <button
+            className="automation-action automation-action--danger"
+            type="button"
+            disabled={busy}
+            onClick={() => void runAction('delete', onDelete)}
+          >
+            {pending === 'delete' ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      ) : (
+        <div className="automation-actions__buttons">
+          {onApprove ? (
+            <button
+              className="automation-action automation-action--primary"
+              type="button"
+              disabled={busy || Boolean(approveDisabledReason)}
+              title={approveDisabledReason}
+              aria-label={`Approve ${itemLabel}`}
+              onClick={() => void runAction('approve', onApprove)}
+            >
+              {pending === 'approve' ? 'Approving…' : 'Approve'}
+            </button>
+          ) : null}
+          {onDecline ? (
+            <button
+              className="automation-action"
+              type="button"
+              disabled={busy}
+              aria-label={`Decline ${itemLabel}`}
+              onClick={() => void runAction('decline', onDecline)}
+            >
+              {pending === 'decline' ? 'Declining…' : 'Decline'}
+            </button>
+          ) : null}
+          <button
+            className="automation-action automation-action--danger"
+            type="button"
+            disabled={busy}
+            aria-label={`Delete ${itemLabel}`}
+            onClick={() => {
+              setError('')
+              setConfirmingDelete(true)
+            }}
+          >
+            Delete
+          </button>
+        </div>
+      )}
+      {approveDisabledReason && !confirmingDelete ? (
+        <span className="automation-actions__hint">
+          {approveDisabledReason}
+        </span>
+      ) : null}
+      {error ? (
+        <span className="automation-actions__error" role="alert">
+          {error}
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+function WatchRow({
+  watch,
+  currentTime,
+  onDelete,
+  onResolve,
+}: {
+  watch: WatchItem
+  currentTime: Date
+  onDelete: (resourceId: string) => Promise<void>
+  onResolve: (
+    resourceId: string,
+    decision: ProposalDecision,
+  ) => Promise<void>
+}) {
+  const proposed = watch.status === 'proposed'
+  const approveDisabledReason =
+    proposed && new Date(watch.expiresAt).getTime() <= currentTime.getTime()
+      ? 'This watch has expired.'
+      : undefined
+
   return (
     <article className="watch-row">
       <div className="watch-row__index">
@@ -1020,12 +1057,47 @@ function WatchRow({ watch }: { watch: WatchItem }) {
             <dd>{formatDate(watch.expiresAt)}</dd>
           </div>
         </dl>
+        <div className="watch-row__actions">
+          <AutomationActions
+            itemLabel={watch.query}
+            approveDisabledReason={approveDisabledReason}
+            deletePrompt={
+              watch.status === 'active'
+                ? 'Stop and delete this watch?'
+                : 'Delete this watch?'
+            }
+            onApprove={
+              proposed
+                ? () => onResolve(watch.id, 'accepted')
+                : undefined
+            }
+            onDecline={
+              proposed
+                ? () => onResolve(watch.id, 'rejected')
+                : undefined
+            }
+            onDelete={() => onDelete(watch.id)}
+          />
+        </div>
       </div>
     </article>
   )
 }
 
-function WatchesView({ data }: { data: WorkspaceData }) {
+function WatchesView({
+  data,
+  currentTime,
+  onDelete,
+  onResolve,
+}: {
+  data: WorkspaceData
+  currentTime: Date
+  onDelete: (resourceId: string) => Promise<void>
+  onResolve: (
+    resourceId: string,
+    decision: ProposalDecision,
+  ) => Promise<void>
+}) {
   const watches = [...data.watches].sort((left, right) => {
     if (left.status === right.status) {
       return (
@@ -1055,7 +1127,13 @@ function WatchesView({ data }: { data: WorkspaceData }) {
       <div className="watch-list">
         {watches.length > 0 ? (
           watches.map((watch) => (
-            <WatchRow key={watch.id} watch={watch} />
+            <WatchRow
+              key={watch.id}
+              watch={watch}
+              currentTime={currentTime}
+              onDelete={onDelete}
+              onResolve={onResolve}
+            />
           ))
         ) : (
           <EmptyState
@@ -1068,26 +1146,66 @@ function WatchesView({ data }: { data: WorkspaceData }) {
   )
 }
 
-function ProposedTask({ task }: { task: TaskItem }) {
+function ProposedTask({
+  task,
+  currentTime,
+  onDelete,
+  onResolve,
+}: {
+  task: TaskItem
+  currentTime: Date
+  onDelete: (resourceId: string) => Promise<void>
+  onResolve: (
+    resourceId: string,
+    decision: ProposalDecision,
+  ) => Promise<void>
+}) {
+  const approveDisabledReason =
+    new Date(task.dueAt).getTime() <= currentTime.getTime()
+      ? 'This reminder time has passed.'
+      : undefined
+
   return (
     <article className="proposed-task">
       <div>
         <p className="section-label">
-          <StatusMark active />
           Needs review
         </p>
         <h3>{task.title}</h3>
         <p>{task.schedule}</p>
       </div>
-      <div className="proposed-task__time">
-        <span>Proposed</span>
-        <strong>{relativeTime(task.createdAt)}</strong>
+      <div className="proposed-task__side">
+        <div className="proposed-task__time">
+          <span>Proposed</span>
+          <strong>{relativeTime(task.createdAt)}</strong>
+        </div>
+        <AutomationActions
+          itemLabel={task.title}
+          approveDisabledReason={approveDisabledReason}
+          deletePrompt="Delete this reminder suggestion?"
+          onApprove={() => onResolve(task.id, 'accepted')}
+          onDecline={() => onResolve(task.id, 'rejected')}
+          onDelete={() => onDelete(task.id)}
+        />
       </div>
     </article>
   )
 }
 
-function TasksView({ data }: { data: WorkspaceData }) {
+function TasksView({
+  data,
+  currentTime,
+  onDelete,
+  onResolve,
+}: {
+  data: WorkspaceData
+  currentTime: Date
+  onDelete: (resourceId: string) => Promise<void>
+  onResolve: (
+    resourceId: string,
+    decision: ProposalDecision,
+  ) => Promise<void>
+}) {
   const proposed = data.tasks
     .filter((task) => task.status === 'proposed')
     .sort(
@@ -1095,88 +1213,118 @@ function TasksView({ data }: { data: WorkspaceData }) {
         new Date(right.createdAt).getTime() -
         new Date(left.createdAt).getTime(),
     )
-  const upcoming = data.tasks
+  const confirmed = data.tasks
     .filter((task) => task.status === 'accepted')
     .sort(
       (left, right) =>
         new Date(left.dueAt).getTime() - new Date(right.dueAt).getTime(),
     )
-  const rejectedCount = data.tasks.filter(
-    (task) => task.status === 'rejected',
+  const pastDueCount = confirmed.filter(
+    (task) => new Date(task.dueAt).getTime() <= currentTime.getTime(),
   ).length
 
   return (
-    <>
-      <PageIntro
-        eyebrow="Plans and reminders"
-        title="Tasks"
-        description="Review suggested actions and see what is already scheduled."
-      />
-
-      <section className="task-section">
-        <div className="section-heading section-heading--bordered">
-          <div>
-            <p className="section-label">Needs a decision</p>
-            <h2>Suggested</h2>
-          </div>
-          <span className="section-count">{proposed.length}</span>
+    <div className="tasks-page">
+      <header className="tasks-head">
+        <span className="task-section-index" aria-hidden="true">
+          01
+        </span>
+        <div className="tasks-head__title">
+          <p className="section-label">Plans & reminders</p>
+          <h1>Tasks</h1>
         </div>
-        {proposed.length > 0 ? (
+        <dl className="task-summary" aria-label="Task totals">
+          <div>
+            <dt>Confirmed</dt>
+            <dd>{String(confirmed.length).padStart(2, '0')}</dd>
+          </div>
+          <div>
+            <dt>Needs review</dt>
+            <dd>{String(proposed.length).padStart(2, '0')}</dd>
+          </div>
+          <div>
+            <dt>Past due</dt>
+            <dd>{String(pastDueCount).padStart(2, '0')}</dd>
+          </div>
+        </dl>
+      </header>
+
+      {proposed.length > 0 ? (
+        <section className="task-review" aria-labelledby="task-review-title">
+          <div className="task-subhead">
+            <div>
+              <p className="section-label">Needs a decision</p>
+              <h2 id="task-review-title">Review queue</h2>
+            </div>
+            <span>{proposed.length}</span>
+          </div>
           <div className="proposed-list">
             {proposed.map((task) => (
-              <ProposedTask key={task.id} task={task} />
+              <ProposedTask
+                key={task.id}
+                task={task}
+                currentTime={currentTime}
+                onDelete={onDelete}
+                onResolve={onResolve}
+              />
             ))}
           </div>
-        ) : (
-          <EmptyState
-            title="No suggestions to review"
-            body="Helpful actions suggested during conversations will appear here."
-          />
-        )}
-      </section>
-
-      <section className="task-section task-section--upcoming">
-        <div className="section-heading section-heading--bordered">
-          <div>
-            <p className="section-label">Confirmed</p>
-            <h2>Upcoming</h2>
-          </div>
-          <span className="section-count">{upcoming.length}</span>
-        </div>
-        {upcoming.length > 0 ? (
-          <div className="timeline">
-            {upcoming.map((task, index) => (
-              <article className="timeline-row" key={task.id}>
-                <div className="timeline-row__rail" aria-hidden="true">
-                  <span>{String(index + 1).padStart(2, '0')}</span>
-                  <i />
-                </div>
-                <time dateTime={task.dueAt}>
-                  <strong>{formatDateTime(task.dueAt)}</strong>
-                  <span>{relativeTime(task.dueAt)}</span>
-                </time>
-                <div>
-                  <h3>{task.title}</h3>
-                  <p>{task.schedule}</p>
-                </div>
-                <span className="state-label state-label--accepted">
-                  scheduled
-                </span>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <EmptyState
-            title="Nothing upcoming"
-            body="Scheduled reminders will appear here in date order."
-          />
-        )}
-      </section>
-
-      {rejectedCount > 0 ? (
-        <p className="archive-note">{rejectedCount} rejected proposals hidden</p>
+        </section>
       ) : null}
-    </>
+
+      <section className="task-schedule" aria-labelledby="task-schedule-title">
+        <header className="task-subhead task-subhead--schedule">
+          <div className="task-subhead__title">
+            <span className="task-section-index" aria-hidden="true">
+              02
+            </span>
+            <div>
+              <p className="section-label">Confirmed schedule</p>
+              <h2 id="task-schedule-title">Reminders</h2>
+            </div>
+          </div>
+          <span>{confirmed.length} total</span>
+        </header>
+        {confirmed.length > 0 ? (
+          <div className="task-ledger">
+            {confirmed.map((task, index) => {
+              const pastDue =
+                new Date(task.dueAt).getTime() <= currentTime.getTime()
+
+              return (
+                <article
+                  className={`task-ledger-row${pastDue ? ' is-past-due' : ''}`}
+                  key={task.id}
+                >
+                  <span className="task-ledger-row__index" aria-hidden="true">
+                    {String(index + 1).padStart(2, '0')}
+                  </span>
+                  <time dateTime={task.dueAt}>
+                    <strong>{formatDateTime(task.dueAt)}</strong>
+                    <span>{relativeTime(task.dueAt)}</span>
+                  </time>
+                  <div className="task-ledger-row__content">
+                    <p className="section-label">
+                      {pastDue ? 'Past due' : 'Scheduled'}
+                    </p>
+                    <h3>{task.title}</h3>
+                  </div>
+                  <div className="task-ledger-row__actions">
+                    <AutomationActions
+                      itemLabel={task.title}
+                      deletePrompt="Cancel and delete this reminder?"
+                      onDelete={() => onDelete(task.id)}
+                    />
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        ) : (
+          <p className="task-empty-line">No confirmed reminders.</p>
+        )}
+      </section>
+    </div>
   )
 }
 
@@ -1339,6 +1487,8 @@ export function Workspace({
   dataError,
   isDemo,
   onCreateMemory,
+  onDeleteAutomation,
+  onResolveAutomation,
   onSignOut,
 }: WorkspaceProps) {
   const [view, setView] = useState<WorkspaceView>(initialView)
@@ -1389,6 +1539,9 @@ export function Workspace({
   const accountInitial = isDemo
     ? 'P'
     : (email.trim().charAt(0).toUpperCase() || 'A')
+  const viewNumber = String(
+    navItems.findIndex((item) => item.id === view) + 1,
+  ).padStart(2, '0')
 
   return (
     <div className="workspace">
@@ -1451,19 +1604,25 @@ export function Workspace({
         <header className="topbar">
           <div className="topbar__location">
             <span className="topbar__wordmark">rev/eyes</span>
+            <span className="topbar__folio-index" aria-hidden="true">
+              {viewNumber}
+            </span>
             <strong>{viewTitles[view]}</strong>
           </div>
           <div className="topbar__right">
             {isDemo ? <span className="demo-label">Preview</span> : null}
-            <span className="topbar__date">{formatDay(now)}</span>
-            <span className="topbar__time">{formatClock(now)}</span>
+            <time className="topbar__clock" dateTime={now.toISOString()}>
+              <span className="topbar__date">{formatDay(now)}</span>
+              <strong className="topbar__time">{formatClock(now)}</strong>
+            </time>
             <span
               className={`connection-label${
                 connected ? ' connection-label--online' : ''
               }`}
+              aria-label={`Even G2 ${deviceStatus}`}
             >
-              <StatusMark active={connected} />
-              {deviceStatus}
+              <span className="connection-label__mark" aria-hidden="true" />
+              <span>{deviceStatus}</span>
             </span>
           </div>
         </header>
@@ -1493,8 +1652,30 @@ export function Workspace({
               onAdd={() => setComposerOpen(true)}
             />
           ) : null}
-          {view === 'watches' ? <WatchesView data={data} /> : null}
-          {view === 'tasks' ? <TasksView data={data} /> : null}
+          {view === 'watches' ? (
+            <WatchesView
+              data={data}
+              currentTime={now}
+              onDelete={(resourceId) =>
+                onDeleteAutomation('watch', resourceId)
+              }
+              onResolve={(resourceId, decision) =>
+                onResolveAutomation('watch', resourceId, decision)
+              }
+            />
+          ) : null}
+          {view === 'tasks' ? (
+            <TasksView
+              data={data}
+              currentTime={now}
+              onDelete={(resourceId) =>
+                onDeleteAutomation('reminder', resourceId)
+              }
+              onResolve={(resourceId, decision) =>
+                onResolveAutomation('reminder', resourceId, decision)
+              }
+            />
+          ) : null}
         </div>
       </main>
 
