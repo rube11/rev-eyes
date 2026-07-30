@@ -148,7 +148,7 @@ func (h *TicketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accessToken, ok := bearerToken(r.Header.Get("Authorization"))
+	accessToken, ok := BearerToken(r.Header.Get("Authorization"))
 	if !ok {
 		unauthorized(w)
 		return
@@ -218,7 +218,7 @@ func normalizeTimeZone(value string) (string, error) {
 	return location.String(), nil
 }
 
-func bearerToken(header string) (string, bool) {
+func BearerToken(header string) (string, bool) {
 	parts := strings.Fields(header)
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
 		return "", false

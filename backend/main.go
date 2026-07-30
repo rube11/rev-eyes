@@ -125,6 +125,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	workspaceAutomationHandler, err := proposal.NewWorkspaceHandler(
+		tokenVerifier.Verify,
+		proposalStore,
+		registrationDispatcher.Trigger,
+	)
+	if err != nil {
+		return err
+	}
 
 	classifier, err := openai.NewClassifier(
 		os.Getenv("OPENAI_API_KEY"),
@@ -279,6 +287,23 @@ func run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", web.Health)
 	mux.Handle("/auth/ws-ticket", origins.Handler(ticketHandler))
+	workspaceAutomationAPI := origins.Handler(workspaceAutomationHandler)
+	mux.Handle(
+		"POST /workspace/automations/{kind}/{resource_id}/decision",
+		workspaceAutomationAPI,
+	)
+	mux.Handle(
+		"OPTIONS /workspace/automations/{kind}/{resource_id}/decision",
+		workspaceAutomationAPI,
+	)
+	mux.Handle(
+		"DELETE /workspace/automations/{kind}/{resource_id}",
+		workspaceAutomationAPI,
+	)
+	mux.Handle(
+		"OPTIONS /workspace/automations/{kind}/{resource_id}",
+		workspaceAutomationAPI,
+	)
 	mux.Handle("/internal/scheduler/run", schedulerHandler)
 	mux.Handle("/", realtimeServer)
 
