@@ -35,20 +35,46 @@ func handleUtterance(
 	transcripts transcriptStore,
 	memories memoryStore,
 ) (realtime.UtteranceResult, error) {
+	result := realtime.UtteranceResult{}
 	utteranceID, err := transcripts.Append(ctx, scope, session.SpeakerUser, utterance)
 	if err != nil {
-		return realtime.UtteranceResult{}, fmt.Errorf("persist user utterance: %w", err)
+		return result, fmt.Errorf("persist user utterance: %w", err)
+	}
+	result.WorkspaceResources = []realtime.WorkspaceResource{
+		realtime.WorkspaceConversations,
 	}
 
 	outcome, err := service.HandleUtterance(ctx, scope, utteranceID, utterance)
+	switch outcome.Decision.Action {
+	case assistant.ActionProposeTask:
+		if outcome.ProposalCreated {
+			result.WorkspaceResources = append(
+				result.WorkspaceResources,
+				realtime.WorkspaceTasks,
+			)
+		}
+	case assistant.ActionProposeWatch:
+		if outcome.ProposalCreated {
+			result.WorkspaceResources = append(
+				result.WorkspaceResources,
+				realtime.WorkspaceWatches,
+			)
+		}
+	case assistant.ActionResolveProposal:
+		result.WorkspaceResources = append(
+			result.WorkspaceResources,
+			realtime.WorkspaceTasks,
+			realtime.WorkspaceWatches,
+		)
+	}
 	if err != nil {
-		return realtime.UtteranceResult{}, err
+		return result, err
 	}
 
 	response := outcome.Response
 	if outcome.Decision.Action == assistant.ActionRemember {
 		if outcome.Decision.Memory == nil {
-			return realtime.UtteranceResult{}, errors.New("remember decision has no memory card")
+			return result, errors.New("remember decision has no memory card")
 		}
 		if err := memories.Remember(
 			ctx,
@@ -56,8 +82,9 @@ func handleUtterance(
 			utteranceID,
 			*outcome.Decision.Memory,
 		); err != nil {
-			return realtime.UtteranceResult{}, fmt.Errorf("persist memory: %w", err)
+			return result, fmt.Errorf("persist memory: %w", err)
 		}
+		result.WorkspaceResources = append(result.WorkspaceResources, realtime.WorkspaceMemories)
 		response = memoryAcknowledgment
 	}
 
@@ -68,7 +95,7 @@ func handleUtterance(
 			session.SpeakerAssistant,
 			response,
 		); err != nil {
-			return realtime.UtteranceResult{}, fmt.Errorf("persist assistant utterance: %w", err)
+			return result, fmt.Errorf("persist assistant utterance: %w", err)
 		}
 	}
 
@@ -76,9 +103,7 @@ func handleUtterance(
 		"action", outcome.Decision.Action,
 		"responded", response != "",
 	)
-	return realtime.UtteranceResult{
-		Text: response,
-		AwaitingConfirmation: outcome.Decision.Action == assistant.ActionProposeTask ||
-			outcome.Decision.Action == assistant.ActionProposeWatch,
-	}, nil
+	result.Text = response
+	result.AwaitingConfirmation = outcome.ProposalCreated
+	return result, nil
 }

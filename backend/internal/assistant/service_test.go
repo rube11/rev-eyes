@@ -35,6 +35,35 @@ func (f agentFunc) Respond(
 	return f(ctx, scope, query, conversation, memories)
 }
 
+type proposalAwareAgentFunc func(
+	context.Context,
+	tool.Scope,
+	string,
+	session.Conversation,
+	[]memory.Card,
+) (AgentResult, error)
+
+func (f proposalAwareAgentFunc) Respond(
+	ctx context.Context,
+	scope tool.Scope,
+	query string,
+	conversation session.Conversation,
+	memories []memory.Card,
+) (string, error) {
+	result, err := f(ctx, scope, query, conversation, memories)
+	return result.Text, err
+}
+
+func (f proposalAwareAgentFunc) RespondWithResult(
+	ctx context.Context,
+	scope tool.Scope,
+	query string,
+	conversation session.Conversation,
+	memories []memory.Card,
+) (AgentResult, error) {
+	return f(ctx, scope, query, conversation, memories)
+}
+
 type memoryReaderFunc func(context.Context, tool.Scope, memory.Lookup) ([]memory.Card, error)
 
 func (f memoryReaderFunc) Find(
@@ -95,6 +124,81 @@ var noProposalConfirmation = proposalConfirmerFunc(func(
 ) (string, bool, error) {
 	return "", false, nil
 })
+
+func TestHandleUtteranceUsesActualProposalResult(t *testing.T) {
+	service, err := NewService(
+		routerFunc(func(context.Context, string) (Decision, error) {
+			return Decision{Action: ActionProposeTask, Query: "tomorrow after class"}, nil
+		}),
+		proposalAwareAgentFunc(func(
+			context.Context,
+			tool.Scope,
+			string,
+			session.Conversation,
+			[]memory.Card,
+		) (AgentResult, error) {
+			return AgentResult{
+				Text:            "What time does class end?",
+				ProposalCreated: false,
+			}, nil
+		}),
+		noMemories,
+		noConversation,
+		noProposalConfirmation,
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	outcome, err := service.HandleUtterance(
+		context.Background(),
+		tool.Scope{},
+		"utterance-1",
+		"I need to go tomorrow after class.",
+	)
+	if err != nil {
+		t.Fatalf("HandleUtterance() error = %v", err)
+	}
+	if outcome.Response != "What time does class end?" || outcome.ProposalCreated {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+}
+
+func TestHandleUtteranceFallsBackAfterProposalResponseFailure(t *testing.T) {
+	service, err := NewService(
+		routerFunc(func(context.Context, string) (Decision, error) {
+			return Decision{Action: ActionProposeTask}, nil
+		}),
+		proposalAwareAgentFunc(func(
+			context.Context,
+			tool.Scope,
+			string,
+			session.Conversation,
+			[]memory.Card,
+		) (AgentResult, error) {
+			return AgentResult{ProposalCreated: true}, errors.New("response unavailable")
+		}),
+		noMemories,
+		noConversation,
+		noProposalConfirmation,
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	outcome, err := service.HandleUtterance(
+		context.Background(),
+		tool.Scope{},
+		"utterance-1",
+		"Remind me tomorrow.",
+	)
+	if err != nil {
+		t.Fatalf("HandleUtterance() error = %v", err)
+	}
+	if outcome.Response != proposalResponseFallback || !outcome.ProposalCreated {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+}
 
 func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
 	t.Parallel()

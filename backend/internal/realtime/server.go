@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
@@ -15,8 +16,10 @@ import (
 )
 
 const (
-	completedUtteranceBuffer = 10
-	maxMessageSize           = 1 << 20
+	completedUtteranceBuffer    = 10
+	maxMessageSize              = 1 << 20
+	defaultCandidateConcurrency = 1
+	candidateAdmissionFactor    = 2
 )
 
 const (
@@ -25,18 +28,30 @@ const (
 	listeningStopMessageType  = "listening_stop"
 
 	assistantDoneMessageType     = "assistant_done"
+	assistantRepeatMessageType   = "assistant_repeat"
 	assistantResponseMessageType = "assistant_response"
 	assistantThinkingMessageType = "assistant_thinking"
 	listeningStoppedMessageType  = "listening_stopped"
 	notificationMessageType      = "notification"
 	notificationAckMessageType   = "notification_ack"
 	userTranscriptMessageType    = "user_transcript"
+	workspaceChangedMessageType  = "workspace_changed"
+)
+
+type WorkspaceResource string
+
+const (
+	WorkspaceConversations WorkspaceResource = "conversations"
+	WorkspaceMemories      WorkspaceResource = "memories"
+	WorkspaceWatches       WorkspaceResource = "watches"
+	WorkspaceTasks         WorkspaceResource = "tasks"
 )
 
 type Authenticator func(ticket string) (tool.Scope, error)
 type UtteranceResult struct {
 	Text                 string
 	AwaitingConfirmation bool
+	WorkspaceResources   []WorkspaceResource
 }
 
 type UtteranceHandler func(
@@ -46,15 +61,23 @@ type UtteranceHandler func(
 ) (UtteranceResult, error)
 type LocationHandler func(ctx context.Context, scope tool.Scope, update LocationUpdate) error
 type NotificationAckHandler func(ctx context.Context, scope tool.Scope, notificationID string) error
+type CandidateAudioHandler func(
+	ctx context.Context,
+	audio []byte,
+	format stt.AudioFormat,
+) (string, error)
 
 type Handlers struct {
-	Authenticate    Authenticator
-	CheckOrigin     func(r *http.Request) bool
-	Connect         func(ctx context.Context, scope tool.Scope) error
-	Utterance       UtteranceHandler
-	Location        LocationHandler
-	NotificationAck NotificationAckHandler
-	Disconnect      func(scope tool.Scope)
+	Authenticate           Authenticator
+	CandidateAudio         CandidateAudioHandler
+	CandidateMaxConcurrent int
+	ClientDiagnostic       ClientDiagnosticHandler
+	CheckOrigin            func(r *http.Request) bool
+	Connect                func(ctx context.Context, scope tool.Scope) error
+	Utterance              UtteranceHandler
+	Location               LocationHandler
+	NotificationAck        NotificationAckHandler
+	Disconnect             func(scope tool.Scope)
 }
 
 type LocationUpdate struct {
@@ -64,17 +87,41 @@ type LocationUpdate struct {
 }
 
 type clientMessage struct {
-	Type string `json:"type"`
-	ID   string `json:"id,omitempty"`
+	Type              string           `json:"type"`
+	ID                string           `json:"id,omitempty"`
+	Encoding          string           `json:"encoding,omitempty"`
+	SampleRate        int              `json:"sample_rate,omitempty"`
+	Channels          int              `json:"channels,omitempty"`
+	ByteLength        int              `json:"byte_length,omitempty"`
+	StartSampleOffset int64            `json:"start_sample_offset,omitempty"`
+	EndSampleOffset   int64            `json:"end_sample_offset,omitempty"`
+	GateCategory      string           `json:"gate_category,omitempty"`
+	GateConfidence    float64          `json:"gate_confidence,omitempty"`
+	Diagnostic        ClientDiagnostic `json:"diagnostic,omitempty"`
 	LocationUpdate
 }
 
+func (message clientMessage) candidateHeader() candidateAudioHeader {
+	return candidateAudioHeader{
+		ID:                message.ID,
+		Encoding:          message.Encoding,
+		SampleRate:        message.SampleRate,
+		Channels:          message.Channels,
+		ByteLength:        message.ByteLength,
+		StartSampleOffset: message.StartSampleOffset,
+		EndSampleOffset:   message.EndSampleOffset,
+		GateCategory:      message.GateCategory,
+		GateConfidence:    message.GateConfidence,
+	}
+}
+
 type serverMessage struct {
-	Type                 string `json:"type"`
-	ID                   string `json:"id,omitempty"`
-	Text                 string `json:"text,omitempty"`
-	Error                string `json:"error,omitempty"`
-	AwaitingConfirmation bool   `json:"awaiting_confirmation,omitempty"`
+	Type                 string              `json:"type"`
+	ID                   string              `json:"id,omitempty"`
+	Text                 string              `json:"text,omitempty"`
+	Error                string              `json:"error,omitempty"`
+	AwaitingConfirmation bool                `json:"awaiting_confirmation,omitempty"`
+	Resources            []WorkspaceResource `json:"resources,omitempty"`
 }
 
 type jsonWriter interface {
@@ -87,10 +134,14 @@ type incomingMessage struct {
 }
 
 type Server struct {
-	transcriber stt.Transcriber
-	handlers    Handlers
-	upgrader    websocket.Upgrader
-	hub         *Hub
+	transcriber         stt.Transcriber
+	handlers            Handlers
+	candidateAdmissions chan struct{}
+	candidatePermits    chan struct{}
+	candidateTimeout    time.Duration
+	turns               *turnCoordinator
+	upgrader            websocket.Upgrader
+	hub                 *Hub
 }
 
 // NewServer creates the realtime WebSocket server.
@@ -103,10 +154,27 @@ func NewServerWithHub(transcriber stt.Transcriber, hub *Hub, handlers Handlers) 
 	if hub == nil {
 		hub = NewHub()
 	}
+	var candidateAdmissions chan struct{}
+	var candidatePermits chan struct{}
+	if handlers.CandidateAudio != nil {
+		maxConcurrent := handlers.CandidateMaxConcurrent
+		if maxConcurrent <= 0 {
+			maxConcurrent = defaultCandidateConcurrency
+		}
+		candidateAdmissions = make(
+			chan struct{},
+			maxConcurrent*candidateAdmissionFactor,
+		)
+		candidatePermits = make(chan struct{}, maxConcurrent)
+	}
 	return &Server{
-		transcriber: transcriber,
-		handlers:    handlers,
-		hub:         hub,
+		transcriber:         transcriber,
+		handlers:            handlers,
+		candidateAdmissions: candidateAdmissions,
+		candidatePermits:    candidatePermits,
+		candidateTimeout:    defaultCandidateProcessingTimeout,
+		hub:                 hub,
+		turns:               newTurnCoordinator(),
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
@@ -156,14 +224,23 @@ func (s *Server) serveConnection(
 	ctx, cancel := context.WithCancel(parent)
 	messages := make(chan incomingMessage)
 	go s.readMessages(ctx, conn, messages)
+	candidateJobs := make(chan candidateJob, 1)
+	candidateWorkerDone := make(chan struct{})
+	go s.runCandidateWorker(ctx, scope, conn, candidateJobs, candidateWorkerDone)
 
 	var audio chan []byte
 	var transcription <-chan error
+	var pendingCandidate *candidateAudioHeader
+	audioMode := audioModeUnset
+	usedCandidateIDs := newCandidateIDWindow()
+	var diagnosticLimiter clientDiagnosticLimiter
 	defer func() {
 		cancel()
 		if transcription != nil {
 			<-transcription
 		}
+		close(candidateJobs)
+		<-candidateWorkerDone
 	}()
 
 	finishTranscription := func(transcriptionErr error) error {
@@ -200,7 +277,60 @@ func (s *Server) serveConnection(
 			}
 
 			if incoming.messageType == websocket.BinaryMessage {
+				if pendingCandidate != nil {
+					header := *pendingCandidate
+					pendingCandidate = nil
+					if len(incoming.data) != header.ByteLength {
+						clearCandidateAudio(incoming.data)
+						slog.WarnContext(
+							ctx,
+							"rejected candidate audio payload",
+							"candidate_id", header.ID,
+							"expected_bytes", header.ByteLength,
+							"received_bytes", len(incoming.data),
+						)
+						if err := conn.WriteJSON(candidateDoneMessage(header.ID)); err != nil {
+							return fmt.Errorf("write candidate rejection: %w", err)
+						}
+						continue
+					}
+					job := candidateJob{
+						header:     header,
+						audio:      incoming.data,
+						acceptedAt: time.Now(),
+					}
+					if !s.tryAdmitCandidate(&job) {
+						clearCandidateAudio(incoming.data)
+						slog.WarnContext(
+							ctx,
+							"candidate audio capacity full",
+							"candidate_id", header.ID,
+						)
+						if err := conn.WriteJSON(candidateDoneMessage(header.ID)); err != nil {
+							return fmt.Errorf("write candidate capacity state: %w", err)
+						}
+						continue
+					}
+					select {
+					case candidateJobs <- job:
+						slog.InfoContext(
+							ctx,
+							"accepted candidate audio",
+							"candidate_id", header.ID,
+							"bytes", header.ByteLength,
+						)
+					default:
+						s.releaseCandidateAdmission(job)
+						clearCandidateAudio(incoming.data)
+						slog.WarnContext(ctx, "candidate audio queue full", "candidate_id", header.ID)
+						if err := conn.WriteJSON(candidateDoneMessage(header.ID)); err != nil {
+							return fmt.Errorf("write candidate queue state: %w", err)
+						}
+					}
+					continue
+				}
 				if audio == nil {
+					clearCandidateAudio(incoming.data)
 					continue
 				}
 				select {
@@ -222,6 +352,50 @@ func (s *Server) serveConnection(
 			}
 
 			switch message.Type {
+			case moonshineDiagnosticMessageType:
+				if s.handlers.ClientDiagnostic == nil {
+					continue
+				}
+				diagnostic, err := message.Diagnostic.normalized()
+				if err != nil {
+					slog.DebugContext(ctx, "ignored invalid client diagnostic")
+					continue
+				}
+				if !diagnosticLimiter.allow(time.Now()) {
+					continue
+				}
+				s.handlers.ClientDiagnostic(ctx, diagnostic)
+
+			case candidateAudioMessageType:
+				header := message.candidateHeader()
+				if audioMode == audioModeLegacy || transcription != nil {
+					slog.WarnContext(ctx, "rejected candidate audio during legacy transcription")
+					if err := conn.WriteJSON(candidateDoneMessage(message.ID)); err != nil {
+						return fmt.Errorf("write candidate mode rejection: %w", err)
+					}
+					continue
+				}
+				if pendingCandidate != nil {
+					return errors.New("candidate header received before prior payload")
+				}
+				if err := header.validate(); err != nil {
+					slog.WarnContext(ctx, "rejected candidate audio header", "error", err)
+					if writeErr := conn.WriteJSON(candidateDoneMessage(message.ID)); writeErr != nil {
+						return fmt.Errorf("write candidate header rejection: %w", writeErr)
+					}
+					continue
+				}
+				if usedCandidateIDs.Contains(header.ID) {
+					slog.WarnContext(ctx, "rejected duplicate candidate id", "candidate_id", header.ID)
+					if err := conn.WriteJSON(candidateDoneMessage(header.ID)); err != nil {
+						return fmt.Errorf("write duplicate candidate rejection: %w", err)
+					}
+					continue
+				}
+				audioMode = audioModeCandidate
+				usedCandidateIDs.Add(header.ID)
+				pendingCandidate = &header
+
 			case locationMessageType:
 				if s.handlers.Location != nil {
 					if err := s.handlers.Location(ctx, scope, message.LocationUpdate); err != nil {
@@ -245,9 +419,19 @@ func (s *Server) serveConnection(
 				}
 
 			case listeningStartMessageType:
+				if audioMode == audioModeCandidate {
+					if err := conn.WriteJSON(serverMessage{
+						Type:  listeningStoppedMessageType,
+						Error: "Candidate audio mode is active",
+					}); err != nil {
+						return fmt.Errorf("write incompatible listening state: %w", err)
+					}
+					continue
+				}
 				if transcription != nil {
 					continue
 				}
+				audioMode = audioModeLegacy
 				audio = make(chan []byte, 100)
 				done := make(chan error, 1)
 				transcription = done
@@ -272,85 +456,6 @@ func (s *Server) serveConnection(
 			}
 		}
 	}
-}
-
-func (s *Server) transcribeConnection(
-	ctx context.Context,
-	scope tool.Scope,
-	writer jsonWriter,
-	audio <-chan []byte,
-) error {
-	completed := make(chan string, completedUtteranceBuffer)
-	done := make(chan error, 1)
-
-	go func() {
-		err := s.transcriber.Transcribe(
-			ctx,
-			audio,
-			completed,
-			func(transcript string) error {
-				transcript = strings.TrimSpace(transcript)
-				if transcript == "" {
-					return nil
-				}
-				if err := writer.WriteJSON(serverMessage{
-					Type: userTranscriptMessageType,
-					Text: transcript,
-				}); err != nil {
-					return fmt.Errorf("write user transcript: %w", err)
-				}
-				return nil
-			},
-		)
-		close(completed)
-		done <- err
-	}()
-
-	for utterance := range completed {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if s.handlers.Utterance == nil {
-			continue
-		}
-
-		if err := writer.WriteJSON(serverMessage{
-			Type: assistantThinkingMessageType,
-		}); err != nil {
-			return fmt.Errorf("write assistant thinking state: %w", err)
-		}
-		result, err := s.handlers.Utterance(ctx, scope, utterance)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			slog.ErrorContext(ctx, "failed to handle utterance", "error", err)
-			if writeErr := writer.WriteJSON(serverMessage{
-				Type: assistantDoneMessageType,
-			}); writeErr != nil {
-				return fmt.Errorf("write assistant done state: %w", writeErr)
-			}
-			continue
-		}
-		response := strings.TrimSpace(result.Text)
-		if response == "" {
-			if err := writer.WriteJSON(serverMessage{
-				Type: assistantDoneMessageType,
-			}); err != nil {
-				return fmt.Errorf("write assistant done state: %w", err)
-			}
-			continue
-		}
-		if err := writer.WriteJSON(serverMessage{
-			Type:                 assistantResponseMessageType,
-			Text:                 response,
-			AwaitingConfirmation: result.AwaitingConfirmation,
-		}); err != nil {
-			return fmt.Errorf("write assistant response: %w", err)
-		}
-	}
-
-	return <-done
 }
 
 // ServeHTTP authenticates and handles a realtime WebSocket connection.

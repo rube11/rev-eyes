@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rube11/rev-eyes/backend/internal/assistant"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
@@ -81,7 +82,7 @@ func NewAgent(
 	}, nil
 }
 
-// Respond runs the Responses API until it returns text or reaches the tool limit.
+// Respond preserves the narrow text-only Agent interface.
 func (a *Agent) Respond(
 	ctx context.Context,
 	scope tool.Scope,
@@ -89,20 +90,33 @@ func (a *Agent) Respond(
 	conversation session.Conversation,
 	memories []memory.Card,
 ) (string, error) {
+	result, err := a.RespondWithResult(ctx, scope, query, conversation, memories)
+	return result.Text, err
+}
+
+// RespondWithResult runs the Responses API and reports successful proposal
+// creation separately from the model's requested route.
+func (a *Agent) RespondWithResult(
+	ctx context.Context,
+	scope tool.Scope,
+	query string,
+	conversation session.Conversation,
+	memories []memory.Card,
+) (assistant.AgentResult, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return "", errors.New("assistant query is required")
+		return assistant.AgentResult{}, errors.New("assistant query is required")
 	}
 
 	definitions, err := toolDefinitions(a.registry.Specs())
 	if err != nil {
-		return "", err
+		return assistant.AgentResult{}, err
 	}
 	instructions := agentInstructions
 	if scope.TimeZone != "" {
 		location, err := time.LoadLocation(scope.TimeZone)
 		if err != nil {
-			return "", fmt.Errorf("load assistant time zone: %w", err)
+			return assistant.AgentResult{}, fmt.Errorf("load assistant time zone: %w", err)
 		}
 		localTime := a.now().In(location)
 		instructions += "\nCurrent local date and time: " +
@@ -113,14 +127,14 @@ func (a *Agent) Respond(
 	if len(memories) > 0 {
 		encodedMemories, err := json.Marshal(memories)
 		if err != nil {
-			return "", fmt.Errorf("encode assistant memories: %w", err)
+			return assistant.AgentResult{}, fmt.Errorf("encode assistant memories: %w", err)
 		}
 		memoryInput, err := encodeInputMessage(
 			"user",
 			"Relevant user memories:\n"+string(encodedMemories),
 		)
 		if err != nil {
-			return "", fmt.Errorf("encode assistant memory input: %w", err)
+			return assistant.AgentResult{}, fmt.Errorf("encode assistant memory input: %w", err)
 		}
 		input = append(input, memoryInput)
 	}
@@ -130,24 +144,25 @@ func (a *Agent) Respond(
 			"Earlier conversation summary:\n"+conversation.Summary,
 		)
 		if err != nil {
-			return "", fmt.Errorf("encode conversation summary: %w", err)
+			return assistant.AgentResult{}, fmt.Errorf("encode conversation summary: %w", err)
 		}
 		input = append(input, summaryInput)
 	}
 	for _, message := range conversation.Messages {
 		historyInput, err := encodeInputMessage(string(message.Speaker), message.Text)
 		if err != nil {
-			return "", fmt.Errorf("encode conversation message: %w", err)
+			return assistant.AgentResult{}, fmt.Errorf("encode conversation message: %w", err)
 		}
 		input = append(input, historyInput)
 	}
 
 	userInput, err := encodeInputMessage("user", query)
 	if err != nil {
-		return "", fmt.Errorf("encode assistant query: %w", err)
+		return assistant.AgentResult{}, fmt.Errorf("encode assistant query: %w", err)
 	}
 	input = append(input, userInput)
 
+	proposalCreated := false
 	for round := 0; ; round++ {
 		response, err := a.createResponse(ctx, input, responseOptions{
 			instructions:     instructions,
@@ -155,29 +170,33 @@ func (a *Agent) Respond(
 			includeReasoning: true,
 		})
 		if err != nil {
-			return "", err
+			return assistant.AgentResult{ProposalCreated: proposalCreated}, err
 		}
 
 		calls, text, err := parseOutput(response.Output)
 		if err != nil {
-			return "", err
+			return assistant.AgentResult{ProposalCreated: proposalCreated}, err
 		}
 		if len(calls) == 0 {
 			if text == "" {
-				return "", errors.New("OpenAI response contained no text or tool calls")
+				return assistant.AgentResult{ProposalCreated: proposalCreated}, errors.New("OpenAI response contained no text or tool calls")
 			}
-			return text, nil
+			return assistant.AgentResult{
+				Text:            text,
+				ProposalCreated: proposalCreated,
+			}, nil
 		}
 		if round >= a.maxToolRounds {
-			return "", ErrToolRoundLimit
+			return assistant.AgentResult{ProposalCreated: proposalCreated}, ErrToolRoundLimit
 		}
 
 		// Replay every output item so stateless requests retain reasoning and calls.
 		input = append(input, response.Output...)
 		outputs, err := a.executeCalls(ctx, scope, calls)
 		if err != nil {
-			return "", err
+			return assistant.AgentResult{ProposalCreated: proposalCreated}, err
 		}
+		proposalCreated = proposalCreated || proposalCreatedBy(calls, outputs)
 		input = append(input, outputs...)
 	}
 }

@@ -12,6 +12,11 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
+const (
+	proposeTaskToolName  = "propose_task"
+	proposeWatchToolName = "propose_watch"
+)
+
 func (a *Agent) executeCalls(
 	ctx context.Context,
 	scope tool.Scope,
@@ -48,6 +53,29 @@ func (a *Agent) executeCalls(
 		}
 	}
 	return outputs, nil
+}
+
+func proposalCreatedBy(calls []toolCall, outputs []json.RawMessage) bool {
+	if len(calls) != len(outputs) {
+		return false
+	}
+	for index, call := range calls {
+		if call.Name != proposeTaskToolName && call.Name != proposeWatchToolName {
+			continue
+		}
+		var output toolOutput
+		if err := json.Unmarshal(outputs[index], &output); err != nil {
+			continue
+		}
+		var result struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal([]byte(output.Output), &result); err == nil &&
+			result.Status == "proposed" {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Agent) canRunInParallel(calls []toolCall) bool {

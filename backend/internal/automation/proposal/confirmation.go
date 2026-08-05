@@ -84,7 +84,7 @@ func confirmationStatus(utterance string) (Status, bool) {
 	normalized = strings.Trim(normalized, " .,!?;:")
 
 	switch normalized {
-	case "yes", "yeah", "yep", "yup", "yes please", "sure", "okay", "ok", "do it", "please do", "go ahead", "sounds good":
+	case "yes", "yeah", "yep", "yup", "yes please", "sure", "okay", "ok", "do it", "please do", "go ahead", "sounds good", "save that":
 		return StatusAccepted, true
 	case "no", "nope", "nah", "don't", "do not", "cancel", "never mind", "nevermind":
 		return StatusRejected, true

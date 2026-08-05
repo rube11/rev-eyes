@@ -8,9 +8,35 @@ import (
 
 	"github.com/rube11/rev-eyes/backend/internal/assistant"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
+	"github.com/rube11/rev-eyes/backend/internal/realtime"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
+
+func TestParseCandidateAudioConcurrency(t *testing.T) {
+	tests := []struct {
+		value   string
+		want    int
+		wantErr bool
+	}{
+		{"", 2, false},
+		{" 4 ", 4, false},
+		{"0", 0, true},
+		{"-1", 0, true},
+		{"33", 0, true},
+		{"many", 0, true},
+	}
+
+	for _, test := range tests {
+		got, err := parseCandidateAudioConcurrency(test.value)
+		if (err != nil) != test.wantErr {
+			t.Fatalf("parseCandidateAudioConcurrency(%q) error = %v", test.value, err)
+		}
+		if got != test.want {
+			t.Fatalf("parseCandidateAudioConcurrency(%q) = %d, want %d", test.value, got, test.want)
+		}
+	}
+}
 
 type fakeUtteranceService struct {
 	handle func(context.Context, tool.Scope, string, string) (assistant.Outcome, error)
@@ -96,6 +122,12 @@ func TestHandleUtterancePersistsFinalizedTranscriptInOrder(t *testing.T) {
 	if response.Text != "Here you go." || response.AwaitingConfirmation {
 		t.Fatalf("response = %+v", response)
 	}
+	if !reflect.DeepEqual(
+		response.WorkspaceResources,
+		[]realtime.WorkspaceResource{realtime.WorkspaceConversations},
+	) {
+		t.Fatalf("workspace resources = %#v", response.WorkspaceResources)
+	}
 
 	want := []string{
 		"user:Where am I?",
@@ -131,8 +163,9 @@ func TestHandleUtteranceMarksProposalsAwaitingConfirmation(t *testing.T) {
 					string,
 				) (assistant.Outcome, error) {
 					return assistant.Outcome{
-						Decision: assistant.Decision{Action: action},
-						Response: "Should I do that?",
+						Decision:        assistant.Decision{Action: action},
+						Response:        "Should I do that?",
+						ProposalCreated: true,
 					}, nil
 				},
 			}
@@ -157,7 +190,67 @@ func TestHandleUtteranceMarksProposalsAwaitingConfirmation(t *testing.T) {
 			if response.Text != "Should I do that?" || !response.AwaitingConfirmation {
 				t.Fatalf("response = %+v", response)
 			}
+			wantResource := realtime.WorkspaceTasks
+			if action == assistant.ActionProposeWatch {
+				wantResource = realtime.WorkspaceWatches
+			}
+			if !reflect.DeepEqual(
+				response.WorkspaceResources,
+				[]realtime.WorkspaceResource{
+					realtime.WorkspaceConversations,
+					wantResource,
+				},
+			) {
+				t.Fatalf("workspace resources = %#v", response.WorkspaceResources)
+			}
 		})
+	}
+}
+
+func TestHandleUtteranceDoesNotPredictConfirmationFromRouterAction(t *testing.T) {
+	transcripts := fakeTranscriptStore{
+		append: func(
+			context.Context,
+			tool.Scope,
+			session.Speaker,
+			string,
+		) (string, error) {
+			return "utterance-123", nil
+		},
+	}
+	service := fakeUtteranceService{
+		handle: func(
+			context.Context,
+			tool.Scope,
+			string,
+			string,
+		) (assistant.Outcome, error) {
+			return assistant.Outcome{
+				Decision: assistant.Decision{Action: assistant.ActionProposeTask},
+				Response: "What time does class end?",
+			}, nil
+		},
+	}
+
+	response, err := handleUtterance(
+		context.Background(),
+		tool.Scope{UserID: "user-123", SessionID: "session-123"},
+		"I need to go tomorrow after class.",
+		service,
+		transcripts,
+		fakeMemoryStore{},
+	)
+	if err != nil {
+		t.Fatalf("handleUtterance() error = %v", err)
+	}
+	if response.AwaitingConfirmation {
+		t.Fatalf("response = %+v, want no pending confirmation", response)
+	}
+	if !reflect.DeepEqual(
+		response.WorkspaceResources,
+		[]realtime.WorkspaceResource{realtime.WorkspaceConversations},
+	) {
+		t.Fatalf("workspace resources = %#v", response.WorkspaceResources)
 	}
 }
 
@@ -233,6 +326,15 @@ func TestHandleUtterancePersistsExplicitMemory(t *testing.T) {
 	}
 	if response.Text != memoryAcknowledgment || response.AwaitingConfirmation {
 		t.Fatalf("response = %+v", response)
+	}
+	if !reflect.DeepEqual(
+		response.WorkspaceResources,
+		[]realtime.WorkspaceResource{
+			realtime.WorkspaceConversations,
+			realtime.WorkspaceMemories,
+		},
+	) {
+		t.Fatalf("workspace resources = %#v", response.WorkspaceResources)
 	}
 
 	want := []string{

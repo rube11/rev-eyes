@@ -20,6 +20,8 @@ var (
 	ErrProposalConfirmerRequired = errors.New("assistant proposal confirmer is required")
 )
 
+const proposalResponseFallback = "I have that ready. Should I save it?"
+
 // ActivityRouter decides how the assistant should handle a finalized utterance.
 type ActivityRouter interface {
 	Route(ctx context.Context, utterance string) (Decision, error)
@@ -35,6 +37,26 @@ type Agent interface {
 		conversation session.Conversation,
 		memories []memory.Card,
 	) (string, error)
+}
+
+// AgentResult includes effects that the response text alone cannot prove.
+type AgentResult struct {
+	Text            string
+	ProposalCreated bool
+}
+
+// ProposalAwareAgent reports whether a successful tool call created a proposal.
+// Agents that do not implement it still work, but never claim confirmation is
+// pending based only on the router's intent.
+type ProposalAwareAgent interface {
+	Agent
+	RespondWithResult(
+		ctx context.Context,
+		scope tool.Scope,
+		query string,
+		conversation session.Conversation,
+		memories []memory.Card,
+	) (AgentResult, error)
 }
 
 // MemoryReader finds relevant memories within the trusted user scope.
@@ -53,8 +75,9 @@ type ProposalConfirmer interface {
 
 // Outcome describes what the assistant decided and any response it generated.
 type Outcome struct {
-	Decision Decision
-	Response string
+	Decision        Decision
+	Response        string
+	ProposalCreated bool
 }
 
 // Service coordinates routing and response generation.
@@ -146,7 +169,30 @@ func (s *Service) HandleUtterance(
 		slog.WarnContext(ctx, "conversation context failed", "error", err)
 	}
 
-	response, err := s.agent.Respond(ctx, turnScope, query, conversation, cards)
+	var response string
+	if proposalAware, ok := s.agent.(ProposalAwareAgent); ok {
+		result, resultErr := proposalAware.RespondWithResult(
+			ctx,
+			turnScope,
+			query,
+			conversation,
+			cards,
+		)
+		response = result.Text
+		outcome.ProposalCreated = result.ProposalCreated
+		err = resultErr
+	} else {
+		response, err = s.agent.Respond(ctx, turnScope, query, conversation, cards)
+	}
+	if err != nil && outcome.ProposalCreated && ctx.Err() == nil {
+		slog.WarnContext(
+			ctx,
+			"assistant response failed after proposal creation",
+			"error", err,
+		)
+		outcome.Response = proposalResponseFallback
+		return outcome, nil
+	}
 	if err != nil {
 		return outcome, fmt.Errorf("generate assistant response: %w", err)
 	}

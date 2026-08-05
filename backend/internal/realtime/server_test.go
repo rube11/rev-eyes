@@ -152,6 +152,10 @@ func TestServerExchangesScopedLocationAndAssistantMessages(t *testing.T) {
 			return UtteranceResult{
 				Text:                 "reply to " + utterance,
 				AwaitingConfirmation: true,
+				WorkspaceResources: []WorkspaceResource{
+					WorkspaceConversations,
+					WorkspaceTasks,
+				},
 			}, nil
 		},
 		Disconnect: func(scope tool.Scope) {
@@ -191,6 +195,16 @@ func TestServerExchangesScopedLocationAndAssistantMessages(t *testing.T) {
 
 	assertServerMessage(t, conn, userTranscriptMessageType, "where am I")
 	assertServerMessageType(t, conn, assistantThinkingMessageType)
+	var change serverMessage
+	if err := conn.ReadJSON(&change); err != nil {
+		t.Fatalf("ReadJSON() workspace change error = %v", err)
+	}
+	if change.Type != workspaceChangedMessageType ||
+		len(change.Resources) != 2 ||
+		change.Resources[0] != WorkspaceConversations ||
+		change.Resources[1] != WorkspaceTasks {
+		t.Fatalf("workspace change = %+v", change)
+	}
 	var response serverMessage
 	if err := conn.ReadJSON(&response); err != nil {
 		t.Fatalf("ReadJSON() error = %v", err)
