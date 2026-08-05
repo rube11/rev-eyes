@@ -5,6 +5,15 @@ export type WorkspaceView =
   | 'watches'
   | 'tasks'
 
+export const workspaceResources = [
+  'conversations',
+  'memories',
+  'watches',
+  'tasks',
+] as const
+
+export type WorkspaceResource = (typeof workspaceResources)[number]
+
 export type AutomationKind = 'reminder' | 'watch'
 
 export type ProposalDecision = 'accepted' | 'rejected'

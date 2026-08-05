@@ -11,6 +11,7 @@ import type {
   TranscriptItem,
   WatchItem,
   WorkspaceData,
+  WorkspaceResource,
 } from './workspaceTypes'
 
 type SessionRow = {
@@ -62,6 +63,9 @@ type TaskRow = {
   resolved_at: string | null
 }
 
+const transcriptHistoryLimit = 1000
+const transcriptRefreshLimit = 100
+
 function shorten(text: string, limit: number): string {
   const normalized = text.replace(/\s+/gu, ' ').trim()
   return normalized.length <= limit
@@ -82,17 +86,101 @@ function mapMemory(row: MemoryRow): MemoryItem {
   }
 }
 
-export async function loadWorkspaceData(
+function mapConversations(
+  sessionRows: SessionRow[],
+  transcriptRows: TranscriptRow[],
+  current: ConversationItem[] = [],
+): ConversationItem[] {
+  const transcriptBySession = new Map<
+    string,
+    Map<string, TranscriptItem>
+  >()
+  for (const conversation of current) {
+    transcriptBySession.set(
+      conversation.id,
+      new Map(conversation.transcript.map((item) => [item.id, item])),
+    )
+  }
+
+  for (const row of transcriptRows) {
+    const transcript =
+      transcriptBySession.get(row.session_id) ??
+      new Map<string, TranscriptItem>()
+    transcript.set(row.id, {
+      id: row.id,
+      speaker: row.speaker,
+      text: row.text,
+      startedAt: row.started_at,
+    })
+    transcriptBySession.set(row.session_id, transcript)
+  }
+
+  return sessionRows.map((session, index): ConversationItem => {
+    const transcript = [
+      ...(transcriptBySession.get(session.id)?.values() ?? []),
+    ]
+      .sort(
+        (left, right) =>
+          new Date(left.startedAt).getTime() -
+            new Date(right.startedAt).getTime() ||
+          left.id.localeCompare(right.id),
+      )
+      .slice(-transcriptHistoryLimit)
+    const firstUserLine = transcript.find((line) => line.speaker === 'user')
+    const lastAssistantLine = [...transcript]
+      .reverse()
+      .find((line) => line.speaker === 'assistant')
+
+    return {
+      id: session.id,
+      title: firstUserLine
+        ? shorten(firstUserLine.text, 58)
+        : `Conversation ${String(index + 1).padStart(2, '0')}`,
+      summary: lastAssistantLine
+        ? shorten(lastAssistantLine.text, 118)
+        : 'No assistant response was recorded.',
+      status: session.status,
+      startedAt: session.started_at,
+      lastActivityAt: session.last_activity_at,
+      transcript,
+    }
+  })
+}
+
+function mapWatches(rows: WatchRow[]): WatchItem[] {
+  return rows.map((row): WatchItem => ({
+    id: row.id,
+    query: row.query,
+    condition: row.condition,
+    intervalMinutes: row.interval_minutes,
+    expiresAt: row.expires_at,
+    status: row.status,
+    createdAt: row.created_at,
+    nextCheckAt: row.next_check_at ?? undefined,
+    lastCheckedAt: row.last_checked_at ?? undefined,
+    seenCount: row.seen_urls.length,
+  }))
+}
+
+function mapTasks(rows: TaskRow[]): TaskItem[] {
+  return rows.map((row): TaskItem => ({
+    id: row.id,
+    title: row.title,
+    schedule: row.schedule,
+    dueAt: row.due_at,
+    status: row.status,
+    createdAt: row.created_at,
+    resolvedAt: row.resolved_at ?? undefined,
+  }))
+}
+
+async function loadConversations(
   userId: string,
   signal: AbortSignal,
-): Promise<WorkspaceData> {
-  const [
-    sessionsResult,
-    transcriptResult,
-    memoriesResult,
-    watchesResult,
-    tasksResult,
-  ] = await Promise.all([
+  transcriptLimit: number,
+  current: ConversationItem[] = [],
+): Promise<ConversationItem[]> {
+  const [sessionsResult, transcriptResult] = await Promise.all([
     supabase
       .from('sessions')
       .select('id,status,started_at,last_activity_at')
@@ -105,123 +193,132 @@ export async function loadWorkspaceData(
       .select('id,session_id,speaker,text,started_at')
       .eq('user_id', userId)
       .order('started_at', { ascending: false })
-      .limit(1000)
-      .abortSignal(signal),
-    supabase
-      .from('memories')
-      .select('id,title,summary,topics,kind,status,created_at,updated_at')
-      .eq('user_id', userId)
-      .eq('status', 'active')
-      .order('updated_at', { ascending: false })
-      .limit(200)
-      .abortSignal(signal),
-    supabase
-      .from('watches')
-      .select(
-        'id,query,condition,interval_minutes,expires_at,status,created_at,next_check_at,last_checked_at,seen_urls',
-      )
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(50)
-      .abortSignal(signal),
-    supabase
-      .from('task_proposals')
-      .select('id,title,schedule,due_at,status,created_at,resolved_at')
-      .eq('user_id', userId)
-      .order('due_at', { ascending: true })
-      .limit(100)
+      .limit(transcriptLimit)
       .abortSignal(signal),
   ])
 
-  const firstError = [
-    sessionsResult.error,
-    transcriptResult.error,
-    memoriesResult.error,
-    watchesResult.error,
-    tasksResult.error,
-  ].find(Boolean)
-
+  const firstError = sessionsResult.error ?? transcriptResult.error
   if (firstError) {
     throw new Error(firstError.message)
   }
 
-  const transcriptBySession = new Map<string, TranscriptItem[]>()
-  for (const row of (transcriptResult.data ?? []) as TranscriptRow[]) {
-    const item: TranscriptItem = {
-      id: row.id,
-      speaker: row.speaker,
-      text: row.text,
-      startedAt: row.started_at,
-    }
-    const transcript = transcriptBySession.get(row.session_id) ?? []
-    transcript.push(item)
-    transcriptBySession.set(row.session_id, transcript)
+  return mapConversations(
+    (sessionsResult.data ?? []) as SessionRow[],
+    (transcriptResult.data ?? []) as TranscriptRow[],
+    current,
+  )
+}
+
+async function loadMemories(
+  userId: string,
+  signal: AbortSignal,
+): Promise<MemoryItem[]> {
+  const { data, error } = await supabase
+    .from('memories')
+    .select('id,title,summary,topics,kind,status,created_at,updated_at')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .order('updated_at', { ascending: false })
+    .limit(200)
+    .abortSignal(signal)
+
+  if (error) {
+    throw new Error(error.message)
   }
-  for (const transcript of transcriptBySession.values()) {
-    transcript.sort(
-      (left, right) =>
-        new Date(left.startedAt).getTime() -
-        new Date(right.startedAt).getTime(),
+  return ((data ?? []) as MemoryRow[]).map(mapMemory)
+}
+
+async function loadWatches(
+  userId: string,
+  signal: AbortSignal,
+): Promise<WatchItem[]> {
+  const { data, error } = await supabase
+    .from('watches')
+    .select(
+      'id,query,condition,interval_minutes,expires_at,status,created_at,next_check_at,last_checked_at,seen_urls',
     )
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(50)
+    .abortSignal(signal)
+
+  if (error) {
+    throw new Error(error.message)
   }
+  return mapWatches((data ?? []) as WatchRow[])
+}
 
-  const conversations = ((sessionsResult.data ?? []) as SessionRow[]).map(
-    (session, index): ConversationItem => {
-      const transcript = transcriptBySession.get(session.id) ?? []
-      const firstUserLine = transcript.find((line) => line.speaker === 'user')
-      const lastAssistantLine = [...transcript]
-        .reverse()
-        .find((line) => line.speaker === 'assistant')
+async function loadTasks(
+  userId: string,
+  signal: AbortSignal,
+): Promise<TaskItem[]> {
+  const { data, error } = await supabase
+    .from('task_proposals')
+    .select('id,title,schedule,due_at,status,created_at,resolved_at')
+    .eq('user_id', userId)
+    .order('due_at', { ascending: true })
+    .limit(100)
+    .abortSignal(signal)
 
-      return {
-        id: session.id,
-        title: firstUserLine
-          ? shorten(firstUserLine.text, 58)
-          : `Conversation ${String(index + 1).padStart(2, '0')}`,
-        summary: lastAssistantLine
-          ? shorten(lastAssistantLine.text, 118)
-          : 'No assistant response was recorded.',
-        status: session.status,
-        startedAt: session.started_at,
-        lastActivityAt: session.last_activity_at,
-        transcript,
-      }
-    },
-  )
+  if (error) {
+    throw new Error(error.message)
+  }
+  return mapTasks((data ?? []) as TaskRow[])
+}
 
-  const watches = ((watchesResult.data ?? []) as WatchRow[]).map(
-    (row): WatchItem => ({
-      id: row.id,
-      query: row.query,
-      condition: row.condition,
-      intervalMinutes: row.interval_minutes,
-      expiresAt: row.expires_at,
-      status: row.status,
-      createdAt: row.created_at,
-      nextCheckAt: row.next_check_at ?? undefined,
-      lastCheckedAt: row.last_checked_at ?? undefined,
-      seenCount: row.seen_urls.length,
-    }),
-  )
-
-  const tasks = ((tasksResult.data ?? []) as TaskRow[]).map(
-    (row): TaskItem => ({
-      id: row.id,
-      title: row.title,
-      schedule: row.schedule,
-      dueAt: row.due_at,
-      status: row.status,
-      createdAt: row.created_at,
-      resolvedAt: row.resolved_at ?? undefined,
-    }),
-  )
+export async function loadWorkspaceData(
+  userId: string,
+  signal: AbortSignal,
+): Promise<WorkspaceData> {
+  const [conversations, memories, watches, tasks] = await Promise.all([
+    loadConversations(userId, signal, transcriptHistoryLimit),
+    loadMemories(userId, signal),
+    loadWatches(userId, signal),
+    loadTasks(userId, signal),
+  ])
 
   return {
     conversations,
-    memories: ((memoriesResult.data ?? []) as MemoryRow[]).map(mapMemory),
+    memories,
     watches,
     tasks,
   }
+}
+
+export async function refreshWorkspaceData(
+  userId: string,
+  current: WorkspaceData,
+  resources: readonly WorkspaceResource[],
+  signal: AbortSignal,
+): Promise<Partial<WorkspaceData>> {
+  const [conversations, memories, watches, tasks] = await Promise.all([
+    resources.includes('conversations')
+      ? loadConversations(
+          userId,
+          signal,
+          transcriptRefreshLimit,
+          current.conversations,
+        )
+      : undefined,
+    resources.includes('memories') ? loadMemories(userId, signal) : undefined,
+    resources.includes('watches') ? loadWatches(userId, signal) : undefined,
+    resources.includes('tasks') ? loadTasks(userId, signal) : undefined,
+  ])
+
+  const refreshed: Partial<WorkspaceData> = {}
+  if (conversations !== undefined) {
+    refreshed.conversations = conversations
+  }
+  if (memories !== undefined) {
+    refreshed.memories = memories
+  }
+  if (watches !== undefined) {
+    refreshed.watches = watches
+  }
+  if (tasks !== undefined) {
+    refreshed.tasks = tasks
+  }
+  return refreshed
 }
 
 export async function saveMemory(

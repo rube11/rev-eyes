@@ -9,10 +9,12 @@
   "permissions": [
     {
       "name": "network",
-      "desc": "Connects to Rev Eyes services for authentication and assistant responses.",
+      "desc": "Connects to Rev Eyes services and downloads local speech-recognition model assets.",
       "whitelist": [
         "https://api.rev-eyes.com",
-        "https://ikqdeosysrsynkxbijgn.supabase.co"
+        "https://ikqdeosysrsynkxbijgn.supabase.co",
+        "https://download.moonshine.ai",
+        "https://cdn.jsdelivr.net"
       ]
     },
     {

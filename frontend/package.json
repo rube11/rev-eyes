@@ -8,12 +8,14 @@
     "build": "tsc -b && vite build",
     "build:beta": "tsc -b && vite build --mode beta",
     "lint": "eslint .",
+    "test": "tsc -p tsconfig.test.json && node --test node_modules/.tmp/pcm-ring-buffer-tests/tests/*.test.js",
     "pack:beta": "pnpm build:beta && evenhub pack app.json dist --output rev-eyes-beta.ehpk",
     "qr": "evenhub qr",
     "preview": "vite preview"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.12",
+    "@moonshine-ai/moonshine-js": "0.1.29",
     "@supabase/supabase-js": "^2.110.7",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"
@@ -32,5 +34,10 @@
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.58.2",
     "vite": "^8.0.10"
+  },
+  "pnpm": {
+    "overrides": {
+      "@moonshine-ai/moonshine-js>@ricky0123/vad-web": "0.0.24"
+    }
   }
 }
