@@ -65,6 +65,13 @@ func TestAgentReturnsText(t *testing.T) {
 	if !strings.Contains(request.Instructions, "call search_web before answering") {
 		t.Fatalf("instructions = %q", request.Instructions)
 	}
+	if !strings.Contains(request.Instructions, "budgets, preferences") ||
+		!strings.Contains(request.Instructions, "Use research mode for recommendations") ||
+		!strings.Contains(request.Instructions, "authoritative domain filters") ||
+		!strings.Contains(request.Instructions, "real bare hostname containing a dot") ||
+		!strings.Contains(request.Instructions, "one well-formed research search") {
+		t.Fatalf("search instructions = %q", request.Instructions)
+	}
 	if !strings.Contains(request.Instructions, "Use propose_watch once") {
 		t.Fatalf("instructions = %q", request.Instructions)
 	}
