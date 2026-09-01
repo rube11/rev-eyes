@@ -18,14 +18,8 @@ import {
   presentGlassesMessage,
 } from "./glasses-ui"
 import type { GlassesMessage } from "./glasses-ui"
-import {
-  CandidateAudioClient,
-  type CandidateFinalizedEvent,
-  type MoonshineRunResult,
-} from "./candidate-audio-client"
-import { AssistantConversationState } from "./assistant-conversation-state"
+import { AudioCaptureController } from "./audio"
 import { AssistantResponseLifecycle } from "./assistant-response-lifecycle"
-import { FocusedCandidateTracker } from "./focused-candidate-tracker"
 import {
   getEvenBridge,
   renderGlassesPage,
@@ -46,7 +40,6 @@ import {
 } from "./realtime-socket"
 import type { WorkspaceResource } from "../features/workspace/workspaceTypes"
 import { connectRealtimeSocket } from "../shared/api/client"
-import { env } from "../shared/config/env"
 
 export { showEvenMessage } from "./glasses-page-host"
 
@@ -58,7 +51,6 @@ type NotificationPresentation = {
 }
 type AssistantPresentation = {
   message: GlassesMessage
-  awaitingConfirmation: boolean
   sourceText: string
 }
 type SocketBinding = {
@@ -149,7 +141,6 @@ export async function initializeEvenExperience(
   let socket: WebSocket | undefined
   let socketBinding: SocketBinding | undefined
   let listeningState: ListeningState = "idle"
-  const focusedCandidate = new FocusedCandidateTracker()
   let surface: DisplaySurface = "compact"
   let transcriptLayoutHasBody = false
   let locationStarted = false
@@ -158,7 +149,6 @@ export async function initializeEvenExperience(
   let visibleAssistant: AssistantPresentation | undefined
   let deferredAssistant: AssistantPresentation | undefined
   let lastAssistant: AssistantPresentation | undefined
-  const assistantConversation = new AssistantConversationState()
   let currentNotification: NotificationPresentation | undefined
   const notificationQueue: NotificationPresentation[] = []
   const seenNotificationIds = new Set<string>()
@@ -178,54 +168,14 @@ export async function initializeEvenExperience(
   onStatus("Connecting")
   await renderGlassesPage(buildCompactPage("CONNECTING"))
   const bridge = await getEvenBridge()
-  const candidateAudioEnabled = env.candidateAudioEnabled
-  const continuousListeningEnabled =
-    candidateAudioEnabled && env.continuousListeningEnabled
-  const candidateAudio = new CandidateAudioClient({
-    candidateAudioEnabled,
-    debugTranscripts: env.moonshineDebugTranscripts,
-    forwardDiagnostics:
-      import.meta.env.DEV && env.moonshineDebugTranscripts,
-    device: {
-      start: () => bridge.audioControl(true, AudioInputSource.Glasses),
-      stop: () => bridge.audioControl(false),
-    },
-    getSocket: () => socket,
-    moonshineEnabled: env.moonshineShadowEnabled || candidateAudioEnabled,
-    onCandidateFinalized: handleCandidateFinalized,
-    onCandidateSent: handleCandidateSent,
-    onRunComplete: handleMoonshineRunComplete,
-    onVoiceReplyStarted: handleVoiceReplyStarted,
+  const audioCapture = new AudioCaptureController({
+    start: () => bridge.audioControl(true, AudioInputSource.Glasses),
+    stop: () => bridge.audioControl(false),
   })
   const responseLifecycle = new AssistantResponseLifecycle({
     onConversationExpired: handleResponseConversationExpired,
     onDisplayExpired: handleResponseDisplayExpired,
   })
-  void candidateAudio.prepare().then((ready) => {
-    if (!continuousListeningEnabled) {
-      return
-    }
-    void enqueueTransition(async () => {
-      if (!ready) {
-        if (socketIsOpen() && !sleeping) {
-          reportStatus("Local speech model unavailable")
-          await showIdlePrompt("LOCAL MODEL UNAVAILABLE")
-        }
-        return
-      }
-      const started = await ensureContinuousCapture()
-      if (
-        started &&
-        listeningState === "idle" &&
-        !thinking &&
-        !currentNotification &&
-        !visibleAssistant
-      ) {
-        await showReady()
-      }
-    })
-  })
-
   function reportStatus(status: string) {
     if (active) {
       onStatus(status)
@@ -254,107 +204,10 @@ export async function initializeEvenExperience(
 
   function cancelAssistantResponseWindow(): void {
     responseLifecycle.cancel()
-    candidateAudio.setVoiceReplyArmed(false)
-    assistantConversation.closeResponseWindow()
   }
 
   function resetAssistantInteraction(): void {
     responseLifecycle.cancel()
-    candidateAudio.setVoiceReplyArmed(false)
-    assistantConversation.reset()
-  }
-
-  function isCompetingCandidateMessage(messageID: string | undefined): boolean {
-    return (
-      continuousListeningEnabled &&
-      focusedCandidate.competes(messageID)
-    )
-  }
-
-  function handleCandidateSent(candidateID: string): void {
-    const ownsInteraction = focusedCandidate.focus(
-      candidateID,
-      listeningState === "listening" || listeningState === "stopping",
-    )
-    if (!assistantConversation.replyActive || !ownsInteraction) {
-      return
-    }
-
-    listeningState = "stopping"
-    awaitingResponse = true
-    reportStatus("Thinking")
-    void enqueueTransition(async () => {
-      if (
-        !assistantConversation.replyActive ||
-        !awaitingResponse ||
-        sleeping ||
-        currentNotification
-      ) {
-        return
-      }
-      await startThinkingAnimation()
-    })
-  }
-
-  function handleCandidateFinalized(event: CandidateFinalizedEvent): void {
-    if (
-      event.category !== "manual" ||
-      event.submitted ||
-      !assistantConversation.replyActive
-    ) {
-      return
-    }
-
-    assistantConversation.finishReply()
-    listeningState = "idle"
-    focusedCandidate.clear()
-    awaitingResponse = false
-    reportStatus(socketIsOpen() ? "Connected" : "Reconnecting")
-    void enqueueTransition(async () => {
-      if (sleeping || currentNotification || listeningState !== "idle") {
-        return
-      }
-      if (!socketIsOpen()) {
-        await showConnectionLost()
-        return
-      }
-      await showReady()
-    })
-  }
-
-  function handleVoiceReplyStarted(): void {
-    const replyAllowed =
-      active &&
-      !sleeping &&
-      !currentNotification &&
-      !thinking &&
-      !awaitingResponse &&
-      listeningState === "idle" &&
-      socketIsOpen() &&
-      assistantConversation.beginReply()
-    if (!replyAllowed) {
-      candidateAudio.discardPendingCandidate()
-      cancelAssistantResponseWindow()
-      return
-    }
-
-    cancelAssistantResponseWindow()
-    focusedCandidate.clear()
-    listeningState = "listening"
-    latestTranscript = ""
-    visibleAssistant = undefined
-    reportStatus("Listening")
-    void enqueueTransition(async () => {
-      if (
-        !assistantConversation.replyActive ||
-        listeningState !== "listening" ||
-        sleeping ||
-        currentNotification
-      ) {
-        return
-      }
-      await showListening()
-    })
   }
 
   function handleResponseDisplayExpired(): void {
@@ -373,21 +226,14 @@ export async function initializeEvenExperience(
         return
       }
       visibleAssistant = undefined
-      if (!assistantConversation.voiceReplyAvailable) {
-        await showReady()
-        return
-      }
-      await setPage(buildCompactPage("SPEAK TO FOLLOW UP"), "compact")
+      await showReady()
     })
   }
 
   function handleResponseConversationExpired(): void {
-    candidateAudio.setVoiceReplyArmed(false)
-    assistantConversation.closeResponseWindow()
     void enqueueTransition(async () => {
       if (
         responseLifecycle.active ||
-        assistantConversation.replyActive ||
         sleeping ||
         currentNotification ||
         listeningState !== "idle" ||
@@ -400,52 +246,14 @@ export async function initializeEvenExperience(
     })
   }
 
-  function handleMoonshineRunComplete(result: MoonshineRunResult): void {
-    if (
-      !candidateAudioEnabled ||
-      continuousListeningEnabled ||
-      !active
-    ) {
-      return
-    }
-    void enqueueTransition(async () => {
-      if (listeningState !== "stopping") {
-        return
-      }
-      listeningState = "idle"
-      if (result.candidateSubmitted) {
-        return
-      }
-      awaitingResponse = false
-      clearThinkingAnimation()
-      reportStatus("Connected")
-      if (!sleeping && !currentNotification) {
-        await showReady()
-      }
-    })
-  }
-
   async function startAudioCapture(): Promise<boolean> {
-    return candidateAudio.startCapture(
+    return audioCapture.start(
       () => active && !sleeping && socketIsOpen(),
     )
   }
 
-  async function ensureContinuousCapture(): Promise<boolean> {
-    if (
-      !continuousListeningEnabled ||
-      !active ||
-      sleeping ||
-      !socketIsOpen() ||
-      !candidateAudio.isReady()
-    ) {
-      return false
-    }
-    return startAudioCapture()
-  }
-
-  async function stopAudioCapture(finalizeCandidate = true) {
-    await candidateAudio.stopCapture(finalizeCandidate)
+  async function stopAudioCapture() {
+    await audioCapture.stop()
   }
 
   function clearThinkingAnimation() {
@@ -542,11 +350,7 @@ export async function initializeEvenExperience(
     latestTranscript = ""
     idlePrompt = undefined
     visibleAssistant = undefined
-    const prompt =
-      continuousListeningEnabled && candidateAudio.captureRunning
-        ? "LISTENING LOCALLY  ·  TAP TO TALK"
-        : "TAP TO TALK"
-    await setPage(buildCompactPage(prompt), "compact")
+    await setPage(buildCompactPage("TAP TO TALK"), "compact")
   }
 
   async function showListening() {
@@ -557,11 +361,7 @@ export async function initializeEvenExperience(
       return
     }
     await setPage(
-      buildCompactPage(
-        assistantConversation.replyActive
-          ? "LISTENING"
-          : "LISTENING  ·  TAP TO FINISH",
-      ),
+      buildCompactPage("LISTENING  ·  PAUSE TO SEND"),
       "compact",
     )
   }
@@ -585,30 +385,9 @@ export async function initializeEvenExperience(
   ) {
     cancelAssistantResponseWindow()
     clearThinkingAnimation()
-    const handsFreeEligible =
-      continuousListeningEnabled &&
-      candidateAudio.captureRunning &&
-      candidateAudio.isReady() &&
-      !candidateAudio.hasInFlightCandidates() &&
-      socketIsOpen() &&
-      !sleeping &&
-      !currentNotification
-    let voiceReplyAvailable = false
-    if (handsFreeEligible) {
-      // Establish a clean turn boundary. Any pre-response ambient window is no
-      // longer eligible to become the user's explicit follow-up.
-      candidateAudio.discardPendingCandidate()
-      voiceReplyAvailable = candidateAudio.setVoiceReplyArmed(true)
-    }
-    assistantConversation.openResponseWindow(voiceReplyAvailable)
-    const action = assistantConversation.voiceReplyAvailable
-      ? presentation.awaitingConfirmation
-        ? 'SAY "SAVE THAT" OR "NO"'
-        : "SPEAK TO FOLLOW UP"
-      : "TAP TO RESPOND"
     try {
       await setPage(
-        buildMessagePage(presentation.message, action),
+        buildMessagePage(presentation.message, "TAP TO RESPOND"),
         "message",
       )
     } catch (error) {
@@ -648,15 +427,11 @@ export async function initializeEvenExperience(
     if (listeningState !== "idle") {
       awaitingResponse =
         listeningState === "listening" || listeningState === "stopping"
-      if (!candidateAudioEnabled) {
-        sendControl("listening_stop")
-      }
+      sendControl("listening_stop")
       listeningState = "idle"
     }
-    focusedCandidate.clear()
-    candidateAudio.discardPendingCandidate()
-    if (candidateAudio.captureState !== "idle") {
-      await stopAudioCapture(false)
+    if (audioCapture.state !== "idle") {
+      await stopAudioCapture()
     }
     reportStatus("Sleeping")
     await setPage(buildSleepPage(), "sleep")
@@ -675,7 +450,6 @@ export async function initializeEvenExperience(
       return
     }
 
-    await ensureContinuousCapture()
     reportStatus("Connected")
     if (currentNotification) {
       await showPresentation(currentNotification.message)
@@ -761,7 +535,6 @@ export async function initializeEvenExperience(
       notificationQueue.push(notification)
       if (sleeping) {
         sleeping = false
-        await ensureContinuousCapture()
         reportStatus("Connected")
         await showPresentation(currentNotification.message)
       }
@@ -774,7 +547,6 @@ export async function initializeEvenExperience(
       visibleAssistant = undefined
     }
     sleeping = false
-    await ensureContinuousCapture()
     reportStatus("Connected")
     await showPresentation(notification.message)
   }
@@ -861,10 +633,8 @@ export async function initializeEvenExperience(
     idlePrompt = undefined
     const wasListening = listeningState !== "idle"
     listeningState = "idle"
-    focusedCandidate.clear()
-    candidateAudio.resetTransport()
-    if (wasListening || candidateAudio.captureState !== "idle") {
-      await stopAudioCapture(false)
+    if (wasListening || audioCapture.state !== "idle") {
+      await stopAudioCapture()
     }
     await stopLocationUpdates()
     scheduleReconnect()
@@ -915,7 +685,6 @@ export async function initializeEvenExperience(
     socket = nextSocket
     bindSocket(nextSocket)
     onConnected()
-    await ensureContinuousCapture()
 
     if (sleeping) {
       reportStatus("Sleeping")
@@ -1027,17 +796,10 @@ export async function initializeEvenExperience(
         listeningState === "starting" ||
         listeningState === "listening"
       ) {
-        if (!candidateAudioEnabled) {
-          sendControl("listening_stop")
-        }
+        sendControl("listening_stop")
       }
       listeningState = "idle"
-      if (continuousListeningEnabled) {
-        focusedCandidate.clear()
-        candidateAudio.discardPendingCandidate()
-      } else {
-        await stopAudioCapture(!candidateAudioEnabled)
-      }
+      await stopAudioCapture()
     }
 
     const wakesSleepingInterface =
@@ -1052,37 +814,16 @@ export async function initializeEvenExperience(
       return
     }
     sleeping = false
-    await ensureContinuousCapture()
     visibleAssistant = presentation
     reportStatus("Connected")
     await showAssistantPresentation(presentation)
   }
 
-  async function completeAssistantTurn(messageID: string | undefined) {
-    candidateAudio.complete(messageID)
-    const focusedCompletion = focusedCandidate.matches(messageID)
-    if (isCompetingCandidateMessage(messageID)) {
-      return
-    }
-    const silentAmbientCompletion =
-      continuousListeningEnabled &&
-      messageID !== undefined &&
-      listeningState === "idle" &&
-      !focusedCandidate.active &&
-      !thinking &&
-      !awaitingResponse
+  async function completeAssistantTurn() {
     awaitingResponse = false
     clearThinkingAnimation()
-    if (focusedCompletion) {
-      assistantConversation.finishReply()
-      listeningState = "idle"
-      focusedCandidate.clear()
-    }
     if (sleeping) {
       reportStatus("Sleeping")
-      return
-    }
-    if (silentAmbientCompletion) {
       return
     }
     reportStatus("Connected")
@@ -1130,6 +871,14 @@ export async function initializeEvenExperience(
         cancelAssistantResponseWindow()
         visibleAssistant = undefined
         awaitingResponse = true
+        if (
+          listeningState === "starting" ||
+          listeningState === "listening"
+        ) {
+          listeningState = "stopping"
+          sendControl("listening_stop")
+          await stopAudioCapture()
+        }
         if (sleeping) {
           reportStatus("Sleeping")
           return
@@ -1140,25 +889,19 @@ export async function initializeEvenExperience(
       }
 
       case "assistant_done": {
-        await completeAssistantTurn(message.id)
+        await completeAssistantTurn()
         return
       }
 
       case "assistant_response": {
         const responseText = message.text?.trim()
         if (!responseText) {
-          await completeAssistantTurn(message.id)
-          return
-        }
-        candidateAudio.complete(message.id)
-        if (isCompetingCandidateMessage(message.id)) {
-          onResponse(responseText)
+          await completeAssistantTurn()
           return
         }
         onResponse(responseText)
         const presentation: AssistantPresentation = {
           message: presentGlassesMessage(responseText),
-          awaitingConfirmation: message.awaitingConfirmation === true,
           sourceText: responseText,
         }
         lastAssistant = presentation
@@ -1167,21 +910,9 @@ export async function initializeEvenExperience(
       }
 
       case "assistant_repeat": {
-        candidateAudio.complete(message.id)
-        if (isCompetingCandidateMessage(message.id)) {
-          return
-        }
         if (!lastAssistant) {
-          assistantConversation.finishReply()
           awaitingResponse = false
           clearThinkingAnimation()
-          if (
-            continuousListeningEnabled &&
-            focusedCandidate.matches(message.id)
-          ) {
-            listeningState = "idle"
-            focusedCandidate.clear()
-          }
           if (!sleeping && !currentNotification) {
             await showReady()
           }
@@ -1244,24 +975,7 @@ export async function initializeEvenExperience(
     if (listeningState === "listening") {
       listeningState = "stopping"
       awaitingResponse = true
-      if (continuousListeningEnabled) {
-        const submitted =
-          candidateAudio.finalizePendingCandidate() ||
-          focusedCandidate.active
-        if (!submitted) {
-          listeningState = "idle"
-          awaitingResponse = false
-          focusedCandidate.clear()
-          reportStatus("Connected")
-          await showReady()
-          return
-        }
-        reportStatus("Thinking")
-        await startThinkingAnimation()
-        return
-      }
-
-      const sent = candidateAudioEnabled || sendControl("listening_stop")
+      const sent = sendControl("listening_stop")
       await stopAudioCapture()
       if (!sent) {
         listeningState = "idle"
@@ -1278,13 +992,6 @@ export async function initializeEvenExperience(
     }
 
     if (thinking) {
-      return
-    }
-
-    if (
-      continuousListeningEnabled &&
-      candidateAudio.hasInFlightCandidates()
-    ) {
       return
     }
 
@@ -1307,28 +1014,20 @@ export async function initializeEvenExperience(
       return
     }
 
-    if (candidateAudioEnabled && !candidateAudio.isReady()) {
-      reportStatus("Local speech model loading")
-      await showIdlePrompt("LOCAL MODEL LOADING  ·  TAP TO RETRY")
-      return
-    }
     latestTranscript = ""
     idlePrompt = undefined
     resetAssistantInteraction()
     visibleAssistant = undefined
-    focusedCandidate.clear()
     listeningState = "starting"
     reportStatus("Starting microphone")
     await setPage(buildCompactPage("STARTING MICROPHONE"), "compact")
     if (!active || listeningState !== "starting") {
       return
     }
-    const started = continuousListeningEnabled
-      ? await ensureContinuousCapture()
-      : await startAudioCapture()
+    const started = await startAudioCapture()
     if (!active || listeningState !== "starting") {
       if (started) {
-        await stopAudioCapture(false)
+        await stopAudioCapture()
       }
       return
     }
@@ -1338,19 +1037,9 @@ export async function initializeEvenExperience(
       await showIdlePrompt("MIC UNAVAILABLE  ·  TAP TO RETRY")
       return
     }
-    if (
-      candidateAudioEnabled &&
-      !candidateAudio.armForcedCandidate()
-    ) {
+    if (!sendControl("listening_start")) {
       listeningState = "idle"
-      await stopAudioCapture(false)
-      reportStatus("Local speech model unavailable")
-      await showIdlePrompt("LOCAL MODEL UNAVAILABLE")
-      return
-    }
-    if (!candidateAudioEnabled && !sendControl("listening_start")) {
-      listeningState = "idle"
-      await stopAudioCapture(false)
+      await stopAudioCapture()
       reportStatus("Reconnecting")
       closeSocketQuietly(socket)
       forceReconnect()
@@ -1374,14 +1063,11 @@ export async function initializeEvenExperience(
 
     const pcm = event.audioEvent?.audioPcm
     if (pcm) {
-      if (candidateAudio.captureRunning) {
+      if (audioCapture.running) {
         let ownedPcm: Uint8Array<ArrayBuffer> | undefined
         try {
           ownedPcm = Uint8Array.from(pcm)
-          candidateAudio.push(ownedPcm)
-          if (!candidateAudioEnabled) {
-            safeSend(socket, ownedPcm.buffer)
-          }
+          safeSend(socket, ownedPcm.buffer)
         } catch {
           // Ignore malformed or late audio frames.
         } finally {
@@ -1417,15 +1103,13 @@ export async function initializeEvenExperience(
     clearThinkingAnimation()
     resetAssistantInteraction()
     listeningState = "idle"
-    focusedCandidate.clear()
     stopEvents()
     stopLocationEvents()
     unbindSocket()
     const closingSocket = socket
     socket = undefined
-      closeSocketQuietly(closingSocket)
-    candidateAudio.resetTransport()
-    candidateAudio.dispose()
+    closeSocketQuietly(closingSocket)
+    void audioCapture.dispose()
     if (locationStarted) {
       locationStarted = false
       void bridge.stopAppLocationUpdates().catch(() => undefined)

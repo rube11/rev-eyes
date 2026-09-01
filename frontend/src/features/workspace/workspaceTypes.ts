@@ -54,6 +54,7 @@ export type MemoryItem = {
   status: 'active' | 'superseded' | 'forgotten'
   createdAt: string
   updatedAt: string
+  expiresAt?: string
 }
 
 export type WatchItem = {

@@ -38,6 +38,7 @@ type MemoryRow = {
   status: MemoryItem['status']
   created_at: string
   updated_at: string
+  expires_at: string | null
 }
 
 type WatchRow = {
@@ -83,6 +84,7 @@ function mapMemory(row: MemoryRow): MemoryItem {
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    expiresAt: row.expires_at ?? undefined,
   }
 }
 
@@ -213,11 +215,13 @@ async function loadMemories(
   userId: string,
   signal: AbortSignal,
 ): Promise<MemoryItem[]> {
+  const now = new Date().toISOString()
   const { data, error } = await supabase
     .from('memories')
-    .select('id,title,summary,topics,kind,status,created_at,updated_at')
+    .select('id,title,summary,topics,kind,status,created_at,updated_at,expires_at')
     .eq('user_id', userId)
     .eq('status', 'active')
+    .or(`expires_at.is.null,expires_at.gt.${now}`)
     .order('updated_at', { ascending: false })
     .limit(200)
     .abortSignal(signal)
@@ -337,7 +341,7 @@ export async function saveMemory(
       entities: [],
       status: 'active',
     })
-    .select('id,title,summary,topics,kind,status,created_at,updated_at')
+    .select('id,title,summary,topics,kind,status,created_at,updated_at,expires_at')
     .single()
 
   if (error) {

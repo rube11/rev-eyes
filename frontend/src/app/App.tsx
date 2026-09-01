@@ -254,6 +254,41 @@ function App() {
   }, [workspaceData])
 
   useEffect(() => {
+    if (!workspaceData) {
+      return
+    }
+
+    const nextExpiry = Math.min(
+      ...workspaceData.memories
+        .flatMap((memory) =>
+          memory.expiresAt ? [Date.parse(memory.expiresAt)] : [],
+        )
+        .filter(Number.isFinite),
+    )
+    if (!Number.isFinite(nextExpiry)) {
+      return
+    }
+
+    const timer = window.setTimeout(
+      () =>
+        setWorkspaceData((current) => {
+          if (!current) {
+            return current
+          }
+          const memories = current.memories.filter(
+            (memory) =>
+              !memory.expiresAt || Date.parse(memory.expiresAt) > Date.now(),
+          )
+          return memories.length === current.memories.length
+            ? current
+            : { ...current, memories }
+        }),
+      Math.max(0, nextExpiry - Date.now() + 50),
+    )
+    return () => window.clearTimeout(timer)
+  }, [workspaceData])
+
+  useEffect(() => {
     if (isDemoMode) {
       return
     }
