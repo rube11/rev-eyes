@@ -15,6 +15,7 @@ import (
 var initDeepgram sync.Once
 
 const finalizeTimeout = 3 * time.Second
+const speechEndpointSilence = "800"
 
 type deepgramTranscriber struct {
 	deepgramKey string
@@ -62,6 +63,7 @@ func (dg *deepgramTranscriber) Transcribe(
 		Punctuate:      true,
 		SmartFormat:    true,
 		InterimResults: true,
+		Endpointing:    speechEndpointSilence,
 	}
 
 	streamCtx, cancel := context.WithCancel(ctx)
@@ -93,20 +95,12 @@ func (dg *deepgramTranscriber) Transcribe(
 			}
 			return streamCtx.Err()
 
+		case <-handler.Endpointed():
+			return finalizeDeepgramStream(streamCtx, dgClient, handler)
+
 		case chunk, ok := <-audio:
 			if !ok {
-				if err := dgClient.Finalize(); err != nil {
-					return fmt.Errorf("finalize Deepgram stream: %w", err)
-				}
-
-				select {
-				case <-handler.Finalized():
-					return nil
-				case <-streamCtx.Done():
-					return streamCtx.Err()
-				case <-time.After(finalizeTimeout):
-					return errors.New("timed out waiting for Deepgram finalization")
-				}
+				return finalizeDeepgramStream(streamCtx, dgClient, handler)
 			}
 			if len(chunk) == 0 {
 				continue
@@ -117,5 +111,28 @@ func (dg *deepgramTranscriber) Transcribe(
 				return fmt.Errorf("write audio to Deepgram: %w", err)
 			}
 		}
+	}
+}
+
+type deepgramFinalizer interface {
+	Finalize() error
+}
+
+func finalizeDeepgramStream(
+	ctx context.Context,
+	client deepgramFinalizer,
+	handler *deepgramHandler,
+) error {
+	if err := client.Finalize(); err != nil {
+		return fmt.Errorf("finalize Deepgram stream: %w", err)
+	}
+
+	select {
+	case <-handler.Finalized():
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(finalizeTimeout):
+		return errors.New("timed out waiting for Deepgram finalization")
 	}
 }
