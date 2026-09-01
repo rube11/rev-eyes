@@ -67,12 +67,15 @@ func TestClassifierRequestUsesStrictCompleteActionSchema(t *testing.T) {
 	if schema["additionalProperties"] != false {
 		t.Fatalf("additionalProperties = %#v, want false", schema["additionalProperties"])
 	}
-	wantRequired := []string{"action", "query", "memory_lookup", "memory"}
+	wantRequired := []string{"action", "query", "memory_lookup"}
 	if got := schema["required"]; !reflect.DeepEqual(got, wantRequired) {
 		t.Fatalf("required = %#v, want %#v", got, wantRequired)
 	}
 
 	properties := schema["properties"].(map[string]any)
+	if _, exists := properties["memory"]; exists {
+		t.Fatalf("router schema still contains deprecated memory payload: %#v", properties["memory"])
+	}
 	action := properties["action"].(map[string]any)
 	wantActions := []string{
 		"ignore",
@@ -84,5 +87,13 @@ func TestClassifierRequestUsesStrictCompleteActionSchema(t *testing.T) {
 	}
 	if got := action["enum"]; !reflect.DeepEqual(got, wantActions) {
 		t.Fatalf("action enum = %#v, want %#v", got, wantActions)
+	}
+	memoryLookup := properties["memory_lookup"].(map[string]any)
+	lookupProperties := memoryLookup["properties"].(map[string]any)
+	if got := lookupProperties["terms"].(map[string]any)["maxItems"]; got != 5 {
+		t.Fatalf("memory terms maxItems = %#v, want 5", got)
+	}
+	if got := lookupProperties["topics"].(map[string]any)["maxItems"]; got != 3 {
+		t.Fatalf("memory topics maxItems = %#v, want 3", got)
 	}
 }

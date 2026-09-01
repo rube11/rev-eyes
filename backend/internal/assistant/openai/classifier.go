@@ -38,19 +38,12 @@ Examples:
 Set query to a concise, standalone version of the request. Use an empty query for ignore.
 Set memory_lookup to empty arrays unless the action is respond, propose_task, or propose_watch.
 For respond, propose_task, and propose_watch, always create a proactive memory lookup:
-- terms: one to five short lowercase words or phrases likely to appear in a relevant memory title or summary. Include useful synonyms, not filler words.
+- terms: one to five short lowercase words or phrases likely to appear in a relevant memory title or summary. Prefer stable remembered concepts such as "protein target", "food preference", or "manager" over surface request wording such as "what should I do", "right now", or "what's the move".
 - topics: zero to three relevant memory topics.
 - kinds: zero or more relevant memory kinds.
 - entities: names explicitly mentioned in the request.
-Topics and kinds are hard filters, so leave them empty when uncertain.
-Set memory to null unless the action is remember.
-For remember, set query to the memory summary and create one memory card:
-- Choose one to three topics from: work, personal, friends, family, relationships, health, preferences, goals, places, other.
-- Choose a kind from: fact, preference, relationship, event, goal, instruction.
-- Write a short title and a single concise, standalone summary.
-- Add useful details as lowercase snake_case keys with short values.
-- Include named people, places, organizations, projects, and events as entities.
-- Use only facts stated in the utterance. Never resolve missing context or invent details.
+Text terms and exact entities are the strongest retrieval signals. A memory can also match through a topic and kind together, so include both for broad profile questions such as food preferences or health goals. Never include a topic or kind merely because it might be related.
+For remember, set query to a concise standalone version of the fact the user asked to save. Memory extraction is handled separately; do not create a memory card.
 For propose_task, preserve whether the user explicitly requested a reminder or implied the action in query.
 Choose propose_watch only when future web information must be checked repeatedly, not for a one-time current-information question.
 Classify the speech only. Do not answer it.`
@@ -137,14 +130,8 @@ func classifierRequest(model, utterance string) map[string]any {
 						},
 						"query":         map[string]string{"type": "string"},
 						"memory_lookup": memoryLookupSchema(),
-						"memory": map[string]any{
-							"anyOf": []any{
-								memoryCardSchema(),
-								map[string]string{"type": "null"},
-							},
-						},
 					},
-					"required":             []string{"action", "query", "memory_lookup", "memory"},
+					"required":             []string{"action", "query", "memory_lookup"},
 					"additionalProperties": false,
 				},
 			},
@@ -153,11 +140,15 @@ func classifierRequest(model, utterance string) map[string]any {
 }
 
 func memoryLookupSchema() map[string]any {
+	terms := stringArraySchema(nil)
+	terms["maxItems"] = 5
+	topics := stringArraySchema(memory.TopicValues())
+	topics["maxItems"] = 3
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"terms":    stringArraySchema(nil),
-			"topics":   stringArraySchema(memory.TopicValues()),
+			"terms":    terms,
+			"topics":   topics,
 			"kinds":    stringArraySchema(memory.KindValues()),
 			"entities": stringArraySchema(nil),
 		},
@@ -172,57 +163,6 @@ func stringArraySchema(values []string) map[string]any {
 		items["enum"] = values
 	}
 	return map[string]any{"type": "array", "items": items}
-}
-
-func memoryCardSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"topics": stringArraySchema(memory.TopicValues()),
-			"kind": map[string]any{
-				"type": "string",
-				"enum": memory.KindValues(),
-			},
-			"title":   map[string]string{"type": "string"},
-			"summary": map[string]string{"type": "string"},
-			"details": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"key":   map[string]string{"type": "string"},
-						"value": map[string]string{"type": "string"},
-					},
-					"required":             []string{"key", "value"},
-					"additionalProperties": false,
-				},
-			},
-			"entities": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"type": map[string]any{
-							"type": "string",
-							"enum": memory.EntityTypeValues(),
-						},
-						"name": map[string]string{"type": "string"},
-					},
-					"required":             []string{"type", "name"},
-					"additionalProperties": false,
-				},
-			},
-		},
-		"required": []string{
-			"topics",
-			"kind",
-			"title",
-			"summary",
-			"details",
-			"entities",
-		},
-		"additionalProperties": false,
-	}
 }
 
 type classifierResponse struct {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/session"
@@ -207,6 +208,7 @@ func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
 	wantAgentScope := wantScope
 	wantAgentScope.UtteranceID = "utterance-789"
 	wantLookup := memory.Lookup{
+		Query:  "What is nearby?",
 		Terms:  []string{"cafe"},
 		Topics: []memory.Topic{memory.TopicPlaces},
 	}
@@ -299,6 +301,81 @@ func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
 	}
 	if outcome.Response != "There is a cafe nearby." {
 		t.Fatalf("outcome response = %q", outcome.Response)
+	}
+}
+
+func TestHandleUtteranceLoadsMemoryAndConversationInParallel(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	service, err := NewService(
+		routerFunc(func(context.Context, string) (Decision, error) {
+			return Decision{Action: ActionRespond, Query: "dinner ideas"}, nil
+		}),
+		agentFunc(func(
+			context.Context,
+			tool.Scope,
+			string,
+			session.Conversation,
+			[]memory.Card,
+		) (string, error) {
+			return "Dinner.", nil
+		}),
+		memoryReaderFunc(func(
+			context.Context,
+			tool.Scope,
+			memory.Lookup,
+		) ([]memory.Card, error) {
+			started <- "memory"
+			<-release
+			return nil, nil
+		}),
+		conversationReaderFunc(func(
+			context.Context,
+			tool.Scope,
+			string,
+			string,
+		) (session.Conversation, error) {
+			started <- "conversation"
+			<-release
+			return session.Conversation{}, nil
+		}),
+		noProposalConfirmation,
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, handleErr := service.HandleUtterance(
+			context.Background(),
+			tool.Scope{},
+			"utterance-1",
+			"What should I make?",
+		)
+		done <- handleErr
+	}()
+
+	seen := map[string]bool{}
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	for range 2 {
+		select {
+		case dependency := <-started:
+			seen[dependency] = true
+		case <-timer.C:
+			close(release)
+			t.Fatal("memory and conversation context did not start in parallel")
+		}
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("HandleUtterance() error = %v", err)
+	}
+	if !seen["memory"] || !seen["conversation"] {
+		t.Fatalf("started = %#v", seen)
 	}
 }
 

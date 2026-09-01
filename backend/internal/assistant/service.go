@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/session"
@@ -159,14 +160,41 @@ func (s *Service) HandleUtterance(
 		query = strings.TrimSpace(utterance)
 	}
 
-	cards, err := s.memories.Find(ctx, scope, decision.MemoryLookup)
-	if err != nil {
-		slog.WarnContext(ctx, "memory lookup failed", "error", err)
+	lookup := decision.MemoryLookup
+	if strings.TrimSpace(lookup.Query) == "" {
+		lookup.Query = query
+	}
+	lookup.Query = strings.Join(strings.Fields(lookup.Query), " ")
+
+	var (
+		cards           []memory.Card
+		conversation    session.Conversation
+		memoryErr       error
+		conversationErr error
+		contextGroup    sync.WaitGroup
+	)
+	contextGroup.Add(2)
+	go func() {
+		defer contextGroup.Done()
+		cards, memoryErr = s.memories.Find(ctx, scope, lookup)
+	}()
+	go func() {
+		defer contextGroup.Done()
+		conversation, conversationErr = s.conversation.Prepare(
+			ctx,
+			scope,
+			utteranceID,
+			query,
+		)
+	}()
+	contextGroup.Wait()
+
+	if memoryErr != nil {
+		slog.WarnContext(ctx, "memory lookup failed", "error", memoryErr)
 		cards = nil
 	}
-	conversation, err := s.conversation.Prepare(ctx, scope, utteranceID, query)
-	if err != nil {
-		slog.WarnContext(ctx, "conversation context failed", "error", err)
+	if conversationErr != nil {
+		slog.WarnContext(ctx, "conversation context failed", "error", conversationErr)
 	}
 
 	var response string

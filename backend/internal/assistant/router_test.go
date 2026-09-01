@@ -2,27 +2,18 @@ package assistant
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"testing"
 
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 )
 
-func TestRouterReturnsNormalizedMemoryCard(t *testing.T) {
+func TestRouterRoutesExplicitRememberWithoutMemoryPayload(t *testing.T) {
 	router := NewRouter(func(context.Context, string) (string, error) {
 		return `{
 			"action":"remember",
 			"query":" Maya is the user's boss. ",
-			"memory_lookup":{"terms":["boss"],"topics":["work"],"kinds":["relationship"],"entities":["Maya"]},
-			"memory":{
-				"topics":["work","relationships"],
-				"kind":"relationship",
-				"title":" Maya is my boss ",
-				"summary":" Maya is the user's boss. ",
-				"details":[{"key":" relationship ","value":" boss "}],
-				"entities":[{"type":"person","name":" Maya "}]
-			}
+			"memory_lookup":{"terms":["boss"],"topics":["work"],"kinds":["relationship"],"entities":["Maya"]}
 		}`, nil
 	})
 
@@ -30,39 +21,15 @@ func TestRouterReturnsNormalizedMemoryCard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Route() error = %v", err)
 	}
-	want := &memory.Card{
-		Topics:  []memory.Topic{memory.TopicWork, memory.TopicRelationships},
-		Kind:    memory.KindRelationship,
-		Title:   "Maya is my boss",
-		Summary: "Maya is the user's boss.",
-		Details: []memory.Detail{{Key: "relationship", Value: "boss"}},
-		Entities: []memory.Entity{
-			{Type: memory.EntityPerson, Name: "Maya"},
-		},
-	}
-	if decision.Action != ActionRemember || !reflect.DeepEqual(decision.Memory, want) {
-		t.Fatalf("Route() = %#v, want memory %#v", decision, want)
+	if decision.Action != ActionRemember || decision.Query != "Maya is the user's boss." {
+		t.Fatalf("Route() = %#v", decision)
 	}
 	if !decision.MemoryLookup.Empty() {
 		t.Fatalf("memory lookup = %#v, want empty", decision.MemoryLookup)
 	}
 }
 
-func TestRouterRejectsRememberWithoutMemoryCard(t *testing.T) {
-	router := NewRouter(func(context.Context, string) (string, error) {
-		return `{"action":"remember","query":"something","memory_lookup":{"terms":[],"topics":[],"kinds":[],"entities":[]},"memory":null}`, nil
-	})
-
-	decision, err := router.Route(context.Background(), "remember something")
-	if !errors.Is(err, memory.ErrCardInvalid) {
-		t.Fatalf("Route() error = %v", err)
-	}
-	if decision.Action != ActionIgnore {
-		t.Fatalf("Route() decision = %#v", decision)
-	}
-}
-
-func TestRouterDropsMemoryForOtherActions(t *testing.T) {
+func TestRouterNormalizesMemoryLookupForResponse(t *testing.T) {
 	router := NewRouter(func(context.Context, string) (string, error) {
 		return `{
 			"action":"respond",
@@ -72,14 +39,6 @@ func TestRouterDropsMemoryForOtherActions(t *testing.T) {
 				"topics":["work","relationships"],
 				"kinds":["relationship"],
 				"entities":[" Maya ","maya"]
-			},
-			"memory":{
-				"topics":["other"],
-				"kind":"fact",
-				"title":"Ignore me",
-				"summary":"Ignore me.",
-				"details":[],
-				"entities":[]
 			}
 		}`, nil
 	})
@@ -88,7 +47,7 @@ func TestRouterDropsMemoryForOtherActions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Route() error = %v", err)
 	}
-	if decision.Action != ActionRespond || decision.Memory != nil {
+	if decision.Action != ActionRespond {
 		t.Fatalf("Route() decision = %#v", decision)
 	}
 	wantLookup := memory.Lookup{
@@ -112,8 +71,7 @@ func TestRouterKeepsMemoryLookupForTaskProposal(t *testing.T) {
 				"topics":["work"],
 				"kinds":[],
 				"entities":[" Maya "]
-			},
-			"memory":null
+			}
 		}`, nil
 	})
 
@@ -138,8 +96,7 @@ func TestRouterKeepsMemoryLookupForWatchProposal(t *testing.T) {
 		return `{
 			"action":"propose_watch",
 			"query":"Tell me if Nintendo announces its next console.",
-			"memory_lookup":{"terms":["nintendo"],"topics":["preferences"],"kinds":[],"entities":["Nintendo"]},
-			"memory":null
+			"memory_lookup":{"terms":["nintendo"],"topics":["preferences"],"kinds":[],"entities":["Nintendo"]}
 		}`, nil
 	})
 
