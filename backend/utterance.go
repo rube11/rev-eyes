@@ -13,7 +13,11 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
-const memoryAcknowledgment = "Got it, I'll remember that."
+const (
+	memoryAcknowledgment       = "Got it, I'll remember that."
+	noMemoryAcknowledgment     = "I couldn't find a reusable fact to remember."
+	unsafeMemoryAcknowledgment = "I can't store passwords, security codes, or financial credentials."
+)
 
 type utteranceService interface {
 	HandleUtterance(context.Context, tool.Scope, string, string) (assistant.Outcome, error)
@@ -23,8 +27,9 @@ type transcriptStore interface {
 	Append(context.Context, tool.Scope, session.Speaker, string) (string, error)
 }
 
-type memoryStore interface {
-	Remember(context.Context, tool.Scope, string, memory.Card) error
+type memoryService interface {
+	Capture(tool.Scope, string, string) bool
+	RememberExplicit(context.Context, tool.Scope, string, string) error
 }
 
 func handleUtterance(
@@ -33,7 +38,7 @@ func handleUtterance(
 	utterance string,
 	service utteranceService,
 	transcripts transcriptStore,
-	memories memoryStore,
+	memories memoryService,
 ) (realtime.UtteranceResult, error) {
 	result := realtime.UtteranceResult{}
 	utteranceID, err := transcripts.Append(ctx, scope, session.SpeakerUser, utterance)
@@ -45,6 +50,11 @@ func handleUtterance(
 	}
 
 	outcome, err := service.HandleUtterance(ctx, scope, utteranceID, utterance)
+	if outcome.Decision.Action != assistant.ActionRemember {
+		if memories == nil || !memories.Capture(scope, utteranceID, utterance) {
+			slog.WarnContext(ctx, "memory learning queue unavailable")
+		}
+	}
 	switch outcome.Decision.Action {
 	case assistant.ActionProposeTask:
 		if outcome.ProposalCreated {
@@ -73,19 +83,20 @@ func handleUtterance(
 
 	response := outcome.Response
 	if outcome.Decision.Action == assistant.ActionRemember {
-		if outcome.Decision.Memory == nil {
-			return result, errors.New("remember decision has no memory card")
+		if memories == nil {
+			return result, errors.New("memory service is required")
 		}
-		if err := memories.Remember(
-			ctx,
-			scope,
-			utteranceID,
-			*outcome.Decision.Memory,
-		); err != nil {
-			return result, fmt.Errorf("persist memory: %w", err)
+		rememberErr := memories.RememberExplicit(ctx, scope, utteranceID, utterance)
+		if errors.Is(rememberErr, memory.ErrUnsafeMemory) {
+			response = unsafeMemoryAcknowledgment
+		} else if errors.Is(rememberErr, memory.ErrNoMemoryCandidates) {
+			response = noMemoryAcknowledgment
+		} else if rememberErr != nil {
+			return result, fmt.Errorf("persist memory: %w", rememberErr)
+		} else {
+			result.WorkspaceResources = append(result.WorkspaceResources, realtime.WorkspaceMemories)
+			response = memoryAcknowledgment
 		}
-		result.WorkspaceResources = append(result.WorkspaceResources, realtime.WorkspaceMemories)
-		response = memoryAcknowledgment
 	}
 
 	if response != "" {

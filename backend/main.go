@@ -154,6 +154,27 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	memoryModel := strings.TrimSpace(os.Getenv("OPENAI_MEMORY_MODEL"))
+	if memoryModel == "" {
+		memoryModel = os.Getenv("OPENAI_ROUTER_MODEL")
+	}
+	memoryExtractor, err := openai.NewMemoryExtractor(
+		os.Getenv("OPENAI_API_KEY"),
+		memoryModel,
+	)
+	if err != nil {
+		return err
+	}
+	memoryRecorder, err := memory.NewRecorder(
+		memoryExtractor,
+		memoryStore,
+	)
+	if err != nil {
+		return err
+	}
+	memoryRecorder.SetOnStored(func(userID string) {
+		realtimeHub.WorkspaceChanged(userID, realtime.WorkspaceMemories)
+	})
 
 	transcriber, err := stt.NewDeepgramTranscriber(os.Getenv("DEEPGRAM_API_KEY"))
 	if err != nil {
@@ -283,6 +304,7 @@ func run() error {
 	}
 	go registrationDispatcher.Run(ctx)
 	go scheduledEventDispatcher.Run(ctx)
+	go memoryRecorder.Run(ctx)
 	realtimeServer := realtime.NewServerWithHub(transcriber, realtimeHub, realtime.Handlers{
 		Authenticate:           tickets.Consume,
 		CandidateAudio:         candidateAudioHandler,
@@ -310,7 +332,7 @@ func run() error {
 				utterance,
 				assistantService,
 				sessionStore,
-				memoryStore,
+				memoryRecorder,
 			)
 		},
 		Location: func(_ context.Context, scope tool.Scope, update realtime.LocationUpdate) error {
