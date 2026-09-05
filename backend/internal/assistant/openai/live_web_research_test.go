@@ -14,17 +14,20 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
-	"github.com/rube11/rev-eyes/backend/internal/tool/websearch"
 )
 
 // TestLiveEyesWebResearchScenarios exercises the production Eyes orchestration
 // boundary. Each spoken request goes through the live router, assistant.Service,
-// injected fake memory retrieval, the live agent, and the real Tavily tool.
-// It is intentionally opt-in because it spends OpenAI and Tavily credits.
+// injected fake memory retrieval, the live agent, and the real SearXNG tool.
+// Tavily fallback is disabled and its provider HTTP requests are blocked
+// regardless of environment. Direct page extraction has a separate transport.
+// It is intentionally opt-in because it spends OpenAI credits.
 func TestLiveEyesWebResearchScenarios(t *testing.T) {
 	if os.Getenv("RUN_LIVE_WEB_RESEARCH_EVAL") != "1" {
-		t.Skip("set RUN_LIVE_WEB_RESEARCH_EVAL=1 to call OpenAI and Tavily")
+		t.Skip("set RUN_LIVE_WEB_RESEARCH_EVAL=1 to call OpenAI and SearXNG; Tavily is blocked")
 	}
+	guard := installLiveTavilyBlock(t)
+	config := noTavilyLiveSearchConfig(requiredLiveEnv(t, "SEARXNG_BASE_URL"))
 
 	openAIKey := requiredLiveEnv(t, "OPENAI_API_KEY")
 	classify, err := NewClassifier(
@@ -38,9 +41,17 @@ func TestLiveEyesWebResearchScenarios(t *testing.T) {
 	for _, scenario := range liveEyesWebScenarios() {
 		scenario := scenario
 		t.Run(scenario.name, func(t *testing.T) {
-			searcher, err := websearch.New(requiredLiveEnv(t, "TAVILY_API_KEY"))
+			attemptsBefore := guard.attempts.Load()
+			defer func() {
+				attempts := guard.attempts.Load() - attemptsBefore
+				t.Logf("SearXNG-only configuration: Tavily fallback=false; Tavily network attempts=%d", attempts)
+				if attempts != 0 {
+					t.Errorf("Tavily network guard blocked %d forbidden request(s)", attempts)
+				}
+			}()
+			searcher, err := newNoTavilyLiveSearcher(config)
 			if err != nil {
-				t.Fatalf("websearch.New() error = %v", err)
+				t.Fatalf("newNoTavilyLiveSearcher() error = %v", err)
 			}
 			recordedSearch := &recordingSearchTool{delegate: searcher}
 			registry := tool.NewRegistry()
