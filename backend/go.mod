@@ -1,6 +1,6 @@
 module github.com/rube11/rev-eyes/backend
 
-go 1.22.2
+go 1.25.0
 
 require (
 	github.com/MicahParks/keyfunc/v3 v3.8.0
@@ -9,6 +9,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.7.2
 	github.com/tiktoken-go/tokenizer v0.3.0
+	golang.org/x/net v0.58.0
 )
 
 require (
@@ -24,10 +25,10 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.17 // indirect
-	golang.org/x/crypto v0.31.0 // indirect
-	golang.org/x/sync v0.10.0 // indirect
-	golang.org/x/sys v0.28.0 // indirect
-	golang.org/x/text v0.21.0 // indirect
+	golang.org/x/crypto v0.55.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.9.0 // indirect
 	k8s.io/klog/v2 v2.110.1 // indirect
 )
