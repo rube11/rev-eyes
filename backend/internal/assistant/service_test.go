@@ -315,7 +315,7 @@ func TestHandleUtteranceFallsBackAfterProposalResponseFailure(t *testing.T) {
 	}
 }
 
-func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
+func TestHandleUtteranceRespondsWithOriginalQueryAndTrustedScope(t *testing.T) {
 	t.Parallel()
 
 	wantScope := tool.Scope{UserID: "user-123", SessionID: "session-456"}
@@ -360,7 +360,7 @@ func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
 			if scope != wantAgentScope {
 				t.Fatalf("Respond() scope = %#v, want %#v", scope, wantAgentScope)
 			}
-			if query != "What is nearby?" {
+			if query != "what's around here" {
 				t.Fatalf("Respond() query = %q", query)
 			}
 			if !reflect.DeepEqual(conversation, wantConversation) {
