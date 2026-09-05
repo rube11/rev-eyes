@@ -100,9 +100,15 @@ export async function renderGlassesPage(
       return
     }
     const bridge = await ensurePage()
-    const rebuilt = await bridge.rebuildPageContainer(page)
-    if (!rebuilt) {
-      throw new Error("Glasses display update failed")
+    try {
+      const rebuilt = await bridge.rebuildPageContainer(page)
+      if (!rebuilt) {
+        throw new Error("Glasses display update failed")
+      }
+    } catch (error) {
+      // A disconnect can drop the native page. Let the next attempt create it again.
+      startup = undefined
+      throw error
     }
   })
 }
