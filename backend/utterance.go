@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	memoryAcknowledgment       = "Got it, I'll remember that."
-	noMemoryAcknowledgment     = "I couldn't find a reusable fact to remember."
-	unsafeMemoryAcknowledgment = "I can't store passwords, security codes, or financial credentials."
+	memoryAcknowledgment           = "Got it, I'll remember that."
+	memoryCorrectionAcknowledgment = "Updated. I'll remember that."
+	noMemoryAcknowledgment         = "I couldn't find a reusable fact to remember."
+	unsafeMemoryAcknowledgment     = "I can't store passwords, security codes, or financial credentials."
 )
 
 type utteranceService interface {
@@ -50,7 +51,7 @@ func handleUtterance(
 	}
 
 	outcome, err := service.HandleUtterance(ctx, scope, utteranceID, utterance)
-	if outcome.Decision.Action != assistant.ActionRemember {
+	if shouldCaptureMemory(outcome.Decision.Action) {
 		if memories == nil || !memories.Capture(scope, utteranceID, utterance) {
 			slog.WarnContext(ctx, "memory learning queue unavailable")
 		}
@@ -76,13 +77,21 @@ func handleUtterance(
 			realtime.WorkspaceTasks,
 			realtime.WorkspaceWatches,
 		)
+	case assistant.ActionMemoryForget:
+		if outcome.MemoryChanged {
+			result.WorkspaceResources = append(
+				result.WorkspaceResources,
+				realtime.WorkspaceMemories,
+			)
+		}
 	}
 	if err != nil {
 		return result, err
 	}
 
 	response := outcome.Response
-	if outcome.Decision.Action == assistant.ActionRemember {
+	if outcome.Decision.Action == assistant.ActionRemember ||
+		(outcome.Decision.Action == assistant.ActionMemoryCorrect && response == "") {
 		if memories == nil {
 			return result, errors.New("memory service is required")
 		}
@@ -96,6 +105,9 @@ func handleUtterance(
 		} else {
 			result.WorkspaceResources = append(result.WorkspaceResources, realtime.WorkspaceMemories)
 			response = memoryAcknowledgment
+			if outcome.Decision.Action == assistant.ActionMemoryCorrect {
+				response = memoryCorrectionAcknowledgment
+			}
 		}
 	}
 
@@ -117,4 +129,16 @@ func handleUtterance(
 	result.Text = response
 	result.AwaitingConfirmation = outcome.ProposalCreated
 	return result, nil
+}
+
+func shouldCaptureMemory(action assistant.Action) bool {
+	switch action {
+	case assistant.ActionRemember,
+		assistant.ActionMemoryReview,
+		assistant.ActionMemoryCorrect,
+		assistant.ActionMemoryForget:
+		return false
+	default:
+		return true
+	}
 }
