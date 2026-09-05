@@ -7,8 +7,8 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
-// turnCoordinator serializes assistant turns within one authenticated session
-// while allowing unrelated sessions to run concurrently.
+// turnCoordinator serializes turns for an account so a chat cannot become
+// inactive halfway through another voice or text turn. Other accounts run concurrently.
 type turnCoordinator struct {
 	mu    sync.Mutex
 	gates map[string]*turnGate
@@ -27,7 +27,7 @@ func (coordinator *turnCoordinator) acquire(
 	ctx context.Context,
 	scope tool.Scope,
 ) (func(), error) {
-	key := scope.UserID + "\x00" + scope.SessionID
+	key := scope.UserID
 	coordinator.mu.Lock()
 	gate := coordinator.gates[key]
 	if gate == nil {

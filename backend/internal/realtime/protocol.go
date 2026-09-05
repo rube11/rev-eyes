@@ -50,6 +50,7 @@ type Handlers struct {
 	Authenticate    Authenticator
 	CheckOrigin     func(r *http.Request) bool
 	Connect         func(ctx context.Context, scope tool.Scope) error
+	PrepareSession  func(ctx context.Context, scope tool.Scope) error
 	Utterance       UtteranceHandler
 	Location        LocationHandler
 	NotificationAck NotificationAckHandler

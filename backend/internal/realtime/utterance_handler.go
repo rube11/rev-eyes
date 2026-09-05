@@ -83,6 +83,12 @@ func (s *Server) handleCompletedUtterance(
 		return err
 	}
 	defer releaseTurn()
+	// A text turn may have selected a different chat since this socket connected.
+	if s.handlers.PrepareSession != nil {
+		if err := s.handlers.PrepareSession(ctx, scope); err != nil {
+			return fmt.Errorf("prepare voice session: %w", err)
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}

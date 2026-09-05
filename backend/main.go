@@ -282,8 +282,9 @@ func run() error {
 	go scheduledEventDispatcher.Run(ctx)
 	go memoryRecorder.Run(ctx)
 	realtimeServer := realtime.NewServerWithHub(transcriber, realtimeHub, realtime.Handlers{
-		Authenticate: tickets.Consume,
-		CheckOrigin:  origins.Allows,
+		Authenticate:   tickets.Consume,
+		PrepareSession: sessionStore.Reopen,
+		CheckOrigin:    origins.Allows,
 		Connect: func(ctx context.Context, scope tool.Scope) error {
 			return notificationService.Flush(ctx, scope.UserID)
 		},
@@ -321,6 +322,9 @@ func run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", web.Health)
 	mux.Handle("/auth/ws-ticket", origins.Handler(ticketHandler))
+	textChatAPI := origins.Handler(realtimeServer.TextHandler(tokenVerifier.Verify, sessionStore.Reopen))
+	mux.Handle("POST /workspace/conversations/{session_id}/messages", textChatAPI)
+	mux.Handle("OPTIONS /workspace/conversations/{session_id}/messages", textChatAPI)
 	workspaceAutomationAPI := origins.Handler(workspaceAutomationHandler)
 	mux.Handle(
 		"POST /workspace/automations/{kind}/{resource_id}/decision",

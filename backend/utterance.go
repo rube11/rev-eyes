@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/rube11/rev-eyes/backend/internal/assistant"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
@@ -77,7 +78,7 @@ func handleUtterance(
 			realtime.WorkspaceTasks,
 			realtime.WorkspaceWatches,
 		)
-	case assistant.ActionMemoryForget:
+	case assistant.ActionMemoryForget, assistant.ActionProfileInclude, assistant.ActionProfileExclude:
 		if outcome.MemoryChanged {
 			result.WorkspaceResources = append(
 				result.WorkspaceResources,
@@ -111,6 +112,9 @@ func handleUtterance(
 		}
 	}
 
+	if scope.AlwaysRespond && strings.TrimSpace(response) == "" {
+		response = "I couldn’t generate a reply. Please try again."
+	}
 	if response != "" {
 		if _, err := transcripts.Append(
 			ctx,
@@ -136,7 +140,9 @@ func shouldCaptureMemory(action assistant.Action) bool {
 	case assistant.ActionRemember,
 		assistant.ActionMemoryReview,
 		assistant.ActionMemoryCorrect,
-		assistant.ActionMemoryForget:
+		assistant.ActionMemoryForget,
+		assistant.ActionProfileInclude,
+		assistant.ActionProfileExclude:
 		return false
 	default:
 		return true

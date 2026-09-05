@@ -14,6 +14,43 @@ type failingJSONWriter struct {
 	err error
 }
 
+func TestVoicePreparesItsSessionBeforeRunningAgent(t *testing.T) {
+	prepared := false
+	scope := tool.Scope{UserID: "owner", SessionID: "existing-glasses-chat"}
+	server := NewServer(nil, Handlers{
+		PrepareSession: func(_ context.Context, got tool.Scope) error {
+			if got != scope {
+				t.Fatal("changed voice scope")
+			}
+			prepared = true
+			return nil
+		},
+		Utterance: func(context.Context, tool.Scope, string) (UtteranceResult, error) {
+			if !prepared {
+				t.Fatal("agent ran before session resume")
+			}
+			return UtteranceResult{}, nil
+		},
+	})
+	if err := server.handleCompletedUtterance(context.Background(), scope, discardJSONWriter{}, "hello"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVoiceDoesNotRunAgentIfSessionCannotResume(t *testing.T) {
+	denied := errors.New("session unavailable")
+	server := NewServer(nil, Handlers{
+		PrepareSession: func(context.Context, tool.Scope) error { return denied },
+		Utterance: func(context.Context, tool.Scope, string) (UtteranceResult, error) {
+			t.Fatal("agent ran after resume failure")
+			return UtteranceResult{}, nil
+		},
+	})
+	if err := server.handleCompletedUtterance(context.Background(), tool.Scope{UserID: "owner"}, discardJSONWriter{}, "hello"); !errors.Is(err, denied) {
+		t.Fatal("expected resume failure")
+	}
+}
+
 func (writer failingJSONWriter) WriteJSON(any) error {
 	return writer.err
 }
