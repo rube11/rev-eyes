@@ -13,31 +13,6 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
-func TestParseCandidateAudioConcurrency(t *testing.T) {
-	tests := []struct {
-		value   string
-		want    int
-		wantErr bool
-	}{
-		{"", 2, false},
-		{" 4 ", 4, false},
-		{"0", 0, true},
-		{"-1", 0, true},
-		{"33", 0, true},
-		{"many", 0, true},
-	}
-
-	for _, test := range tests {
-		got, err := parseCandidateAudioConcurrency(test.value)
-		if (err != nil) != test.wantErr {
-			t.Fatalf("parseCandidateAudioConcurrency(%q) error = %v", test.value, err)
-		}
-		if got != test.want {
-			t.Fatalf("parseCandidateAudioConcurrency(%q) = %d, want %d", test.value, got, test.want)
-		}
-	}
-}
-
 type fakeUtteranceService struct {
 	handle func(context.Context, tool.Scope, string, string) (assistant.Outcome, error)
 }

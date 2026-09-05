@@ -3,12 +3,10 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -21,7 +19,6 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/automation/scheduler"
 	"github.com/rube11/rev-eyes/backend/internal/automation/scheduler/registration"
 	"github.com/rube11/rev-eyes/backend/internal/automation/watch"
-	"github.com/rube11/rev-eyes/backend/internal/candidate"
 	"github.com/rube11/rev-eyes/backend/internal/database"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/notification"
@@ -180,27 +177,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	var candidateAudioHandler realtime.CandidateAudioHandler
-	candidateMaxConcurrent := 0
-	if environmentEnabled(os.Getenv("CANDIDATE_AUDIO_ENABLED")) {
-		candidateMaxConcurrent, err = parseCandidateAudioConcurrency(
-			os.Getenv("CANDIDATE_AUDIO_MAX_CONCURRENCY"),
-		)
-		if err != nil {
-			return err
-		}
-		candidateService, serviceErr := candidate.NewService(transcriber)
-		if serviceErr != nil {
-			return serviceErr
-		}
-		candidateAudioHandler = candidateService.Process
-		slog.Info("candidate audio enabled", "max_concurrent", candidateMaxConcurrent)
-	}
-	var clientDiagnosticHandler realtime.ClientDiagnosticHandler
-	if environmentEnabled(os.Getenv("CLIENT_DIAGNOSTICS_ENABLED")) {
-		clientDiagnosticHandler = logClientDiagnostic
-		slog.Warn("local client diagnostics enabled; rough transcripts will be logged")
-	}
 	activityRouter := assistant.NewRouter(classifier)
 
 	toolRegistry := tool.NewRegistry()
@@ -306,11 +282,8 @@ func run() error {
 	go scheduledEventDispatcher.Run(ctx)
 	go memoryRecorder.Run(ctx)
 	realtimeServer := realtime.NewServerWithHub(transcriber, realtimeHub, realtime.Handlers{
-		Authenticate:           tickets.Consume,
-		CandidateAudio:         candidateAudioHandler,
-		CandidateMaxConcurrent: candidateMaxConcurrent,
-		ClientDiagnostic:       clientDiagnosticHandler,
-		CheckOrigin:            origins.Allows,
+		Authenticate: tickets.Consume,
+		CheckOrigin:  origins.Allows,
 		Connect: func(ctx context.Context, scope tool.Scope) error {
 			return notificationService.Flush(ctx, scope.UserID)
 		},
@@ -405,25 +378,4 @@ func listenAddress() string {
 		return port
 	}
 	return ":" + port
-}
-
-func environmentEnabled(value string) bool {
-	return strings.EqualFold(strings.TrimSpace(value), "true")
-}
-
-const maxCandidateAudioConcurrency = 32
-
-func parseCandidateAudioConcurrency(value string) (int, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 2, nil
-	}
-	concurrency, err := strconv.Atoi(value)
-	if err != nil || concurrency <= 0 || concurrency > maxCandidateAudioConcurrency {
-		return 0, fmt.Errorf(
-			"CANDIDATE_AUDIO_MAX_CONCURRENCY must be between 1 and %d",
-			maxCandidateAudioConcurrency,
-		)
-	}
-	return concurrency, nil
 }
