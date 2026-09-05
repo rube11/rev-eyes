@@ -730,148 +730,82 @@ function ConversationsView({ data }: { data: WorkspaceData }) {
   )
 }
 
-function MemoriesView({
-  data,
-  onAdd,
+function ItemDetails({
+  title, meta, group, children,
 }: {
+  title: string
+  meta?: React.ReactNode
+  group?: string
+  children: React.ReactNode
+}) {
+  return (
+    <details className="compact-item" name={group}>
+      <summary>
+        <span className="compact-item__title">{title}</span>
+        {meta ? <span className="compact-item__meta">{meta}</span> : null}
+        <span className="compact-item__toggle" aria-hidden="true">+</span>
+      </summary>
+      <div className="compact-item__body">{children}</div>
+    </details>
+  )
+}
+
+
+function MemoriesView({ data, onAdd }: {
   data: WorkspaceData
   onAdd: () => void
 }) {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
-  const [selectedId, setSelectedId] = useState(data.memories[0]?.id ?? '')
-
-  const filters = useMemo(() => {
-    const topics = new Set(data.memories.flatMap((memory) => memory.topics))
-    return ['all', ...Array.from(topics).slice(0, 5)]
-  }, [data.memories])
-
+  const filters = useMemo(
+    () => [...new Set(data.memories.flatMap((memory) => memory.topics))].sort(),
+    [data.memories],
+  )
   const filtered = useMemo(() => {
     const normalized = query.toLowerCase().trim()
-    return data.memories.filter((memory) => {
-      const matchesFilter =
-        filter === 'all' ||
-        memory.topics.includes(filter) ||
-        memory.kind === filter
-      const matchesQuery =
-        !normalized ||
-        [memory.title, memory.summary, memory.kind, ...memory.topics]
-          .join(' ')
-          .toLowerCase()
-          .includes(normalized)
-      return matchesFilter && matchesQuery
-    })
+    return data.memories.filter((memory) =>
+      (filter === 'all' || memory.topics.includes(filter)) &&
+      (!normalized || [memory.title, memory.summary, memory.kind, ...memory.topics]
+        .join(' ').toLowerCase().includes(normalized)),
+    )
   }, [data.memories, filter, query])
-
-  const selected =
-    filtered.find((memory) => memory.id === selectedId) ?? filtered[0]
 
   return (
     <>
-      <PageIntro
-        eyebrow="What your assistant knows"
-        title="Memories"
-        description="Personal details, preferences, people, and goals you want remembered."
-        action={
-          <button className="primary-action" type="button" onClick={onAdd}>
-            <span aria-hidden="true">＋</span> Add memory
-          </button>
-        }
-      />
-      <div className="filter-bar">
-        <label className="search-field search-field--wide">
+      <PageIntro title="Memories" action={
+        <button className="primary-action" type="button" aria-label="Add memory" onClick={onAdd}>+ Add</button>
+      } />
+      <div className="compact-toolbar">
+        <label className="search-field">
           <span>Search memories</span>
-          <input
-            type="search"
-            value={query}
+          <input type="search" value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Person, place, preference…"
-          />
+            placeholder="Search memories" />
         </label>
-        <div className="filter-set" aria-label="Filter memories">
-          {filters.map((item) => (
-            <button
-              className={filter === item ? 'is-active' : ''}
-              type="button"
-              key={item}
-              onClick={() => setFilter(item)}
-            >
-              {item}
-            </button>
-          ))}
-        </div>
+        <select className="topic-filter" aria-label="Filter memories by topic"
+          value={filter} onChange={(event) => setFilter(event.target.value)}>
+          <option value="all">All topics</option>
+          {filters.map((topic) => <option key={topic} value={topic}>{topic}</option>)}
+        </select>
       </div>
-
-      <div className="browser-layout memory-browser">
-        <section className="memory-list" aria-label="Memory list">
-          <p className="result-count">
-            {filtered.length} active{' '}
-            {filtered.length === 1 ? 'memory' : 'memories'}
-          </p>
-          {filtered.map((memory) => (
-            <button
-              className={`memory-row${
-                selected?.id === memory.id ? ' is-selected' : ''
-              }`}
-              type="button"
-              key={memory.id}
-              onClick={() => setSelectedId(memory.id)}
-            >
-              <span className="memory-row__kind">{memory.kind}</span>
-              <span className="memory-row__content">
-                <strong>{memory.title}</strong>
-                <span>{memory.summary}</span>
-              </span>
-              <time dateTime={memory.updatedAt}>
-                {relativeTime(memory.updatedAt)}
-              </time>
-            </button>
-          ))}
-          {filtered.length === 0 ? (
-            <EmptyState
-              title="No matching memory"
-              body="Try another search or add a new memory."
-            />
-          ) : null}
-        </section>
-
-        <aside className="memory-inspector" aria-label="Selected memory">
-          {selected ? (
-            <>
-              <p className="section-label">Selected memory</p>
-              <span className="memory-kind">{selected.kind}</span>
-              <h2>{selected.title}</h2>
-              <p className="memory-inspector__summary">{selected.summary}</p>
-              <dl>
-                <div>
-                  <dt>Topics</dt>
-                  <dd>{selected.topics.join(' / ')}</dd>
-                </div>
-                <div>
-                  <dt>Created</dt>
-                  <dd>{formatDate(selected.createdAt)}</dd>
-                </div>
-                <div>
-                  <dt>Updated</dt>
-                  <dd>{relativeTime(selected.updatedAt)}</dd>
-                </div>
-                <div>
-                  <dt>Status</dt>
-                  <dd>
-                    <StatusMark active />
-                    {selected.status}
-                  </dd>
-                </div>
-              </dl>
-            </>
-          ) : (
-            <EmptyState
-              title="No memories yet"
-              body="Add something you want your assistant to remember."
-            />
-          )}
-        </aside>
+      <p className="result-count">{filtered.length} {filtered.length === 1 ? 'memory' : 'memories'}</p>
+      <div className="compact-list">
+        {filtered.map((memory) => (
+          <ItemDetails key={memory.id} title={memory.title} group="memories">
+            <p className="item-copy">{memory.summary}</p>
+            <dl className="item-facts">
+              <div><dt>Kind</dt><dd>{memory.kind}</dd></div>
+              <div><dt>Topics</dt><dd>{memory.topics.join(', ') || 'None'}</dd></div>
+              <div><dt>Created</dt><dd>{formatDate(memory.createdAt)}</dd></div>
+              <div><dt>Updated</dt><dd>{formatDateTime(memory.updatedAt)}</dd></div>
+              <div><dt>Status</dt><dd>{memory.status}</dd></div>
+              {memory.expiresAt ? <div><dt>Expires</dt><dd>{formatDateTime(memory.expiresAt)}</dd></div> : null}
+            </dl>
+          </ItemDetails>
+        ))}
       </div>
+      {!filtered.length ? <EmptyState title={query || filter !== 'all' ? 'No matches' : 'No memories yet'}
+        body={query || filter !== 'all' ? 'Try another search or topic.' : 'Add a memory to get started.'} /> : null}
     </>
   )
 }
