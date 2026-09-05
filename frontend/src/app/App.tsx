@@ -2,14 +2,13 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 
-import {
-  initializeEvenExperience,
-  showEvenMessage,
-} from '../even/runtime'
+import { initializeEvenExperience } from '../even/runtime'
+import { showEvenMessage } from '../even/glasses-page-host'
 import {
   createDemoWorkspaceData,
   deleteWorkspaceAutomation,
   loadWorkspaceData,
+  sendChatMessage,
   refreshWorkspaceData,
   resolveWorkspaceProposal,
   saveMemory,
@@ -23,6 +22,9 @@ import type {
   WorkspaceResource,
 } from '../features/workspace/workspaceTypes'
 import { Workspace } from '../features/workspace/Workspace'
+import { ConnectionSession } from '../even/connection-session'
+import { updateWorkspaceErrors } from '../features/workspace/workspaceLoad'
+import type { WorkspaceErrors, WorkspaceLoadResult } from '../features/workspace/workspaceLoad'
 import { SignIn } from '../features/auth/SignIn'
 import { sessionStorage, supabase } from '../shared/api/supabase'
 
@@ -98,14 +100,19 @@ function App() {
   const [glassesStatus, setGlassesStatus] = useState(
     isDemoMode ? 'Connected' : 'Connecting',
   )
-  const [latestResponse, setLatestResponse] = useState('')
+  const [connectionSession] = useState(() => new ConnectionSession())
+  const [connectionRevision, setConnectionRevision] = useState(0)
+  const [reconnecting, setReconnecting] = useState(false)
+  const reconnectPending = useRef(false)
   const [workspaceData, setWorkspaceData] = useState<WorkspaceData | undefined>(
     () => (isDemoMode ? createDemoWorkspaceData() : undefined),
   )
   const [workspaceOwnerId, setWorkspaceOwnerId] = useState<string | undefined>(
     undefined,
   )
-  const [dataError, setDataError] = useState('')
+  const [resourceErrors, setResourceErrors] = useState<WorkspaceErrors>({})
+  const [lastSyncedAt, setLastSyncedAt] = useState<string>()
+  const [syncing, setSyncing] = useState(false)
   const locallyAddedMemoryIds = useRef(new Set<string>())
   const workspaceDataRef = useRef(workspaceData)
   const workspaceOwnerIdRef = useRef<string | undefined>(undefined)
@@ -174,7 +181,9 @@ function App() {
         locallyAddedMemoryIds.current.clear()
         setWorkspaceOwnerId(undefined)
         setWorkspaceData(undefined)
-        setDataError('')
+        setResourceErrors({})
+        setLastSyncedAt(undefined)
+        setSyncing(false)
       }
       setSession(nextSession)
     }
@@ -226,6 +235,7 @@ function App() {
     let timer: number | undefined
     let requestController: AbortController | undefined
     const pendingResources = new Set<WorkspaceResource>()
+    const loadedResources = new Set<WorkspaceResource>()
 
     const clearTimer = () => {
       if (timer !== undefined) {
@@ -260,67 +270,62 @@ function App() {
       }
 
       inFlight = true
+      setSyncing(true)
       const controller = new AbortController()
       requestController = controller
       let retryDelay: number | undefined
 
       try {
         const current = workspaceDataRef.current
-        const data =
-          fullRefresh || !current
+        let result: WorkspaceLoadResult
+        try {
+          result = fullRefresh || !current
             ? await loadWorkspaceData(userId, controller.signal)
-            : await refreshWorkspaceData(
-                userId,
-                current,
-                resources,
-                controller.signal,
-              )
+            : await refreshWorkspaceData(userId, current, resources, controller.signal)
+        } catch {
+          result = {
+            data: {},
+            failedResources: fullRefresh ? [...workspaceResources] : resources,
+          }
+        }
         if (!active || controller.signal.aborted) {
           return
         }
-        retryAttempt = 0
-        setDataError('')
+
+        const succeeded = Object.keys(result.data) as WorkspaceResource[]
+        for (const resource of succeeded) loadedResources.add(resource)
+        const loadedSnapshot = new Set(loadedResources)
+        setResourceErrors((errors) => updateWorkspaceErrors(errors, result, loadedSnapshot))
+        if (succeeded.length > 0) setLastSyncedAt(new Date().toISOString())
+
         const ownsCurrentData = workspaceOwnerIdRef.current === userId
         workspaceOwnerIdRef.current = userId
         setWorkspaceOwnerId(userId)
         setWorkspaceData((current) => {
-          const currentForUser = ownsCurrentData ? current : undefined
           const next = mergeWorkspaceData(
-            data,
-            currentForUser,
+            result.data,
+            ownsCurrentData ? current : undefined,
             locallyAddedMemoryIds.current,
           )
           workspaceDataRef.current = next
           return next
         })
-      } catch {
-        if (!active || controller.signal.aborted) {
-          return
-        }
-        pendingFullRefresh ||= fullRefresh
-        for (const resource of resources) {
-          pendingResources.add(resource)
-        }
-        setDataError('refresh-unavailable')
-        const ownsCurrentData = workspaceOwnerIdRef.current === userId
-        workspaceOwnerIdRef.current = userId
-        setWorkspaceOwnerId(userId)
-        setWorkspaceData((current) => {
-          const next =
-            ownsCurrentData && current ? current : emptyWorkspaceData()
-          workspaceDataRef.current = next
-          return next
-        })
-        retryDelay =
-          workspaceRetryDelaysMs[
+
+        if (result.failedResources.length > 0) {
+          for (const resource of result.failedResources) pendingResources.add(resource)
+          retryDelay = workspaceRetryDelaysMs[
             Math.min(retryAttempt, workspaceRetryDelaysMs.length - 1)
           ]
-        retryAttempt += 1
+          retryAttempt += 1
+        } else {
+          retryAttempt = 0
+        }
       } finally {
         if (requestController === controller) {
           requestController = undefined
         }
         inFlight = false
+        if (active) setSyncing(false)
         if (
           active &&
           (retryDelay !== undefined ||
@@ -375,14 +380,8 @@ function App() {
     }
 
     let disposed = false
-    let stop: (() => void) | undefined
-    initializeEvenExperience(
+    void connectionSession.start(() => initializeEvenExperience(
       accessToken,
-      (text) => {
-        if (!disposed) {
-          setLatestResponse(text)
-        }
-      },
       (nextStatus) => {
         if (!disposed) {
           setGlassesStatus(nextStatus)
@@ -398,25 +397,32 @@ function App() {
           requestWorkspaceRefreshRef.current(workspaceResources)
         }
       },
-    )
-      .then((cleanup) => {
-        if (disposed) {
-          cleanup()
-          return
-        }
-        stop = cleanup
-      })
+    ))
       .catch(() => {
         if (!disposed) {
           setGlassesStatus('Offline')
         }
       })
+      .finally(() => {
+        if (!disposed) {
+          reconnectPending.current = false
+          setReconnecting(false)
+        }
+      })
 
     return () => {
       disposed = true
-      stop?.()
+      void connectionSession.stop().catch(() => undefined)
     }
-  }, [accessToken])
+  }, [accessToken, connectionRevision, connectionSession])
+
+  const reconnectGlasses = () => {
+    if (isDemoMode || !accessToken || reconnectPending.current) return
+    reconnectPending.current = true
+    setReconnecting(true)
+    setGlassesStatus('Reconnecting')
+    setConnectionRevision((revision) => revision + 1)
+  }
 
   const signIn = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -591,7 +597,6 @@ function App() {
         data={visibleWorkspaceData}
         email="demo@rev-eyes.com"
         glassesStatus={glassesStatus}
-        latestResponse={latestResponse}
         isDemo
         onCreateMemory={createMemory}
         onDeleteAutomation={deleteAutomation}
@@ -639,9 +644,18 @@ function App() {
     <Workspace
       data={visibleWorkspaceData}
       email={session.user.email ?? 'Account'}
+      userId={session.user.id}
+      onSendChat={async (sessionId, text) => {
+        try { return await sendChatMessage(session.access_token, sessionId, text) }
+        finally { requestWorkspaceRefreshRef.current(workspaceResources) }
+      }}
       glassesStatus={glassesStatus}
-      latestResponse={latestResponse}
-      dataError={dataError}
+      resourceErrors={resourceErrors}
+      reconnecting={reconnecting}
+      onReconnectGlasses={reconnectGlasses}
+      lastSyncedAt={lastSyncedAt}
+      syncing={syncing}
+      onRetry={() => requestWorkspaceRefreshRef.current([], true)}
       isDemo={false}
       onCreateMemory={createMemory}
       onDeleteAutomation={deleteAutomation}

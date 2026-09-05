@@ -1,5 +1,8 @@
 import { supabase } from '../../shared/api/supabase'
 import { env } from '../../shared/config/env'
+import { readConversationTranscript } from './conversationTranscript'
+import { settleWorkspaceLoads } from './workspaceLoad'
+import type { WorkspaceLoadResult } from './workspaceLoad'
 import type {
   AutomationKind,
   ConversationItem,
@@ -66,6 +69,41 @@ type TaskRow = {
 
 const transcriptHistoryLimit = 1000
 const transcriptRefreshLimit = 100
+
+export async function sendChatMessage(accessToken: string, sessionId: string, text: string): Promise<string> {
+  const response = await fetch(`${env.apiBaseUrl}/workspace/conversations/${encodeURIComponent(sessionId)}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
+    signal: AbortSignal.timeout(100_000),
+  }).catch(() => { throw new Error('Connection lost. Check the log before sending again.') })
+  if (!response.ok) {
+    if (response.status === 401) throw new Error('Please sign in again to send a message.')
+    if (response.status === 404) throw new Error('This chat is unavailable. Refresh and try again.')
+    throw new Error('Couldn’t finish this turn. Check the log before sending again.')
+  }
+  const result = await response.json() as { text?: unknown }
+  if (typeof result.text !== 'string') throw new Error('Couldn’t confirm the reply. Check the log before sending again.')
+  return result.text
+}
+
+export function loadConversationTranscript(userId: string, sessionId: string, signal: AbortSignal) {
+  return readConversationTranscript(async (offset, limit) => {
+    const { data, error } = await supabase
+      .from('transcript_utterances')
+      .select('id,session_id,speaker,text,started_at')
+      .eq('user_id', userId)
+      .eq('session_id', sessionId)
+      .order('started_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(offset, offset + limit - 1)
+      .abortSignal(signal)
+    if (error) throw error
+    return (data as TranscriptRow[]).map((row) => ({
+      id: row.id, speaker: row.speaker, text: row.text, startedAt: row.started_at,
+    }))
+  }, signal)
+}
 
 function shorten(text: string, limit: number): string {
   const normalized = text.replace(/\s+/gu, ' ').trim()
@@ -270,59 +308,32 @@ async function loadTasks(
   return mapTasks((data ?? []) as TaskRow[])
 }
 
-export async function loadWorkspaceData(
+export function loadWorkspaceData(
   userId: string,
   signal: AbortSignal,
-): Promise<WorkspaceData> {
-  const [conversations, memories, watches, tasks] = await Promise.all([
-    loadConversations(userId, signal, transcriptHistoryLimit),
-    loadMemories(userId, signal),
-    loadWatches(userId, signal),
-    loadTasks(userId, signal),
-  ])
-
-  return {
-    conversations,
-    memories,
-    watches,
-    tasks,
-  }
+): Promise<WorkspaceLoadResult> {
+  return settleWorkspaceLoads({
+    conversations: () => loadConversations(userId, signal, transcriptHistoryLimit),
+    memories: () => loadMemories(userId, signal),
+    watches: () => loadWatches(userId, signal),
+    tasks: () => loadTasks(userId, signal),
+  })
 }
 
-export async function refreshWorkspaceData(
+export function refreshWorkspaceData(
   userId: string,
   current: WorkspaceData,
   resources: readonly WorkspaceResource[],
   signal: AbortSignal,
-): Promise<Partial<WorkspaceData>> {
-  const [conversations, memories, watches, tasks] = await Promise.all([
-    resources.includes('conversations')
-      ? loadConversations(
-          userId,
-          signal,
-          transcriptRefreshLimit,
-          current.conversations,
-        )
-      : undefined,
-    resources.includes('memories') ? loadMemories(userId, signal) : undefined,
-    resources.includes('watches') ? loadWatches(userId, signal) : undefined,
-    resources.includes('tasks') ? loadTasks(userId, signal) : undefined,
-  ])
-
-  const refreshed: Partial<WorkspaceData> = {}
-  if (conversations !== undefined) {
-    refreshed.conversations = conversations
-  }
-  if (memories !== undefined) {
-    refreshed.memories = memories
-  }
-  if (watches !== undefined) {
-    refreshed.watches = watches
-  }
-  if (tasks !== undefined) {
-    refreshed.tasks = tasks
-  }
-  return refreshed
+): Promise<WorkspaceLoadResult> {
+  return settleWorkspaceLoads({
+    ...(resources.includes('conversations') ? {
+      conversations: () => loadConversations(userId, signal, transcriptRefreshLimit, current.conversations),
+    } : {}),
+    ...(resources.includes('memories') ? { memories: () => loadMemories(userId, signal) } : {}),
+    ...(resources.includes('watches') ? { watches: () => loadWatches(userId, signal) } : {}),
+    ...(resources.includes('tasks') ? { tasks: () => loadTasks(userId, signal) } : {}),
+  })
 }
 
 export async function saveMemory(
@@ -626,6 +637,15 @@ export function createDemoWorkspaceData(): WorkspaceData {
       },
     ],
     tasks: [
+      {
+        id: 'demo-task-past-due',
+        title: 'Pick up the library books',
+        schedule: 'earlier today',
+        dueAt: fromNow(-3 * hour),
+        status: 'accepted',
+        createdAt: fromNow(-day),
+        resolvedAt: fromNow(-day + minute),
+      },
       {
         id: 'demo-task-01',
         title: 'Send the beta build to Noah',

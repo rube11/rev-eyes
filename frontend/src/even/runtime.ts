@@ -41,8 +41,6 @@ import {
 import type { WorkspaceResource } from "../features/workspace/workspaceTypes"
 import { connectRealtimeSocket } from "../shared/api/client"
 
-export { showEvenMessage } from "./glasses-page-host"
-
 type ListeningState = "idle" | "starting" | "listening" | "stopping"
 type DisplaySurface = "compact" | "message" | "offline" | "sleep" | "transcript"
 type NotificationPresentation = {
@@ -129,12 +127,11 @@ function isLongPressEvent(event: EvenHubEvent) {
 
 export async function initializeEvenExperience(
   accessToken: string,
-  onResponse: (text: string) => void,
   onStatus: (status: string) => void,
   onWorkspaceChanged: (resources: readonly WorkspaceResource[]) => void =
     () => undefined,
   onConnected: () => void = () => undefined,
-): Promise<() => void> {
+): Promise<() => Promise<void>> {
   resumeGlassesPage()
   let active = true
   let transitionTail: Promise<void> = Promise.resolve()
@@ -526,7 +523,6 @@ export async function initializeEvenExperience(
 
     cancelAssistantResponseWindow()
     seenNotificationIds.add(id)
-    onResponse(text)
     const notification = {
       id,
       message: presentGlassesMessage(text),
@@ -899,7 +895,6 @@ export async function initializeEvenExperience(
           await completeAssistantTurn()
           return
         }
-        onResponse(responseText)
         const presentation: AssistantPresentation = {
           message: presentGlassesMessage(responseText),
           sourceText: responseText,
@@ -1090,9 +1085,10 @@ export async function initializeEvenExperience(
 
   scheduleReconnect(true)
 
-  function teardown() {
+  let teardownPromise: Promise<void> | undefined
+  function teardown(): Promise<void> {
     if (!active) {
-      return
+      return teardownPromise ?? Promise.resolve()
     }
     active = false
     connectGeneration += 1
@@ -1109,11 +1105,15 @@ export async function initializeEvenExperience(
     const closingSocket = socket
     socket = undefined
     closeSocketQuietly(closingSocket)
-    void audioCapture.dispose()
+    const stoppingAudio = audioCapture.dispose()
+    let stoppingLocation: Promise<unknown> | undefined
     if (locationStarted) {
       locationStarted = false
-      void bridge.stopAppLocationUpdates().catch(() => undefined)
+      stoppingLocation = bridge.stopAppLocationUpdates()
     }
+    teardownPromise = Promise.allSettled([transitionTail, stoppingAudio, stoppingLocation])
+      .then(() => undefined)
+    return teardownPromise
   }
 
   return teardown
