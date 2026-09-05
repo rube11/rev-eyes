@@ -5,7 +5,7 @@ type BrowserStorage = {
 }
 
 export type EvenSessionBridge = {
-  getUserInfo(): Promise<{ uid: number }>
+  getUserInfo(): Promise<{ uid: number | string }>
   getLocalStorage(key: string): Promise<string>
   setLocalStorage(key: string, value: string): Promise<boolean>
 }
@@ -35,8 +35,13 @@ export function createSessionStorage(options: Options) {
     const bridge = await options.resolveBridge()
     if (!bridge) return options.browserStorage()
 
-    const { uid } = await bridge.getUserInfo()
-    if (!Number.isSafeInteger(uid) || uid <= 0) throw new Error(storageError)
+    const { uid: rawUid } = await bridge.getUserInfo()
+    // Some native hosts (including the simulator) return decimal IDs as text.
+    // Accept only the canonical, lossless form so account namespaces stay stable.
+    const uid = typeof rawUid === 'string' && /^[1-9]\d*$/.test(rawUid)
+      ? Number(rawUid)
+      : rawUid
+    if (typeof uid !== 'number' || !Number.isSafeInteger(uid) || uid <= 0) throw new Error(storageError)
     // Partition sessions on relaunch after an Even-account switch. The UID is
     // only a storage namespace; Supabase tokens still authorize every request.
     const nativeKey = (key: string) => `com.reveyes.app.auth.${uid}.${key}`

@@ -14,7 +14,7 @@ function memoryStorage() {
   }
 }
 
-function nativeBridge(store = memoryStorage(), uid = 42): EvenSessionBridge {
+function nativeBridge(store = memoryStorage(), uid: number | string = 42): EvenSessionBridge {
   return {
     getUserInfo: async () => ({ uid }),
     getLocalStorage: async (key) => store.getItem(key) ?? '',
@@ -77,9 +77,23 @@ test('relaunch under another Even UID cannot load the previous account session',
 })
 
 test('default or invalid Even UID fails closed', async () => {
-  for (const uid of [0, -1, NaN, 1.5]) {
+  for (const uid of [0, -1, NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1,
+    '', '0', '-1', '1.5', 'NaN', 'Infinity', ' 42', '42 ', '042', '+42', '4.2e1',
+    '0x2a', '42suffix', 'simulator', '9007199254740992']) {
     await assert.rejects(adapter(nativeBridge(memoryStorage(), uid)).getItem('session'), /storage is unavailable/)
   }
+})
+
+test('decimal-string Even IDs use the same session namespace as numeric IDs', async () => {
+  const native = memoryStorage()
+  await adapter(nativeBridge(native, 42)).setItem('session', 'saved-token')
+  const simulator = adapter(nativeBridge(native, '42'))
+  assert.equal(await simulator.getItem('session'), 'saved-token')
+  await simulator.setItem('session', 'rotated-token')
+  assert.equal(await adapter(nativeBridge(native, 42)).getItem('session'), 'rotated-token')
+  assert.equal(await adapter(nativeBridge(native, '43')).getItem('session'), null)
+  await simulator.removeItem('session')
+  assert.equal(await adapter(nativeBridge(native, 42)).getItem('session'), null)
 })
 
 test('restoration awaits native bridge readiness', async () => {

@@ -17,10 +17,12 @@
     "src/even/assistant-response-lifecycle.ts",
     "src/even/realtime-protocol.ts",
     "src/even/realtime-socket.ts",
+    "src/shared/api/session-storage.ts",
     "tests/assistant-response-lifecycle.test.ts",
     "tests/audio.test.ts",
     "tests/index.test.ts",
     "tests/realtime-protocol.test.ts",
-    "tests/realtime-socket.test.ts"
+    "tests/realtime-socket.test.ts",
+    "tests/session-storage.test.ts"
   ]
 }
