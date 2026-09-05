@@ -1,9 +1,11 @@
 package websearch
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -91,6 +93,8 @@ func TestToolSearchesTavily(t *testing.T) {
 		response.Mode != "research" ||
 		response.Topic != "general" ||
 		response.Recency != "none" ||
+		response.Provider != ProviderTavily ||
+		response.LatencyMS < 0 ||
 		response.ResponseTime != "1.25" ||
 		response.RequestID != "request-123" ||
 		response.Credits != 2 {
@@ -117,7 +121,8 @@ func TestSearchNewsUsesExplicitBackgroundOptions(t *testing.T) {
 			request.MaxResults != quickMaxResults ||
 			request.Language != "en" ||
 			!request.FilterLanguage ||
-			!request.SafeSearch {
+			!request.SafeSearch ||
+			!request.IncludeUsage {
 			t.Errorf("request = %#v", request)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"results": []any{}})
@@ -171,7 +176,7 @@ func TestToolBoundsSearchResults(t *testing.T) {
 	if len(response.Results) != researchMaxResults {
 		t.Fatalf("result count = %d", len(response.Results))
 	}
-	if response.Results[0].Snippet != strings.Repeat("a", maxSnippetLength)+"…" {
+	if response.Results[0].Snippet != strings.Repeat("a", maxSnippetLength-1)+"…" {
 		t.Fatalf("snippet was not truncated: %s", response.Results[0].Snippet)
 	}
 }
@@ -248,5 +253,43 @@ func TestNewRequiresAPIKey(t *testing.T) {
 
 	if _, err := New(" "); !errors.Is(err, ErrAPIKeyRequired) {
 		t.Fatalf("New() error = %v", err)
+	}
+}
+
+func TestTavilyLogsMetricsWithoutQueryText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"usage": map[string]any{"credits": 2},
+			"results": []map[string]any{{
+				"title": "Result", "url": "https://example.com", "content": "summary", "score": 1,
+			}},
+		})
+	}))
+	defer server.Close()
+	search, _ := New("test-key")
+	search.client = server.Client()
+	search.endpoint = server.URL
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	secretQuery := "private purchase decision 739184"
+	_, err := search.Execute(context.Background(), tool.Scope{}, json.RawMessage(
+		`{"query":"`+secretQuery+`","mode":"research","topic":"general","recency":"none","include_domains":[]}`,
+	))
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	output := logs.String()
+	if strings.Contains(output, secretQuery) || strings.Contains(output, "739184") {
+		t.Fatalf("logs contained query: %s", output)
+	}
+	for _, field := range []string{
+		"provider=tavily", "mode=research", "result_count=1", "credits=2", "outcome=none",
+	} {
+		if !strings.Contains(output, field) {
+			t.Errorf("logs missing %q: %s", field, output)
+		}
 	}
 }
