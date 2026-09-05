@@ -165,7 +165,8 @@ func upsertCandidate(
 		     entities,
 		     observed_at,
 		     observed_source_id,
-		     expires_at
+		     expires_at,
+		     profile_layer
 		 ) values (
 		     $1::uuid,
 		     $2,
@@ -177,7 +178,8 @@ func upsertCandidate(
 		     $8::jsonb,
 		     $9::timestamptz,
 		     $10::uuid,
-		     $11::timestamptz
+		     $11::timestamptz,
+		     $12
 		 )
 		 on conflict (user_id, memory_key)
 		     where status = 'active' and memory_key is not null
@@ -191,6 +193,7 @@ func upsertCandidate(
 		     observed_at = excluded.observed_at,
 		     observed_source_id = excluded.observed_source_id,
 		     expires_at = excluded.expires_at,
+		     profile_layer = excluded.profile_layer,
 		     updated_at = statement_timestamp()
 		 where (
 		     existing.observed_at,
@@ -211,6 +214,7 @@ func upsertCandidate(
 		observedAt,
 		sourceUtteranceID,
 		candidate.ExpiresAt,
+		string(candidate.ProfileLayer),
 	).Scan(&memoryID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil

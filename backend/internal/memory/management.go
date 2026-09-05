@@ -97,6 +97,22 @@ func forgetWithDatabase(
 	scope tool.Scope,
 	lookup Lookup,
 ) (int, error) {
+	return editMemoryWithDatabase(ctx, database, scope, lookup, "forget")
+}
+
+// SetProfileOverride preserves a user's choice across automatic extraction.
+// It never changes the underlying fact or its expiration.
+func (s *Store) SetProfileOverride(ctx context.Context, scope tool.Scope, lookup Lookup, layer ProfileLayer) (int, error) {
+	if layer != ProfileCore && layer != ProfileDetail {
+		return 0, fmt.Errorf("invalid profile override: %s", layer)
+	}
+	return editMemoryWithDatabase(ctx, s.pool, scope, lookup, string(layer))
+}
+
+func editMemoryWithDatabase(ctx context.Context, database managementDatabase, scope tool.Scope, lookup Lookup, operation string) (int, error) {
+	if operation != "forget" && operation != string(ProfileCore) && operation != string(ProfileDetail) {
+		return 0, fmt.Errorf("invalid memory edit")
+	}
 	scope.UserID = strings.TrimSpace(scope.UserID)
 	if scope.UserID == "" {
 		return 0, ErrScopeRequired
@@ -167,8 +183,9 @@ func forgetWithDatabase(
 		 ),
 		 updated as (
 		     update public.memories as memory
-		     set status = 'forgotten',
-		         inactive_at = statement_timestamp(),
+		     set status = case when $6::text = 'forget' then 'forgotten' else memory.status end,
+		         inactive_at = case when $6::text = 'forget' then statement_timestamp() else memory.inactive_at end,
+		         profile_override = case when $6::text = 'forget' then memory.profile_override else $6::text end,
 		         updated_at = statement_timestamp()
 		     from choice
 		     where memory.id = choice.id
@@ -184,9 +201,10 @@ func forgetWithDatabase(
 		kinds,
 		lookup.Entities,
 		webSearchQuery(lookup.Query, lookup.Terms),
+		operation,
 	).Scan(&matched, &forgotten)
 	if err != nil {
-		return 0, fmt.Errorf("forget memory: %w", err)
+		return 0, fmt.Errorf("edit memory: %w", err)
 	}
 	if matched > 1 {
 		return 0, ErrMemoryAmbiguous
@@ -195,7 +213,7 @@ func forgetWithDatabase(
 		return 0, nil
 	}
 	if !forgotten {
-		return 0, fmt.Errorf("forget memory: matched memory changed before update")
+		return 0, fmt.Errorf("edit memory: matched memory changed before update")
 	}
 	return 1, nil
 }
