@@ -84,6 +84,17 @@ func TestAgentReturnsText(t *testing.T) {
 	if !strings.Contains(request.Instructions, "the glasses can render each result separately") {
 		t.Fatalf("instructions = %q", request.Instructions)
 	}
+	if !strings.Contains(request.Instructions, "Never output more than three numbered lines") ||
+		!strings.Contains(request.Instructions, "Group shopping and grocery items") {
+		t.Fatalf("list instructions = %q", request.Instructions)
+	}
+	if !strings.Contains(request.Instructions, "meaningful state transition") ||
+		!strings.Contains(request.Instructions, "at most one timely next step") {
+		t.Fatalf("transition instructions = %q", request.Instructions)
+	}
+	if !strings.Contains(request.Instructions, "within 420 characters") {
+		t.Fatalf("response length instructions = %q", request.Instructions)
+	}
 	if !request.Tools[0].Strict || request.Store {
 		t.Fatalf("tool strict = %v, store = %v", request.Tools[0].Strict, request.Store)
 	}

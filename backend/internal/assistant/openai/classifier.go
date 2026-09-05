@@ -19,31 +19,50 @@ const routerPrompt = `You classify finalized speech for a wearable glasses assis
 Choose exactly one action:
 - ignore: background speech, filler, incidental narration, overheard conversation, or an ordinary factual statement that does not ask the assistant for anything.
 - respond: a direct question addressed to the assistant or a direct command that needs an answer or action. A fact being relevant or answerable is not enough by itself; never respond to an ordinary statement just to volunteer information.
-- state_update: current conversational or situational context that is useful for the active interaction but does not request an answer. This action is silent: it must not wake the assistant or produce a visible response.
+- state_update: current conversational or situational context that is useful for the active interaction but does not request an answer. Starts, arrivals, and ordinary location changes belong here. This action is silent: it must not wake the assistant or produce a visible response.
+- state_transition: a bare statement—not a question or command—that the user just completed a workout or a school milestone such as an exam or study session. Use it only when one short, context-aware next step is clearly useful. Unlike state_update, this action produces a response.
 - remember: an explicit user request to remember a durable fact or preference. Never choose remember unless the user explicitly asks for it.
+- memory_review: a request to inspect what the assistant remembers about the user, a person, or a topic.
+- memory_correct: the user says a remembered detail is wrong or supplies a replacement value. Use an empty query when the user has not supplied the corrected fact yet.
+- memory_forget: an explicit request to remove a remembered detail. Use an empty query for a contextual reference such as "forget that."
 - propose_task: an explicit reminder request or a potential task inferred from the speech that should be proposed to the user before execution.
 - propose_watch: a request or strong implied interest in monitoring a future public update over time.
 
-Prefer the specialized remember, propose_task, and propose_watch actions over respond when their definitions apply.
+Direct questions and commands use respond even when they mention a transition. Otherwise prefer the specialized memory, transition, task, and watch actions when their definitions apply.
 Examples:
 - "The meeting starts at three." -> ignore
 - "What time does the meeting start?" -> respond
 - "Show me directions home." -> respond
 - "I'm walking into the client meeting now." -> state_update
+- "I just arrived at the gym." -> state_update
+- "I just left the gym." -> state_transition
+- "I just left the gym; what should I eat?" -> respond
+- "I finished my exam." -> state_transition
 - "Remember that Maya is my manager." -> remember
+- "What do you remember about Jolene?" -> memory_review
+- "That's wrong." -> memory_correct with an empty query
+- "Change my protein target to 150 grams." -> memory_correct
+- "Forget that." -> memory_forget with an empty query
 - "I need to call the dentist tomorrow morning." -> propose_task
 - "Remind me to call the dentist tomorrow at nine." -> propose_task
 - "Keep me updated when the election result is announced." -> propose_watch
 
 Set query to a concise, standalone version of the request. Use an empty query for ignore.
-Set memory_lookup to empty arrays unless the action is respond, propose_task, or propose_watch.
-For respond, propose_task, and propose_watch, always create a proactive memory lookup:
+Set memory_lookup to empty arrays unless the action is respond, state_transition, memory_review, memory_forget, propose_task, or propose_watch.
+For respond, state_transition, memory_review, memory_forget, propose_task, and propose_watch, create a focused memory lookup when the user names a subject. For a request to review all memories about the user, leave it empty.
+For respond, state_transition, propose_task, and propose_watch, always create a proactive memory lookup:
 - terms: one to five short lowercase words or phrases likely to appear in a relevant memory title or summary. Prefer stable remembered concepts such as "protein target", "food preference", or "manager" over surface request wording such as "what should I do", "right now", or "what's the move".
 - topics: zero to three relevant memory topics.
 - kinds: zero or more relevant memory kinds.
 - entities: names explicitly mentioned in the request.
 Text terms and exact entities are the strongest retrieval signals. A memory can also match through a topic and kind together, so include both for broad profile questions such as food preferences or health goals. Never include a topic or kind merely because it might be related.
 For remember, set query to a concise standalone version of the fact the user asked to save. Memory extraction is handled separately; do not create a memory card.
+For state_transition, set query to a standalone description of the completed activity and ask for at most one timely next step grounded in supplied context. Do not assume the next step is always food.
+For a state_transition memory lookup, search for context that can decide the next move rather than merely repeating the transition:
+- leaving a workout: nutrition targets, recent intake, and food preferences;
+- finishing an exam or study session: pending commitments, deadlines, instructions, and next priorities.
+For memory_review and memory_forget, set query to the specific subject or fact when supplied. Do not put generic phrases such as "what do you remember" or "forget" in query.
+For memory_correct, set query to the complete replacement fact when supplied, otherwise leave it empty.
 For propose_task, preserve whether the user explicitly requested a reminder or implied the action in query.
 Choose propose_watch only when future web information must be checked repeatedly, not for a one-time current-information question.
 Classify the speech only. Do not answer it.`
@@ -126,7 +145,18 @@ func classifierRequest(model, utterance string) map[string]any {
 					"properties": map[string]any{
 						"action": map[string]any{
 							"type": "string",
-							"enum": []string{"ignore", "respond", "state_update", "remember", "propose_task", "propose_watch"},
+							"enum": []string{
+								"ignore",
+								"respond",
+								"state_update",
+								"state_transition",
+								"remember",
+								"memory_review",
+								"memory_correct",
+								"memory_forget",
+								"propose_task",
+								"propose_watch",
+							},
 						},
 						"query":         map[string]string{"type": "string"},
 						"memory_lookup": memoryLookupSchema(),

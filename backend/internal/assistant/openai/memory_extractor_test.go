@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 )
@@ -111,6 +113,66 @@ func TestMemoryExtractorDecodesAtomicWorkoutCandidates(t *testing.T) {
 	}
 }
 
+func TestLiveMemoryCorrectionExtraction(t *testing.T) {
+	if os.Getenv("RUN_LIVE_ASSISTANT_TEST") != "1" {
+		t.Skip("set RUN_LIVE_ASSISTANT_TEST=1 to call the live OpenAI API")
+	}
+	model := strings.TrimSpace(os.Getenv("OPENAI_MEMORY_MODEL"))
+	if model == "" {
+		model = requiredLiveEnv(t, "OPENAI_ROUTER_MODEL")
+	}
+	extractor, err := NewMemoryExtractor(requiredLiveEnv(t, "OPENAI_API_KEY"), model)
+	if err != nil {
+		t.Fatalf("NewMemoryExtractor() error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	candidates, err := extractor.Extract(ctx, "Change my protein target to 150 grams.")
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidate count = %d, want 1: %#v", len(candidates), candidates)
+	}
+	candidate := candidates[0]
+	if candidate.MemoryKey != "profile.nutrition.daily_protein_target" ||
+		candidate.Retention != memory.RetentionDurable ||
+		!strings.Contains(candidate.Card.Summary, "150") {
+		t.Fatalf("correction candidate = %#v", candidate)
+	}
+	t.Logf("correction candidate: %#v", candidate)
+}
+
+func TestLiveStateTransitionExtraction(t *testing.T) {
+	if os.Getenv("RUN_LIVE_ASSISTANT_TEST") != "1" {
+		t.Skip("set RUN_LIVE_ASSISTANT_TEST=1 to call the live OpenAI API")
+	}
+	model := strings.TrimSpace(os.Getenv("OPENAI_MEMORY_MODEL"))
+	if model == "" {
+		model = requiredLiveEnv(t, "OPENAI_ROUTER_MODEL")
+	}
+	extractor, err := NewMemoryExtractor(requiredLiveEnv(t, "OPENAI_API_KEY"), model)
+	if err != nil {
+		t.Fatalf("NewMemoryExtractor() error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	candidates, err := extractor.Extract(ctx, "I just left the gym.")
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidate count = %d, want 1: %#v", len(candidates), candidates)
+	}
+	candidate := candidates[0]
+	if candidate.MemoryKey != "state.activity.current" ||
+		candidate.Retention != memory.RetentionTemporary ||
+		!strings.Contains(strings.ToLower(candidate.Card.Summary), "gym") {
+		t.Fatalf("transition candidate = %#v", candidate)
+	}
+	t.Logf("transition candidate: %#v", candidate)
+}
+
 func workoutMemoryCandidates() []map[string]any {
 	type item struct {
 		key       string
@@ -158,6 +220,7 @@ func TestMemoryExtractorPromptRejectsAmbientAndSecretData(t *testing.T) {
 		"My roommate says she hates mushrooms",
 		"profile.nutrition.daily_protein_target",
 		"Save only direct user statements",
+		"I just left the gym",
 	} {
 		if !strings.Contains(memoryExtractorPrompt, rule) {
 			t.Errorf("memoryExtractorPrompt missing %q", rule)

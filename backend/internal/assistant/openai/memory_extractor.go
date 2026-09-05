@@ -43,7 +43,9 @@ Do not save:
 
 Examples:
 - "I'm working out" becomes one temporary state.activity.current memory.
+- "I just left the gym" becomes one temporary state.activity.current memory saying the workout ended and the user left the gym.
 - "I aim for 130 grams of protein and like steak and chicken" becomes three durable memories: the protein target, steak preference, and chicken preference.
+- "Change my protein target to 150 grams" becomes one durable memory using profile.nutrition.daily_protein_target, replacing the older value.
 - "My roommate says she hates mushrooms" does not become the user's food preference.
 
 Write concise standalone cards. Do not respond to the user and do not include reasoning.`
