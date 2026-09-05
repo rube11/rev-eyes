@@ -68,28 +68,11 @@ export function SignIn({
 
   return (
     <main className="auth" ref={authRef}>
-      <section className="auth-brand">
-        <div className="auth-brand__top">
-          <span className="auth-wordmark">rev/eyes</span>
-          <span className="auth-edition">Wearable assistant</span>
-        </div>
-        <div className="auth-brand__statement">
-          <h1>Your assistant, in one place.</h1>
-          <p>
-            Revisit conversations, manage memories, and see what is coming up.
-          </p>
-        </div>
-        <div className="auth-brand__status">
-          <span>Designed for Even G2</span>
-        </div>
-      </section>
-
       <section className="auth-access">
         <form className="auth-form" onSubmit={onSubmit}>
           <header>
-            <p className="section-label">Your account</p>
-            <h2>Welcome back</h2>
-            <p>Sign in to open your assistant.</p>
+            <span className="auth-wordmark">rev/eyes</span>
+            <h2>Sign in</h2>
           </header>
           <label className="field">
             <span>Email</span>
@@ -122,12 +105,7 @@ export function SignIn({
           ) : null}
           <button className="auth-submit" type="submit" disabled={submitting}>
             <span>{submitting ? 'Signing in…' : 'Sign in'}</span>
-            <span aria-hidden="true">↗</span>
           </button>
-          <footer>
-            <span>Private to your account</span>
-            <span>REV/EYES 2026</span>
-          </footer>
         </form>
       </section>
     </main>
