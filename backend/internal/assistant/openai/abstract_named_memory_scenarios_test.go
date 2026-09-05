@@ -27,9 +27,10 @@ func abstractNamedMemoryScenarios() []syntheticMemoryScenario {
 				),
 				preferenceCard("Likes mushrooms", "The user loves mushrooms."),
 			},
-			sampleResponse: "Pick somewhere with customizable dishes, and avoid mushrooms in anything you share with Jordan. You can still order mushrooms for yourself.",
-			mustContain:    []string{"avoid mushrooms", "with Jordan", "for yourself"},
-			mustNotContain: []string{"you dislike mushrooms", "Jordan is allergic"},
+			sampleResponse:  "Pick somewhere with customizable dishes, and avoid mushrooms in anything you share with Jordan. You can still order mushrooms for yourself.",
+			mustContain:     []string{"avoid mushrooms", "with Jordan", "for yourself"},
+			liveMustContain: []string{"Jordan", "mushroom"},
+			mustNotContain:  []string{"you dislike mushrooms", "Jordan is allergic"},
 		},
 		{
 			name:        "abstract_meeting_with_maya",

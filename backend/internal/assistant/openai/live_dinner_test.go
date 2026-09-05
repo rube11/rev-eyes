@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rube11/rev-eyes/backend/internal/assistant"
+	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
@@ -70,6 +71,7 @@ func TestLiveSyntheticMemoryScenarios(t *testing.T) {
 				t.Errorf("router action = %q, want %q", decision.Action, assistant.ActionRespond)
 				return
 			}
+			assertLiveEvaluationLookup(t, decision.MemoryLookup, scenario)
 			query := strings.TrimSpace(decision.Query)
 			if query == "" {
 				query = scenario.spoken
@@ -88,6 +90,8 @@ func TestLiveSyntheticMemoryScenarios(t *testing.T) {
 			if strings.TrimSpace(result.Text) == "" {
 				t.Fatal("assistant response is empty")
 			}
+			assertLiveResponseSignals(t, result.Text, scenario)
+			assertLiveGlassesResponse(t, result.Text)
 
 			encodedMemories, err := json.MarshalIndent(scenario.memories, "", "  ")
 			if err != nil {
@@ -116,4 +120,20 @@ func glassesPreview(response string) string {
 		return string(characters)
 	}
 	return string(characters[:maxCharacters-1]) + "…"
+}
+
+func memoryTopicsAsStrings(values []memory.Topic) []string {
+	result := make([]string, len(values))
+	for index, value := range values {
+		result[index] = string(value)
+	}
+	return result
+}
+
+func memoryKindsAsStrings(values []memory.Kind) []string {
+	result := make([]string, len(values))
+	for index, value := range values {
+		result[index] = string(value)
+	}
+	return result
 }

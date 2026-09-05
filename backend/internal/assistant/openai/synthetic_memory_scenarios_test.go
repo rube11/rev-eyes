@@ -89,14 +89,16 @@ func TestSyntheticMemoryScenariosReachAgent(t *testing.T) {
 }
 
 type syntheticMemoryScenario struct {
-	name           string
-	spoken         string
-	routedQuery    string
-	lookup         memory.Lookup
-	memories       []memory.Card
-	sampleResponse string
-	mustContain    []string
-	mustNotContain []string
+	name               string
+	spoken             string
+	routedQuery        string
+	lookup             memory.Lookup
+	memories           []memory.Card
+	sampleResponse     string
+	mustContain        []string
+	liveMustContain    []string
+	mustNotContain     []string
+	liveLookupConcepts [][]string
 }
 
 func syntheticMemoryScenarios() []syntheticMemoryScenario {
@@ -116,8 +118,12 @@ func syntheticMemoryScenarios() []syntheticMemoryScenario {
 				goalCard("Daily calorie range", "The user typically needs 2,000 to 3,000 calories per day."),
 				preferenceCard("Favorite meal ingredients", "The user likes flavorful meals with steak, chicken, pasta, and rice."),
 			},
-			sampleResponse: "Make a spicy chicken-and-rice bowl with vegetables. Use a solid chicken portion for protein; tell me what you have eaten today and I can size it against your 130 g goal.",
-			mustContain:    []string{"chicken-and-rice", "130 g"},
+			sampleResponse:  "Make a spicy chicken-and-rice bowl with vegetables. Use a solid chicken portion for protein; tell me what you have eaten today and I can size it against your 130 g goal.",
+			mustContain:     []string{"chicken-and-rice", "130 g"},
+			liveMustContain: []string{"chicken", "rice"},
+			liveLookupConcepts: [][]string{
+				{"protein", "nutrition", "food", "calorie"},
+			},
 		},
 		{
 			name:        "latest_protein_goal_wins",
@@ -169,9 +175,10 @@ func syntheticMemoryScenarios() []syntheticMemoryScenario {
 				goalCard("Daily protein target", "The user targets 130 grams of protein per day."),
 				preferenceCard("Favorite meal ingredients", "The user likes flavorful meals with chicken and rice."),
 			},
-			sampleResponse: "Get chicken thighs, rice, eggs, Greek yogurt, frozen vegetables, tortillas, salsa, and one fruit. Make spicy chicken bowls tonight, then use the leftovers for wraps tomorrow.",
-			mustContain:    []string{"chicken", "rice", "tomorrow"},
-			mustNotContain: []string{"$"},
+			sampleResponse:  "Get chicken thighs, rice, eggs, Greek yogurt, frozen vegetables, tortillas, salsa, and one fruit. Make spicy chicken bowls tonight, then use the leftovers for wraps tomorrow.",
+			mustContain:     []string{"chicken", "rice", "tomorrow"},
+			liveMustContain: []string{"chicken", "rice", "protein"},
+			mustNotContain:  []string{"$"},
 		},
 		{
 			name:        "do_not_confuse_roommates_preference",
@@ -233,8 +240,13 @@ func syntheticMemoryScenarios() []syntheticMemoryScenario {
 				factCard("Weeknight cooking time", "After class, the user usually has about 20 minutes to cook."),
 				factCard("Kitchen equipment", "The user has an air fryer and a rice cooker."),
 			},
-			sampleResponse: "Air-fry seasoned chicken while the rice cooker runs, then add salsa or a quick sauce. It fits your equipment and should land near 20 minutes.",
-			mustContain:    []string{"Air-fry", "rice cooker", "20 minutes"},
+			sampleResponse:  "Air-fry seasoned chicken while the rice cooker runs, then add salsa or a quick sauce. It fits your equipment and should land near 20 minutes.",
+			mustContain:     []string{"Air-fry", "rice cooker", "20 minutes"},
+			liveMustContain: []string{"air", "rice cooker"},
+			liveLookupConcepts: [][]string{
+				{"equipment", "kitchen", "air fryer", "rice cooker"},
+				{"time", "quick", "cooking"},
+			},
 		},
 		{
 			name:        "maya_prefers_morning_meetings",
@@ -396,7 +408,8 @@ func syntheticMemoryScenarios() []syntheticMemoryScenario {
 			mustNotContain: []string{"Nia likes chicken", "you are vegetarian"},
 		},
 	}
-	return append(scenarios, abstractNamedMemoryScenarios()...)
+	scenarios = append(scenarios, abstractNamedMemoryScenarios()...)
+	return append(scenarios, permanentMemoryEvaluationScenarios()...)
 }
 
 func assertSyntheticScenarioRequest(
