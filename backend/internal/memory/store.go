@@ -18,6 +18,7 @@ var (
 	ErrSourceUnavailable      = errors.New("source utterance is unavailable")
 	ErrCandidateBatchTooLarge = errors.New("memory candidate batch is too large")
 	ErrDuplicateMemoryKey     = errors.New("memory candidate keys must be unique within a batch")
+	ErrMemoryAmbiguous        = errors.New("more than one memory matches the request")
 )
 
 // Store persists atomic memories and their transcript sources.
