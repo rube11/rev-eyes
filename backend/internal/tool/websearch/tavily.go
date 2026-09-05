@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -17,15 +18,16 @@ import (
 )
 
 const (
-	searchURL           = "https://api.tavily.com/search"
-	maxQueryLength      = 400
-	quickMaxResults     = 5
-	researchMaxResults  = 8
-	maxTitleLength      = 300
-	maxURLLength        = 2048
-	maxSnippetLength    = 1600
-	maxDomainFilters    = 5
-	maxResponseBodySize = 4 << 20
+	searchURL              = "https://api.tavily.com/search"
+	maxQueryLength         = 400
+	quickMaxResults        = 5
+	researchMaxResults     = 8
+	maxTitleLength         = 300
+	maxURLLength           = 2048
+	maxSnippetLength       = 1600
+	maxPublishedDateLength = 100
+	maxDomainFilters       = 5
+	maxResponseBodySize    = 4 << 20
 )
 
 const parametersSchema = `{
@@ -33,12 +35,12 @@ const parametersSchema = `{
   "properties": {
     "query": {
       "type": "string",
-      "description": "A precise natural-language question preserving key names, dates, locations, and relevant user constraints. Do not use a keyword list or add phrases such as public web."
+      "description": "Concise search keywords preserving relevant names, dates, locations, budgets, and preferences; omit conversational filler and companion names. For verification, use a named candidate already found plus the missing fact, such as menu prices or opening hours. Put site restrictions in include_domains, not query."
     },
     "mode": {
       "type": "string",
       "enum": ["quick", "research"],
-      "description": "Use quick for a simple current fact. Use research for recommendations, comparisons, purchases, local results, or claims needing detailed evidence."
+      "description": "Use quick only to discover possible sources; it does not fetch source pages. Use research for any answer requiring source verification, including every follow-up for prices, hours, schedules, rules, or scientific/technical claims."
     },
     "topic": {
       "type": "string",
@@ -54,7 +56,7 @@ const parametersSchema = `{
       "type": "array",
       "items": { "type": "string" },
       "maxItems": 5,
-      "description": "Optional bare domains to require, such as nps.gov. Use an empty array unless the user named a site or authoritative-source verification needs it."
+      "description": "Optional real bare hostnames containing a dot. Use an empty array for discovery or when the operator is unknown. Restrict to a site only when supplied by the user or identified by retrieved evidence; never guess an authoritative domain. If a filtered lookup returns no useful evidence, try the named candidate without a domain filter; do not repeat the same failed restriction."
     }
   },
   "required": ["query", "mode", "topic", "recency", "include_domains"],
@@ -85,24 +87,34 @@ type Tool struct {
 	endpoint string
 }
 
-// Result is one normalized Tavily search result.
+// Result is one normalized search result or separately cited linked evidence page.
 type Result struct {
-	Title         string  `json:"title"`
-	URL           string  `json:"url"`
-	Snippet       string  `json:"snippet"`
-	Score         float64 `json:"score"`
-	PublishedDate string  `json:"published_date,omitempty"`
+	Title             string   `json:"title"`
+	URL               string   `json:"url"`
+	Snippet           string   `json:"snippet,omitempty"`
+	Score             float64  `json:"score"`
+	PublishedDate     string   `json:"published_date,omitempty"`
+	DiscoveredFrom    string   `json:"discovered_from,omitempty"`
+	DiscoverySnippet  string   `json:"discovery_snippet,omitempty"`
+	PageExcerpts      []string `json:"page_excerpts,omitempty"`
+	PagePublishedDate string   `json:"page_published_date,omitempty"`
+	ExtractionStatus  string   `json:"extraction_status,omitempty"`
 }
 
 type searchResponse struct {
-	Results      []Result `json:"results"`
-	Query        string   `json:"query"`
-	Mode         string   `json:"mode"`
-	Topic        string   `json:"topic"`
-	Recency      string   `json:"recency"`
-	ResponseTime string   `json:"response_time,omitempty"`
-	RequestID    string   `json:"request_id,omitempty"`
-	Credits      int      `json:"credits,omitempty"`
+	Results             []Result `json:"results"`
+	Query               string   `json:"query"`
+	Mode                string   `json:"mode"`
+	Topic               string   `json:"topic"`
+	Recency             string   `json:"recency"`
+	ResponseTime        string   `json:"response_time,omitempty"`
+	RequestID           string   `json:"request_id,omitempty"`
+	Credits             int      `json:"credits,omitempty"`
+	Provider            string   `json:"provider"`
+	LatencyMS           int64    `json:"latency_ms"`
+	ResponsiveEngines   int      `json:"responsive_engines,omitempty"`
+	UnresponsiveEngines int      `json:"unresponsive_engines,omitempty"`
+	ExtractedResults    int      `json:"extracted_results,omitempty"`
 }
 
 func New(apiKey string) (*Tool, error) {
@@ -120,7 +132,7 @@ func New(apiKey string) (*Tool, error) {
 func (t *Tool) Spec() tool.Spec {
 	return tool.Spec{
 		Name:        "search_web",
-		Description: "Research the current public web. Choose quick discovery or deeper multi-chunk research, optionally focused on recent news or authoritative domains.",
+		Description: "Search current public-web evidence using concise targeted queries. Discover candidates or verify a named candidate's missing facts; use domain filters only for user-specified or evidence-identified sites.",
 		Parameters:  json.RawMessage(parametersSchema),
 		ReadOnly:    true,
 	}
@@ -131,20 +143,11 @@ func (t *Tool) Execute(
 	_ tool.Scope,
 	arguments json.RawMessage,
 ) (tool.Result, error) {
-	var input searchInput
-	decoder := json.NewDecoder(bytes.NewReader(arguments))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
-		return tool.Result{}, fmt.Errorf("decode web search: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return tool.Result{}, errors.New("decode web search: expected one JSON object")
-	}
-
-	input, err := normalizeSearchInput(input)
+	input, err := decodeSearchInput(arguments)
 	if err != nil {
 		return tool.Result{}, err
 	}
+	started := time.Now()
 
 	request := searchRequest{
 		Query:          input.Query,
@@ -166,20 +169,38 @@ func (t *Tool) Execute(
 
 	response, err := t.search(ctx, request)
 	if err != nil {
+		t.logSearch(ctx, input, time.Since(started), 0, 0, err)
 		return tool.Result{}, err
 	}
 	if len(response.Results) == 0 {
+		t.logSearch(ctx, input, time.Since(started), 0, response.Credits, ErrNoResults)
 		return tool.Result{}, ErrNoResults
 	}
 	response.Query = input.Query
 	response.Mode = input.Mode
 	response.Topic = input.Topic
 	response.Recency = input.Recency
+	response.Provider = ProviderTavily
+	response.LatencyMS = time.Since(started).Milliseconds()
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		return tool.Result{}, fmt.Errorf("encode web search results: %w", err)
 	}
+	t.logSearch(ctx, input, time.Since(started), len(response.Results), response.Credits, nil)
 	return tool.Result{Content: string(encoded)}, nil
+}
+
+func decodeSearchInput(arguments json.RawMessage) (searchInput, error) {
+	var input searchInput
+	decoder := json.NewDecoder(bytes.NewReader(arguments))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		return searchInput{}, fmt.Errorf("decode web search: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return searchInput{}, errors.New("decode web search: expected one JSON object")
+	}
+	return normalizeSearchInput(input)
 }
 
 type searchRequest struct {
@@ -202,6 +223,7 @@ func (t *Tool) SearchNews(ctx context.Context, query string) ([]Result, error) {
 	if err := validateQuery(query); err != nil {
 		return nil, err
 	}
+	started := time.Now()
 	response, err := t.search(ctx, searchRequest{
 		Query:          query,
 		SearchDepth:    "basic",
@@ -211,8 +233,39 @@ func (t *Tool) SearchNews(ctx context.Context, query string) ([]Result, error) {
 		Language:       "en",
 		FilterLanguage: true,
 		SafeSearch:     true,
+		IncludeUsage:   true,
 	})
+	logErr := err
+	if logErr == nil && len(response.Results) == 0 {
+		logErr = ErrNoResults
+	}
+	t.logSearch(ctx, searchInput{
+		Mode:    "quick",
+		Topic:   "news",
+		Recency: "day",
+	}, time.Since(started), len(response.Results), response.Credits, logErr)
 	return response.Results, err
+}
+
+func (t *Tool) logSearch(
+	ctx context.Context,
+	input searchInput,
+	duration time.Duration,
+	resultCount int,
+	credits int,
+	err error,
+) {
+	slog.InfoContext(ctx, "web search provider request",
+		"provider", ProviderTavily,
+		"mode", input.Mode,
+		"topic", input.Topic,
+		"recency", input.Recency,
+		"domain_filter_count", len(input.IncludeDomains),
+		"duration_ms", duration.Milliseconds(),
+		"result_count", resultCount,
+		"credits", credits,
+		"outcome", searchErrorClass(err),
+	)
 }
 
 func (t *Tool) search(ctx context.Context, parameters searchRequest) (searchResponse, error) {
@@ -239,9 +292,12 @@ func (t *Tool) search(ctx context.Context, parameters searchRequest) (searchResp
 	}
 	defer response.Body.Close()
 
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBodySize))
+	responseBody, tooLarge, err := readBounded(response.Body, maxResponseBodySize)
 	if err != nil {
 		return searchResponse{}, fmt.Errorf("read Tavily search: %w", err)
+	}
+	if tooLarge {
+		return searchResponse{}, errors.New("Tavily search response exceeded size limit")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return searchResponse{}, fmt.Errorf("Tavily search returned status %d", response.StatusCode)
@@ -280,7 +336,7 @@ func (t *Tool) search(ctx context.Context, parameters searchRequest) (searchResp
 			URL:           url,
 			Snippet:       truncate(item.Content, maxSnippetLength),
 			Score:         item.Score,
-			PublishedDate: strings.TrimSpace(item.PublishedDate),
+			PublishedDate: truncate(item.PublishedDate, maxPublishedDateLength),
 		})
 	}
 	return searchResponse{
@@ -374,10 +430,13 @@ func validateQuery(query string) error {
 }
 
 func truncate(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
 	value = strings.TrimSpace(value)
 	runes := []rune(value)
 	if len(runes) <= limit {
 		return value
 	}
-	return string(runes[:limit]) + "…"
+	return string(runes[:limit-1]) + "…"
 }
