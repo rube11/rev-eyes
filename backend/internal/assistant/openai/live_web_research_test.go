@@ -363,6 +363,22 @@ func (r *scenarioMemoryReader) Find(
 	return append([]memory.Card(nil), r.cards...), nil
 }
 
+func (r *scenarioMemoryReader) Review(
+	ctx context.Context,
+	scope tool.Scope,
+	lookup memory.Lookup,
+) ([]memory.Card, error) {
+	return r.Find(ctx, scope, lookup)
+}
+
+func (r *scenarioMemoryReader) Forget(
+	context.Context,
+	tool.Scope,
+	memory.Lookup,
+) (int, error) {
+	return 0, nil
+}
+
 func (r *scenarioMemoryReader) Lookup() memory.Lookup {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -17,7 +17,11 @@ const (
 	ActionIgnore          Action = "ignore"
 	ActionRespond         Action = "respond"
 	ActionStateUpdate     Action = "state_update"
+	ActionStateTransition Action = "state_transition"
 	ActionRemember        Action = "remember"
+	ActionMemoryReview    Action = "memory_review"
+	ActionMemoryCorrect   Action = "memory_correct"
+	ActionMemoryForget    Action = "memory_forget"
 	ActionProposeTask     Action = "propose_task"
 	ActionProposeWatch    Action = "propose_watch"
 	ActionResolveProposal Action = "resolve_proposal"
@@ -71,6 +75,9 @@ func (r *Router) Route(ctx context.Context, utterance string) (Decision, error) 
 	decision.Query = strings.TrimSpace(decision.Query)
 	decision = validateDecision(decision)
 	if decision.Action == ActionRespond ||
+		decision.Action == ActionStateTransition ||
+		decision.Action == ActionMemoryReview ||
+		decision.Action == ActionMemoryForget ||
 		decision.Action == ActionProposeTask ||
 		decision.Action == ActionProposeWatch {
 		decision.MemoryLookup = decision.MemoryLookup.Normalize()
@@ -84,7 +91,16 @@ func (r *Router) Route(ctx context.Context, utterance string) (Decision, error) 
 
 func validateDecision(decision Decision) Decision {
 	switch decision.Action {
-	case ActionIgnore, ActionRespond, ActionStateUpdate, ActionRemember, ActionProposeTask, ActionProposeWatch:
+	case ActionIgnore,
+		ActionRespond,
+		ActionStateUpdate,
+		ActionStateTransition,
+		ActionRemember,
+		ActionMemoryReview,
+		ActionMemoryCorrect,
+		ActionMemoryForget,
+		ActionProposeTask,
+		ActionProposeWatch:
 		return decision
 	default:
 		return Decision{Action: ActionIgnore}

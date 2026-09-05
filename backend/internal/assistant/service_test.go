@@ -75,6 +75,55 @@ func (f memoryReaderFunc) Find(
 	return f(ctx, scope, lookup)
 }
 
+func (f memoryReaderFunc) Review(
+	ctx context.Context,
+	scope tool.Scope,
+	lookup memory.Lookup,
+) ([]memory.Card, error) {
+	return f(ctx, scope, lookup)
+}
+
+func (f memoryReaderFunc) Forget(
+	context.Context,
+	tool.Scope,
+	memory.Lookup,
+) (int, error) {
+	return 0, nil
+}
+
+type managedMemoryStub struct {
+	find   func(context.Context, tool.Scope, memory.Lookup) ([]memory.Card, error)
+	review func(context.Context, tool.Scope, memory.Lookup) ([]memory.Card, error)
+	forget func(context.Context, tool.Scope, memory.Lookup) (int, error)
+}
+
+func (m managedMemoryStub) Find(
+	ctx context.Context,
+	scope tool.Scope,
+	lookup memory.Lookup,
+) ([]memory.Card, error) {
+	if m.find == nil {
+		return nil, nil
+	}
+	return m.find(ctx, scope, lookup)
+}
+
+func (m managedMemoryStub) Review(
+	ctx context.Context,
+	scope tool.Scope,
+	lookup memory.Lookup,
+) ([]memory.Card, error) {
+	return m.review(ctx, scope, lookup)
+}
+
+func (m managedMemoryStub) Forget(
+	ctx context.Context,
+	scope tool.Scope,
+	lookup memory.Lookup,
+) (int, error) {
+	return m.forget(ctx, scope, lookup)
+}
+
 var noMemories = memoryReaderFunc(func(
 	context.Context,
 	tool.Scope,
@@ -161,6 +210,71 @@ func TestHandleUtteranceUsesActualProposalResult(t *testing.T) {
 		t.Fatalf("HandleUtterance() error = %v", err)
 	}
 	if outcome.Response != "What time does class end?" || outcome.ProposalCreated {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+}
+
+func TestHandleUtteranceRespondsToMeaningfulStateTransition(t *testing.T) {
+	wantLookup := memory.Lookup{
+		Query:  "The user just left the gym; suggest one timely next step.",
+		Terms:  []string{"protein target"},
+		Topics: []memory.Topic{memory.TopicHealth},
+		Kinds:  []memory.Kind{memory.KindGoal},
+	}
+	wantCards := []memory.Card{{
+		Topics:  []memory.Topic{memory.TopicHealth},
+		Kind:    memory.KindGoal,
+		Title:   "Daily protein target",
+		Summary: "The user targets 150 grams of protein per day.",
+	}}
+	service, err := NewService(
+		routerFunc(func(context.Context, string) (Decision, error) {
+			return Decision{
+				Action:       ActionStateTransition,
+				Query:        "The user just left the gym; suggest one timely next step.",
+				MemoryLookup: wantLookup,
+			}, nil
+		}),
+		agentFunc(func(
+			_ context.Context,
+			_ tool.Scope,
+			query string,
+			_ session.Conversation,
+			cards []memory.Card,
+		) (string, error) {
+			if query != "The user just left the gym; suggest one timely next step." ||
+				!reflect.DeepEqual(cards, wantCards) {
+				t.Fatalf("Respond(%q, %#v)", query, cards)
+			}
+			return "Nice work. Grab a protein-forward meal next.", nil
+		}),
+		memoryReaderFunc(func(
+			_ context.Context,
+			_ tool.Scope,
+			lookup memory.Lookup,
+		) ([]memory.Card, error) {
+			if !reflect.DeepEqual(lookup, wantLookup) {
+				t.Fatalf("Find() lookup = %#v", lookup)
+			}
+			return wantCards, nil
+		}),
+		noConversation,
+		noProposalConfirmation,
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	outcome, err := service.HandleUtterance(
+		context.Background(),
+		tool.Scope{UserID: "user-1", SessionID: "session-1"},
+		"utterance-1",
+		"I just left the gym.",
+	)
+	if err != nil {
+		t.Fatalf("HandleUtterance() error = %v", err)
+	}
+	if outcome.Decision.Action != ActionStateTransition ||
+		outcome.Response != "Nice work. Grab a protein-forward meal next." {
 		t.Fatalf("outcome = %#v", outcome)
 	}
 }

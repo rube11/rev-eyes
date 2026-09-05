@@ -109,3 +109,60 @@ func TestRouterKeepsMemoryLookupForWatchProposal(t *testing.T) {
 		t.Fatalf("Route() = %#v", decision)
 	}
 }
+
+func TestRouterKeepsMemoryLookupForStateTransition(t *testing.T) {
+	router := NewRouter(func(context.Context, string) (string, error) {
+		return `{
+			"action":"state_transition",
+			"query":"The user just left the gym; suggest one timely next step.",
+			"memory_lookup":{"terms":["protein target","food preference"],"topics":["health","goals"],"kinds":["goal","preference"],"entities":[]}
+		}`, nil
+	})
+
+	decision, err := router.Route(context.Background(), "I just left the gym")
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	if decision.Action != ActionStateTransition ||
+		!reflect.DeepEqual(decision.MemoryLookup.Terms, []string{"protein target", "food preference"}) {
+		t.Fatalf("Route() = %#v", decision)
+	}
+}
+
+func TestRouterKeepsFocusedLookupForMemoryManagement(t *testing.T) {
+	for _, action := range []Action{ActionMemoryReview, ActionMemoryForget} {
+		t.Run(string(action), func(t *testing.T) {
+			router := NewRouter(func(context.Context, string) (string, error) {
+				return `{
+					"action":"` + string(action) + `",
+					"query":"Jolene",
+					"memory_lookup":{"terms":[],"topics":[],"kinds":[],"entities":["Jolene"]}
+				}`, nil
+			})
+			decision, err := router.Route(context.Background(), "memory command")
+			if err != nil {
+				t.Fatalf("Route() error = %v", err)
+			}
+			if !reflect.DeepEqual(decision.MemoryLookup.Entities, []string{"jolene"}) {
+				t.Fatalf("Route() = %#v", decision)
+			}
+		})
+	}
+}
+
+func TestRouterClearsLookupForMemoryCorrection(t *testing.T) {
+	router := NewRouter(func(context.Context, string) (string, error) {
+		return `{
+			"action":"memory_correct",
+			"query":"My protein target is 150 grams.",
+			"memory_lookup":{"terms":["protein"],"topics":["health"],"kinds":["goal"],"entities":[]}
+		}`, nil
+	})
+	decision, err := router.Route(context.Background(), "Change my protein target to 150 grams")
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	if decision.Action != ActionMemoryCorrect || !decision.MemoryLookup.Empty() {
+		t.Fatalf("Route() = %#v", decision)
+	}
+}

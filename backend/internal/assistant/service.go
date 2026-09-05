@@ -60,9 +60,11 @@ type ProposalAwareAgent interface {
 	) (AgentResult, error)
 }
 
-// MemoryReader finds relevant memories within the trusted user scope.
-type MemoryReader interface {
+// MemoryManager retrieves and manages memories within the trusted user scope.
+type MemoryManager interface {
 	Find(ctx context.Context, scope tool.Scope, lookup memory.Lookup) ([]memory.Card, error)
+	Review(ctx context.Context, scope tool.Scope, lookup memory.Lookup) ([]memory.Card, error)
+	Forget(ctx context.Context, scope tool.Scope, lookup memory.Lookup) (int, error)
 }
 
 // ConversationReader prepares recent transcript context for the current turn.
@@ -79,13 +81,14 @@ type Outcome struct {
 	Decision        Decision
 	Response        string
 	ProposalCreated bool
+	MemoryChanged   bool
 }
 
 // Service coordinates routing and response generation.
 type Service struct {
 	router       ActivityRouter
 	agent        Agent
-	memories     MemoryReader
+	memories     MemoryManager
 	conversation ConversationReader
 	proposals    ProposalConfirmer
 }
@@ -93,7 +96,7 @@ type Service struct {
 func NewService(
 	activityRouter ActivityRouter,
 	agent Agent,
-	memories MemoryReader,
+	memories MemoryManager,
 	conversation ConversationReader,
 	proposals ProposalConfirmer,
 ) (*Service, error) {
@@ -149,7 +152,30 @@ func (s *Service) HandleUtterance(
 	}
 
 	outcome := Outcome{Decision: decision}
+	switch decision.Action {
+	case ActionMemoryReview:
+		response, reviewErr := s.reviewMemories(ctx, scope, decision)
+		outcome.Response = response
+		return outcome, reviewErr
+	case ActionMemoryForget:
+		response, changed, forgetErr := s.forgetMemory(
+			ctx,
+			scope,
+			utteranceID,
+			utterance,
+			decision,
+		)
+		outcome.Response = response
+		outcome.MemoryChanged = changed
+		return outcome, forgetErr
+	case ActionMemoryCorrect:
+		if strings.TrimSpace(decision.Query) == "" {
+			outcome.Response = memoryCorrectionQuestion
+		}
+		return outcome, nil
+	}
 	if decision.Action != ActionRespond &&
+		decision.Action != ActionStateTransition &&
 		decision.Action != ActionProposeTask &&
 		decision.Action != ActionProposeWatch {
 		return outcome, nil
