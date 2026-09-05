@@ -35,6 +35,12 @@ Use another short lowercase path only when none of these families fits. Reuse th
 
 Use retention=temporary for a current activity or short-lived situation and durable for stable profile information. Save only direct user statements; do not turn hedged, hypothetical, or inferred claims into facts.
 
+Choose profile_layer in this same extraction; do not produce a separate summary:
+- core: durable context that would materially change help across many future requests: the user's identity/role, important relationships, active goals and numeric targets, strong standing preferences or instructions. Ask: would forgetting this cause repeated bad advice? Do not promote every saved fact or food item.
+- recent: a temporary current activity or situation useful for the next interaction. It must have temporary retention; the application expires it. Never label a durable fact recent merely because it was just said.
+- detail: useful searchable information that need not be present every turn, including isolated events, incidental likes, and uncertain importance. This is the default when in doubt.
+A changed value keeps the same memory_key and is classified by its current meaning, not by how recently it was mentioned. A protein target or student role is core; leaving the gym is recent; liking one individual food is usually detail. Only use facts explicitly supplied by the user. Pinning/excluding existing memories is handled separately, not by inventing a new memory.
+
 Do not save:
 - passwords, authentication codes, API keys, payment-card or bank details;
 - ambient speech, filler, quoted media, assistant text, or facts only about another person;
@@ -138,9 +144,10 @@ func (e *MemoryExtractor) Extract(
 
 	var extracted struct {
 		Memories []struct {
-			MemoryKey string           `json:"memory_key"`
-			Retention memory.Retention `json:"retention"`
-			Card      memory.Card      `json:"card"`
+			MemoryKey    string              `json:"memory_key"`
+			Retention    memory.Retention    `json:"retention"`
+			ProfileLayer memory.ProfileLayer `json:"profile_layer"`
+			Card         memory.Card         `json:"card"`
 		} `json:"memories"`
 	}
 	if err := json.Unmarshal([]byte(outputText), &extracted); err != nil {
@@ -153,9 +160,10 @@ func (e *MemoryExtractor) Extract(
 	candidates := make([]memory.Candidate, 0, len(extracted.Memories))
 	for index, item := range extracted.Memories {
 		candidate := memory.Candidate{
-			Card:      item.Card,
-			MemoryKey: item.MemoryKey,
-			Retention: item.Retention,
+			Card:         item.Card,
+			MemoryKey:    item.MemoryKey,
+			Retention:    item.Retention,
+			ProfileLayer: item.ProfileLayer,
 		}
 		candidate = candidate.Normalize()
 		if candidateContainsBlockedSecret(candidate) {
@@ -248,10 +256,15 @@ func memoryCandidateSchema() map[string]any {
 				"enum": []string{string(memory.RetentionDurable), string(memory.RetentionTemporary)},
 			},
 			"card": memoryCardSchema(),
+			"profile_layer": map[string]any{
+				"type": "string",
+				"enum": []string{string(memory.ProfileCore), string(memory.ProfileRecent), string(memory.ProfileDetail)},
+			},
 		},
 		"required": []string{
 			"memory_key",
 			"retention",
+			"profile_layer",
 			"card",
 		},
 		"additionalProperties": false,

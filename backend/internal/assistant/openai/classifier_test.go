@@ -88,7 +88,7 @@ func TestClassifierRequestUsesStrictCompleteActionSchema(t *testing.T) {
 	if schema["additionalProperties"] != false {
 		t.Fatalf("additionalProperties = %#v, want false", schema["additionalProperties"])
 	}
-	wantRequired := []string{"action", "query", "memory_lookup"}
+	wantRequired := []string{"action", "query", "memory_lookup", "memory_review_all"}
 	if got := schema["required"]; !reflect.DeepEqual(got, wantRequired) {
 		t.Fatalf("required = %#v, want %#v", got, wantRequired)
 	}
@@ -107,6 +107,8 @@ func TestClassifierRequestUsesStrictCompleteActionSchema(t *testing.T) {
 		"memory_review",
 		"memory_correct",
 		"memory_forget",
+		"profile_include",
+		"profile_exclude",
 		"propose_task",
 		"propose_watch",
 	}
