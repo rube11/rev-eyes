@@ -1,0 +1,51 @@
+# Private SearXNG API for the Rev Eyes backend.
+#
+# The container port is reachable only through Docker's loopback-only host
+# publication. The API caller still sends language and safesearch explicitly;
+# these values are safe defaults for manual smoke checks and future callers.
+use_default_settings:
+  engines:
+    keep_only:
+      - google
+      - yahoo
+      - bing news
+
+general:
+  debug: false
+  instance_name: "Rev Eyes Search"
+  enable_metrics: false
+
+search:
+  safe_search: 2
+  autocomplete: ""
+  favicon_resolver: ""
+  default_lang: "en"
+  formats:
+    - json
+
+server:
+  # Granian listens on this container-only socket. Docker publishes it as
+  # 127.0.0.1:8888 on the host; do not expose it through Caddy.
+  port: 8080
+  bind_address: "0.0.0.0"
+  base_url: "http://127.0.0.1:8888/"
+  secret_key: "overridden-by-SEARXNG_SECRET"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+# The limiter and public-instance features are disabled on this loopback-only
+# service, so a Valkey process is unnecessary.
+valkey:
+  url: false
+
+engines:
+  # Yahoo retains multi-word query relevance in the local evaluation. Google
+  # adds useful official-domain coverage. Bing web was excluded after it
+  # repeatedly returned results for only the first query word.
+  - name: google
+    disabled: false
+  - name: yahoo
+    disabled: false
+  - name: bing news
+    disabled: false

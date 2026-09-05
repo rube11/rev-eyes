@@ -1,0 +1,57 @@
+# Local engine evaluation only; not the deployment configuration.
+# No API-key engines or Tavily. Explicit engine selection in the probe script
+# prevents a single probe from fanning out to every configured engine.
+use_default_settings:
+  engines:
+    keep_only:
+      - google
+      - bing
+      - yahoo
+      - mojeek
+      - qwant
+      - google news
+      - bing news
+      - yahoo news
+      - wikipedia
+general:
+  debug: false
+  instance_name: "Rev Eyes local engine evaluation"
+  enable_metrics: false
+search:
+  safe_search: 2
+  autocomplete: ""
+  favicon_resolver: ""
+  default_lang: "en"
+  formats: [json]
+server:
+  port: 8080
+  bind_address: "127.0.0.1"
+  base_url: "http://127.0.0.1:8888/"
+  secret_key: "overridden-by-SEARXNG_SECRET"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+valkey:
+  url: false
+outgoing:
+  request_timeout: 5.0
+  max_request_timeout: 6.0
+engines:
+  - name: google
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: yahoo
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: qwant
+    disabled: false
+  - name: google news
+    disabled: false
+  - name: bing news
+    disabled: false
+  - name: yahoo news
+    disabled: false
+  - name: wikipedia
+    disabled: false

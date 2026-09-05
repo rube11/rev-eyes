@@ -1,0 +1,38 @@
+# Local evaluation only, after the isolated Google probe returned a CAPTCHA.
+# Never use this file to change production defaults implicitly.
+# Yahoo supplies general discovery; the existing Bing News engine supplies news.
+use_default_settings:
+  engines:
+    keep_only:
+      - yahoo
+      - bing news
+
+general:
+  debug: false
+  instance_name: "Rev Eyes free-engine evaluation"
+  enable_metrics: false
+
+search:
+  safe_search: 2
+  autocomplete: ""
+  favicon_resolver: ""
+  default_lang: "en"
+  formats: [json]
+
+server:
+  port: 8080
+  bind_address: "127.0.0.1"
+  base_url: "http://127.0.0.1:8889/"
+  secret_key: "local-evaluation-only-no-public-listener"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+valkey:
+  url: false
+
+engines:
+  - name: yahoo
+    disabled: false
+  - name: bing news
+    disabled: false

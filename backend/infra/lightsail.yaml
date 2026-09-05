@@ -29,6 +29,11 @@ Parameters:
     AllowedValues:
       - micro_3_0
       - small_3_0
+  SearxngImage:
+    Type: String
+    Description: Explicit official SearXNG image version or sha256 digest. The floating latest tag is rejected.
+    AllowedPattern: '^(?:(?:docker\.io|ghcr\.io)/searxng/searxng:(?!latest$)[A-Za-z0-9][A-Za-z0-9._-]{0,127}|(?:docker\.io|ghcr\.io)/searxng/searxng@sha256:[A-Fa-f0-9]{64})$'
+    ConstraintDescription: Use docker.io/searxng/searxng or ghcr.io/searxng/searxng with a non-latest tag or sha256 digest.
 
 Conditions:
   HasCustomKeyPair: !Not [!Equals [!Ref KeyPairName, '']]
@@ -83,7 +88,7 @@ Resources:
 
         export DEBIAN_FRONTEND=noninteractive
         apt-get update
-        apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg unattended-upgrades
+        apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl docker.io gnupg openssl python3 unattended-upgrades
 
         curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
           | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
@@ -99,6 +104,150 @@ Resources:
         install -d -o root -g root -m 0755 /opt/rev-eyes
         install -d -o root -g root -m 0700 /etc/rev-eyes
         install -o root -g root -m 0600 /dev/null /etc/rev-eyes/backend.env
+
+        install -d -o root -g root -m 0755 /etc/searxng
+        install -d -o root -g root -m 0755 /usr/local/lib/rev-eyes
+        umask 077
+        printf 'SEARXNG_SECRET=%s\n' "$(openssl rand -hex 32)" > /etc/searxng/runtime.env
+        umask 022
+        cat > /etc/searxng/image.env <<'EOF'
+        SEARXNG_IMAGE=${SearxngImage}
+        EOF
+
+        cat > /etc/searxng/settings.yml <<'EOF'
+        # Private SearXNG API for the Rev Eyes backend.
+        #
+        # The container port is reachable only through Docker's loopback-only host
+        # publication. The API caller still sends language and safesearch explicitly;
+        # these values are safe defaults for manual smoke checks and future callers.
+        use_default_settings:
+          engines:
+            keep_only:
+              - google
+              - yahoo
+              - bing news
+
+        general:
+          debug: false
+          instance_name: "Rev Eyes Search"
+          enable_metrics: false
+
+        search:
+          safe_search: 2
+          autocomplete: ""
+          favicon_resolver: ""
+          default_lang: "en"
+          formats:
+            - json
+
+        server:
+          # Granian listens on this container-only socket. Docker publishes it as
+          # 127.0.0.1:8888 on the host; do not expose it through Caddy.
+          port: 8080
+          bind_address: "0.0.0.0"
+          base_url: "http://127.0.0.1:8888/"
+          secret_key: "overridden-by-SEARXNG_SECRET"
+          limiter: false
+          public_instance: false
+          image_proxy: false
+
+        # The limiter and public-instance features are disabled on this loopback-only
+        # service, so a Valkey process is unnecessary.
+        valkey:
+          url: false
+
+        engines:
+          # Yahoo retains multi-word query relevance in the local evaluation. Google
+          # adds useful official-domain coverage. Bing web was excluded after it
+          # repeatedly returned results for only the first query word.
+          - name: google
+            disabled: false
+          - name: yahoo
+            disabled: false
+          - name: bing news
+            disabled: false
+        EOF
+
+        cat > /usr/local/lib/rev-eyes/searxng-smoke-check <<'EOF'
+        #!/bin/sh
+        set -eu
+
+        base_url=http://127.0.0.1:8888
+        payload_file=$(mktemp)
+        trap 'rm -f "$payload_file"' EXIT HUP INT TERM
+
+        curl \
+          --fail \
+          --silent \
+          --show-error \
+          --retry 20 \
+          --retry-delay 1 \
+          --retry-connrefused \
+          --max-time 5 \
+          "$base_url/healthz" \
+          >/dev/null
+
+        curl \
+          --fail \
+          --silent \
+          --show-error \
+          --get \
+          --max-time 20 \
+          --data-urlencode 'q=Open Source Initiative' \
+          --data-urlencode 'format=json' \
+          --data-urlencode 'categories=general' \
+          --data-urlencode 'language=en' \
+          --data-urlencode 'safesearch=2' \
+          "$base_url/search" \
+          --output "$payload_file"
+
+        python3 - "$payload_file" <<'PY'
+        import json
+        import sys
+
+        with open(sys.argv[1], encoding="utf-8") as response:
+            payload = json.load(response)
+
+        results = payload.get("results")
+        if not isinstance(results, list) or not results:
+            engines = payload.get("unresponsive_engines", [])
+            raise SystemExit(
+                "SearXNG smoke query returned no results; "
+                f"unresponsive engines: {engines!r}"
+            )
+
+        if not any(
+            isinstance(result, dict)
+            and isinstance(result.get("url"), str)
+            and result["url"].startswith(("http://", "https://"))
+            for result in results
+        ):
+            raise SystemExit("SearXNG smoke response contains no usable web URL")
+        PY
+        EOF
+        chmod 0755 /usr/local/lib/rev-eyes/searxng-smoke-check
+
+        cat > /etc/systemd/system/rev-eyes-searxng.service <<'EOF'
+        [Unit]
+        Description=Private SearXNG API for Rev Eyes
+        Wants=network-online.target
+        After=network-online.target docker.service
+        Requires=docker.service
+
+        [Service]
+        Type=simple
+        EnvironmentFile=/etc/searxng/image.env
+        ExecStartPre=-/usr/bin/docker rm -f rev-eyes-searxng
+        ExecStart=/usr/bin/docker run --name rev-eyes-searxng --rm --pull=never --init --publish 127.0.0.1:8888:8080 --env-file /etc/searxng/runtime.env --env FORCE_OWNERSHIP=false --mount type=bind,src=/etc/searxng/settings.yml,dst=/etc/searxng/settings.yml,readonly --mount type=volume,src=rev-eyes-searxng-data,dst=/var/cache/searxng --health-cmd "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1" --health-interval 30s --health-timeout 5s --health-retries 3 --health-start-period 20s --pids-limit 256 --log-opt max-size=10m --log-opt max-file=3 ${!SEARXNG_IMAGE}
+        ExecStop=/usr/bin/docker stop --time 20 rev-eyes-searxng
+        Restart=on-failure
+        RestartSec=5s
+        TimeoutStartSec=90s
+        TimeoutStopSec=30s
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
 
         cat > /etc/systemd/system/rev-eyes.service <<'EOF'
         [Unit]
@@ -150,9 +299,17 @@ Resources:
         EOF
 
         systemctl daemon-reload
+        systemctl enable --now docker.service
+        docker pull '${SearxngImage}'
+        systemctl enable rev-eyes-searxng.service
         systemctl enable rev-eyes.service
         systemctl reload ssh.service
         systemctl reload caddy.service
+        if ! systemctl start rev-eyes-searxng.service \
+          || ! /usr/local/lib/rev-eyes/searxng-smoke-check; then
+          systemctl stop rev-eyes-searxng.service || true
+          exit 1
+        fi
 
   BackendStaticIp:
     Type: AWS::Lightsail::StaticIp

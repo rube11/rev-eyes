@@ -1,0 +1,19 @@
+[Unit]
+Description=Private SearXNG API for Rev Eyes
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/searxng/image.env
+ExecStartPre=-/usr/bin/docker rm -f rev-eyes-searxng
+ExecStart=/usr/bin/docker run --name rev-eyes-searxng --rm --pull=never --init --publish 127.0.0.1:8888:8080 --env-file /etc/searxng/runtime.env --env FORCE_OWNERSHIP=false --mount type=bind,src=/etc/searxng/settings.yml,dst=/etc/searxng/settings.yml,readonly --mount type=volume,src=rev-eyes-searxng-data,dst=/var/cache/searxng --health-cmd "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1" --health-interval 30s --health-timeout 5s --health-retries 3 --health-start-period 20s --pids-limit 256 --log-opt max-size=10m --log-opt max-file=3 ${SEARXNG_IMAGE}
+ExecStop=/usr/bin/docker stop --time 20 rev-eyes-searxng
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=90s
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=multi-user.target
