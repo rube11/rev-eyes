@@ -41,6 +41,23 @@ type createRequest struct {
 	MaxOutputTokens   int               `json:"max_output_tokens,omitempty"`
 	Store             bool              `json:"store"`
 	Include           []string          `json:"include,omitempty"`
+	Reasoning         *reasoningConfig  `json:"reasoning,omitempty"`
+	Text              *responseText     `json:"text,omitempty"`
+}
+
+type responseText struct {
+	Format responseFormat `json:"format"`
+}
+
+type responseFormat struct {
+	Type   string          `json:"type"`
+	Name   string          `json:"name"`
+	Strict bool            `json:"strict"`
+	Schema json.RawMessage `json:"schema"`
+}
+
+type reasoningConfig struct {
+	Effort string `json:"effort"`
 }
 
 type responseOptions struct {
@@ -48,6 +65,8 @@ type responseOptions struct {
 	tools            []functionTool
 	maxOutputTokens  int
 	includeReasoning bool
+	reasoningEffort  string
+	textFormat       *responseText
 }
 
 type createResponse struct {
@@ -59,6 +78,7 @@ type createResponse struct {
 
 type outputItem struct {
 	Type      string `json:"type"`
+	Phase     string `json:"phase"`
 	CallID    string `json:"call_id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
@@ -98,12 +118,16 @@ func (a *Agent) createResponse(
 		ParallelToolCalls: len(options.tools) > 0,
 		MaxOutputTokens:   options.maxOutputTokens,
 		Store:             false,
+		Text:              options.textFormat,
 	}
 	if len(options.tools) > 0 {
 		body.ToolChoice = "auto"
 	}
 	if options.includeReasoning {
 		body.Include = []string{"reasoning.encrypted_content"}
+	}
+	if options.reasoningEffort != "" {
+		body.Reasoning = &reasoningConfig{Effort: options.reasoningEffort}
 	}
 
 	encoded, err := json.Marshal(body)
@@ -165,7 +189,8 @@ func toolDefinitions(specs []tool.Spec) ([]functionTool, error) {
 
 func parseOutput(output []json.RawMessage) ([]toolCall, string, error) {
 	var calls []toolCall
-	var text []string
+	var legacyText, finalText []string
+	hasFinal := false
 
 	for _, raw := range output {
 		var item outputItem
@@ -185,19 +210,36 @@ func parseOutput(output []json.RawMessage) ([]toolCall, string, error) {
 				Arguments: json.RawMessage(item.Arguments),
 			})
 		case "message":
+			if item.Phase == "final_answer" {
+				hasFinal = true
+			}
 			for _, content := range item.Content {
 				if content.Refusal != "" {
 					return nil, "", fmt.Errorf("OpenAI refused response: %s", content.Refusal)
 				}
 				if content.Type == "output_text" &&
 					strings.TrimSpace(content.Text) != "" {
-					text = append(text, strings.TrimSpace(content.Text))
+					switch item.Phase {
+					case "final_answer":
+						finalText = append(finalText, strings.TrimSpace(content.Text))
+					case "":
+						legacyText = append(legacyText, strings.TrimSpace(content.Text))
+					}
 				}
 			}
 		}
 	}
 
-	return calls, strings.Join(text, "\n"), nil
+	// Responses phase distinguishes intermediate commentary from a completed
+	// answer. Prefer explicit final messages, including an empty final, and do
+	// not promote commentary/unknown phases into a user answer. Older unphased
+	// outputs retain their original concatenation behavior. Keep every selected
+	// text part; never guess the last JSON object or merge conflicting claims.
+	// The caller still replays the untouched raw output, preserving phase.
+	if hasFinal {
+		return calls, strings.Join(finalText, "\n"), nil
+	}
+	return calls, strings.Join(legacyText, "\n"), nil
 }
 
 func apiStatusError(statusCode int, body []byte) error {

@@ -223,12 +223,20 @@ func (s *Service) HandleUtterance(
 		slog.WarnContext(ctx, "conversation context failed", "error", conversationErr)
 	}
 
+	// A routing summary is useful for retrieval, but is not the user's request.
+	// For ordinary answers preserve explicit source checks, exclusions, budgets
+	// and other constraints that a lossy summary may omit. Action-specific
+	// rewrites (transitions and proposals) retain their existing behavior.
+	agentQuery := query
+	if original := strings.TrimSpace(utterance); decision.Action == ActionRespond && original != "" {
+		agentQuery = original
+	}
 	var response string
 	if proposalAware, ok := s.agent.(ProposalAwareAgent); ok {
 		result, resultErr := proposalAware.RespondWithResult(
 			ctx,
 			turnScope,
-			query,
+			agentQuery,
 			conversation,
 			cards,
 		)
@@ -236,7 +244,7 @@ func (s *Service) HandleUtterance(
 		outcome.ProposalCreated = result.ProposalCreated
 		err = resultErr
 	} else {
-		response, err = s.agent.Respond(ctx, turnScope, query, conversation, cards)
+		response, err = s.agent.Respond(ctx, turnScope, agentQuery, conversation, cards)
 	}
 	if err != nil && outcome.ProposalCreated && ctx.Err() == nil {
 		slog.WarnContext(

@@ -189,7 +189,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	webSearchTool, err := websearch.New(os.Getenv("TAVILY_API_KEY"))
+	webSearchTool, err := newWebSearchFromEnvironment()
 	if err != nil {
 		return err
 	}
@@ -378,4 +378,26 @@ func listenAddress() string {
 		return port
 	}
 	return ":" + port
+}
+
+func environmentEnabled(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "true")
+}
+
+func webSearchConfigFromEnvironment() websearch.Config {
+	provider := strings.ToLower(strings.TrimSpace(os.Getenv("WEB_SEARCH_PROVIDER")))
+	if provider == "" {
+		provider = websearch.ProviderTavily
+	}
+	return websearch.Config{
+		Provider:           provider,
+		TavilyAPIKey:       strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
+		SearXNGBaseURL:     strings.TrimSpace(os.Getenv("SEARXNG_BASE_URL")),
+		TavilyFallback:     environmentEnabled(os.Getenv("WEB_SEARCH_TAVILY_FALLBACK")),
+		ResearchExtraction: environmentEnabled(os.Getenv("WEB_SEARCH_RESEARCH_EXTRACTION")),
+	}
+}
+
+func newWebSearchFromEnvironment() (websearch.Searcher, error) {
+	return websearch.NewConfigured(webSearchConfigFromEnvironment())
 }
