@@ -385,6 +385,14 @@ func (r *scenarioMemoryReader) Lookup() memory.Lookup {
 	return r.lookup
 }
 
+func (r *scenarioMemoryReader) Profile(context.Context, tool.Scope) (string, error) {
+	return "", nil
+}
+
+func (r *scenarioMemoryReader) SetProfileOverride(context.Context, tool.Scope, memory.Lookup, memory.ProfileLayer) (int, error) {
+	return 0, nil
+}
+
 type emptyConversationReader struct{}
 
 func (emptyConversationReader) Prepare(

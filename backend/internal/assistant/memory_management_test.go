@@ -10,7 +10,7 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
-func TestHandleUtteranceReviewsMemoryWithoutGeneralAgent(t *testing.T) {
+func TestHandleUtteranceReviewsMemoryConversationally(t *testing.T) {
 	wantLookup := memory.Lookup{Query: "Jolene", Entities: []string{"jolene"}}
 	service, err := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
@@ -21,14 +21,16 @@ func TestHandleUtteranceReviewsMemoryWithoutGeneralAgent(t *testing.T) {
 			}, nil
 		}),
 		agentFunc(func(
-			context.Context,
-			tool.Scope,
-			string,
-			session.Conversation,
-			[]memory.Card,
+			_ context.Context,
+			scope tool.Scope,
+			query string,
+			_ session.Conversation,
+			cards []memory.Card,
 		) (string, error) {
-			t.Fatal("general agent was called for deterministic memory review")
-			return "", nil
+			if !scope.MemoryReview || query != "What do you remember about Jolene?" || len(cards) != 1 {
+				t.Fatalf("review lost scope, question, or facts: %#v %q %#v", scope, query, cards)
+			}
+			return "Jolene likes pho.", nil
 		}),
 		managedMemoryStub{review: func(
 			_ context.Context,
@@ -60,7 +62,7 @@ func TestHandleUtteranceReviewsMemoryWithoutGeneralAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleUtterance() error = %v", err)
 	}
-	want := "I remember: Jolene's favorite food — Jolene likes pho."
+	want := "Jolene likes pho."
 	if outcome.Response != want || outcome.MemoryChanged {
 		t.Fatalf("outcome = %#v, want response %q", outcome, want)
 	}

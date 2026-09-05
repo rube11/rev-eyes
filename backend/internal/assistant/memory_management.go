@@ -20,16 +20,30 @@ func (s *Service) reviewMemories(
 	ctx context.Context,
 	scope tool.Scope,
 	decision Decision,
+	utterance string,
+	conversation session.Conversation,
 ) (string, error) {
 	lookup := decision.MemoryLookup
-	if strings.TrimSpace(lookup.Query) == "" && strings.TrimSpace(decision.Query) != "" {
+	if decision.MemoryReviewAll {
+		lookup = memory.Lookup{}
+	} else if strings.TrimSpace(lookup.Query) == "" && strings.TrimSpace(decision.Query) != "" {
 		lookup.Query = decision.Query
 	}
 	cards, err := s.memories.Review(ctx, scope, lookup)
 	if err != nil {
 		return "", fmt.Errorf("review memories: %w", err)
 	}
-	return formatMemoryReview(cards), nil
+	// One bounded profile fallback prevents wording differences from being
+	// mistaken for an empty account. The agent must still answer only from facts.
+	if len(cards) == 0 && (!lookup.Empty() || len(lookup.Topics) > 0 || len(lookup.Kinds) > 0) {
+		cards, err = s.memories.Review(ctx, scope, memory.Lookup{})
+		if err != nil {
+			return "", fmt.Errorf("review memory fallback: %w", err)
+		}
+	}
+	scope.MemoryReview = true
+	conversation.Profile = s.loadProfile(ctx, scope)
+	return s.agent.Respond(ctx, scope, utterance, conversation, cards)
 }
 
 func (s *Service) forgetMemory(
@@ -71,42 +85,6 @@ func (s *Service) forgetMemory(
 		return "I couldn't find that memory.", false, nil
 	}
 	return "Okay, I forgot that.", true, nil
-}
-
-func formatMemoryReview(cards []memory.Card) string {
-	if len(cards) == 0 {
-		return "I don't have any active memories matching that."
-	}
-	if len(cards) == 1 {
-		return "I remember: " + memoryReviewLine(cards[0], 320)
-	}
-
-	shown := min(len(cards), 3)
-	var response strings.Builder
-	fmt.Fprintf(&response, "I found %d matching memories:", len(cards))
-	for index := 0; index < shown; index++ {
-		fmt.Fprintf(&response, "\n%d. %s", index+1, memoryReviewLine(cards[index], 90))
-	}
-	if len(cards) > shown {
-		response.WriteString("\nAsk for a narrower topic to see the rest.")
-	} else {
-		response.WriteString("\nName one to correct or forget it.")
-	}
-	return response.String()
-}
-
-func memoryReviewLine(card memory.Card, maxRunes int) string {
-	title := strings.TrimSpace(card.Title)
-	summary := strings.TrimSpace(card.Summary)
-	line := summary
-	if title != "" && !strings.EqualFold(title, summary) {
-		line = title + " — " + summary
-	}
-	runes := []rune(line)
-	if len(runes) <= maxRunes {
-		return line
-	}
-	return strings.TrimSpace(string(runes[:maxRunes-1])) + "…"
 }
 
 func reviewedMemoryLookup(conversation session.Conversation) (memory.Lookup, bool) {

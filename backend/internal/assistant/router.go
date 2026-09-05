@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/rube11/rev-eyes/backend/internal/memory"
+	"github.com/rube11/rev-eyes/backend/internal/session"
 )
 
 type Action string
@@ -22,15 +23,18 @@ const (
 	ActionMemoryReview    Action = "memory_review"
 	ActionMemoryCorrect   Action = "memory_correct"
 	ActionMemoryForget    Action = "memory_forget"
+	ActionProfileInclude  Action = "profile_include"
+	ActionProfileExclude  Action = "profile_exclude"
 	ActionProposeTask     Action = "propose_task"
 	ActionProposeWatch    Action = "propose_watch"
 	ActionResolveProposal Action = "resolve_proposal"
 )
 
 type Decision struct {
-	Action       Action        `json:"action"`
-	Query        string        `json:"query"`
-	MemoryLookup memory.Lookup `json:"memory_lookup"`
+	Action          Action        `json:"action"`
+	Query           string        `json:"query"`
+	MemoryLookup    memory.Lookup `json:"memory_lookup"`
+	MemoryReviewAll bool          `json:"memory_review_all"`
 }
 
 type Router struct {
@@ -42,6 +46,42 @@ func NewRouter(classify func(ctx context.Context, utterance string) (string, err
 }
 
 func (r *Router) Route(ctx context.Context, utterance string) (Decision, error) {
+	return r.route(ctx, utterance, utterance)
+}
+
+// RouteWithContext resolves the latest turn using bounded prior dialogue, not
+// another model call. Rule-based audio ignores still inspect only new speech.
+func (r *Router) RouteWithContext(ctx context.Context, utterance string, conversation session.Conversation) (Decision, error) {
+	messages := conversation.Messages
+	if len(messages) > 6 {
+		messages = messages[len(messages)-6:]
+	}
+	if len(messages) == 0 {
+		return r.Route(ctx, utterance)
+	}
+	type turn struct {
+		Speaker session.Speaker `json:"speaker"`
+		Text    string          `json:"text"`
+	}
+	recent := make([]turn, 0, len(messages))
+	for _, message := range messages {
+		runes := []rune(message.Text)
+		if len(runes) > 800 {
+			runes = runes[:800]
+		}
+		recent = append(recent, turn{message.Speaker, string(runes)})
+	}
+	input, err := json.Marshal(struct {
+		Recent []turn `json:"recent_dialogue"`
+		Latest string `json:"latest_utterance"`
+	}{recent, utterance})
+	if err != nil {
+		return Decision{}, err
+	}
+	return r.route(ctx, utterance, string(input))
+}
+
+func (r *Router) route(ctx context.Context, utterance, classifierInput string) (Decision, error) {
 	fallback := Decision{Action: ActionIgnore}
 	utterance = strings.TrimSpace(utterance)
 
@@ -58,7 +98,7 @@ func (r *Router) Route(ctx context.Context, utterance string) (Decision, error) 
 		return fallback, err
 	}
 
-	response, err := r.classify(ctx, utterance)
+	response, err := r.classify(ctx, classifierInput)
 	if err != nil {
 		err = fmt.Errorf("classify utterance: %w", err)
 		slog.ErrorContext(ctx, "router classification failed", "error", err)
@@ -74,10 +114,18 @@ func (r *Router) Route(ctx context.Context, utterance string) (Decision, error) 
 
 	decision.Query = strings.TrimSpace(decision.Query)
 	decision = validateDecision(decision)
+	if decision.Action == ActionMemoryReview && decision.MemoryReviewAll {
+		decision.Query = ""
+		decision.MemoryLookup = memory.Lookup{}
+	} else {
+		decision.MemoryReviewAll = false
+	}
 	if decision.Action == ActionRespond ||
 		decision.Action == ActionStateTransition ||
 		decision.Action == ActionMemoryReview ||
 		decision.Action == ActionMemoryForget ||
+		decision.Action == ActionProfileInclude ||
+		decision.Action == ActionProfileExclude ||
 		decision.Action == ActionProposeTask ||
 		decision.Action == ActionProposeWatch {
 		decision.MemoryLookup = decision.MemoryLookup.Normalize()
@@ -99,6 +147,8 @@ func validateDecision(decision Decision) Decision {
 		ActionMemoryReview,
 		ActionMemoryCorrect,
 		ActionMemoryForget,
+		ActionProfileInclude,
+		ActionProfileExclude,
 		ActionProposeTask,
 		ActionProposeWatch:
 		return decision

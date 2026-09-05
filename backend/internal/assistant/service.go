@@ -28,6 +28,10 @@ type ActivityRouter interface {
 	Route(ctx context.Context, utterance string) (Decision, error)
 }
 
+type contextualRouter interface {
+	RouteWithContext(context.Context, string, session.Conversation) (Decision, error)
+}
+
 // Agent generates a response for a routed query. Scope must be populated from
 // trusted authentication and application-session state by the caller.
 type Agent interface {
@@ -65,6 +69,8 @@ type MemoryManager interface {
 	Find(ctx context.Context, scope tool.Scope, lookup memory.Lookup) ([]memory.Card, error)
 	Review(ctx context.Context, scope tool.Scope, lookup memory.Lookup) ([]memory.Card, error)
 	Forget(ctx context.Context, scope tool.Scope, lookup memory.Lookup) (int, error)
+	Profile(ctx context.Context, scope tool.Scope) (string, error)
+	SetProfileOverride(ctx context.Context, scope tool.Scope, lookup memory.Lookup, layer memory.ProfileLayer) (int, error)
 }
 
 // ConversationReader prepares recent transcript context for the current turn.
@@ -146,15 +152,44 @@ func (s *Service) HandleUtterance(
 		}, nil
 	}
 
-	decision, err := s.router.Route(ctx, utterance)
+	var conversation session.Conversation
+	var conversationErr error
+	var decision Decision
+	prepared := false
+	if router, ok := s.router.(contextualRouter); ok && !shouldIgnore(utterance) {
+		// Load once before routing so a clarification can change the lookup.
+		// Reuse the same context for the answer; do not add a resolver model call.
+		conversation, conversationErr = s.conversation.Prepare(ctx, scope, utteranceID, utterance)
+		prepared = true
+		decision, err = router.RouteWithContext(ctx, utterance, conversation)
+	} else {
+		decision, err = s.router.Route(ctx, utterance)
+	}
 	if err != nil {
 		return Outcome{}, fmt.Errorf("route utterance: %w", err)
 	}
 
+	// App messages are intentional input, not overheard speech. Keep specialized
+	// memory/proposal routes, but never silently discard a typed turn.
+	if scope.AlwaysRespond && (decision.Action == ActionIgnore || decision.Action == ActionStateUpdate) {
+		decision.Action = ActionRespond
+		decision.Query = strings.TrimSpace(utterance)
+	}
 	outcome := Outcome{Decision: decision}
 	switch decision.Action {
+	case ActionProfileInclude, ActionProfileExclude:
+		response, changed, profileErr := s.changeProfile(ctx, turnScope, decision)
+		outcome.Response = response
+		outcome.MemoryChanged = changed
+		return outcome, profileErr
 	case ActionMemoryReview:
-		response, reviewErr := s.reviewMemories(ctx, scope, decision)
+		if !prepared {
+			conversation, conversationErr = s.conversation.Prepare(ctx, scope, utteranceID, utterance)
+		}
+		if conversationErr != nil {
+			slog.WarnContext(ctx, "memory review context failed", "error", conversationErr)
+		}
+		response, reviewErr := s.reviewMemories(ctx, turnScope, decision, utterance, conversation)
 		outcome.Response = response
 		return outcome, reviewErr
 	case ActionMemoryForget:
@@ -193,19 +228,25 @@ func (s *Service) HandleUtterance(
 	lookup.Query = strings.Join(strings.Fields(lookup.Query), " ")
 
 	var (
-		cards           []memory.Card
-		conversation    session.Conversation
-		memoryErr       error
-		conversationErr error
-		contextGroup    sync.WaitGroup
+		cards        []memory.Card
+		memoryErr    error
+		profile      string
+		contextGroup sync.WaitGroup
 	)
-	contextGroup.Add(2)
+	contextGroup.Add(3)
+	go func() {
+		defer contextGroup.Done()
+		profile = s.loadProfile(ctx, scope)
+	}()
 	go func() {
 		defer contextGroup.Done()
 		cards, memoryErr = s.memories.Find(ctx, scope, lookup)
 	}()
 	go func() {
 		defer contextGroup.Done()
+		if prepared {
+			return
+		}
 		conversation, conversationErr = s.conversation.Prepare(
 			ctx,
 			scope,
@@ -214,6 +255,7 @@ func (s *Service) HandleUtterance(
 		)
 	}()
 	contextGroup.Wait()
+	conversation.Profile = profile
 
 	if memoryErr != nil {
 		slog.WarnContext(ctx, "memory lookup failed", "error", memoryErr)

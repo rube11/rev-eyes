@@ -97,6 +97,22 @@ type managedMemoryStub struct {
 	forget func(context.Context, tool.Scope, memory.Lookup) (int, error)
 }
 
+func (f memoryReaderFunc) Profile(context.Context, tool.Scope) (string, error) {
+	return "", nil
+}
+
+func (f memoryReaderFunc) SetProfileOverride(context.Context, tool.Scope, memory.Lookup, memory.ProfileLayer) (int, error) {
+	return 0, nil
+}
+
+func (m managedMemoryStub) Profile(context.Context, tool.Scope) (string, error) {
+	return "", nil
+}
+
+func (m managedMemoryStub) SetProfileOverride(context.Context, tool.Scope, memory.Lookup, memory.ProfileLayer) (int, error) {
+	return 0, nil
+}
+
 func (m managedMemoryStub) Find(
 	ctx context.Context,
 	scope tool.Scope,
