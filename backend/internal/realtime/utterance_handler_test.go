@@ -76,7 +76,6 @@ func TestCompletedUtterancesAreSerializedWithinOneSession(t *testing.T) {
 			scope,
 			discardJSONWriter{},
 			"first",
-			utteranceDelivery{},
 		)
 	}()
 	if utterance := receive(t, entered); utterance != "first" {
@@ -88,7 +87,6 @@ func TestCompletedUtterancesAreSerializedWithinOneSession(t *testing.T) {
 			scope,
 			discardJSONWriter{},
 			"second",
-			utteranceDelivery{},
 		)
 	}()
 

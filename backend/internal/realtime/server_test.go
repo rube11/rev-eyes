@@ -446,6 +446,10 @@ func TestServerControlsTranscriptionLifecycle(t *testing.T) {
 	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		t.Fatalf("SetReadDeadline() error = %v", err)
 	}
+	// Retired clip-upload headers must not arm the live microphone stream.
+	if err := conn.WriteJSON(map[string]string{"type": "candidate_audio"}); err != nil {
+		t.Fatalf("WriteJSON() error = %v", err)
+	}
 	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("ignored")); err != nil {
 		t.Fatalf("WriteMessage() error = %v", err)
 	}
@@ -482,6 +486,57 @@ func TestServerControlsTranscriptionLifecycle(t *testing.T) {
 		if err := conn.WriteJSON(map[string]string{"type": listeningStopMessageType}); err != nil {
 			t.Fatalf("WriteJSON() error = %v", err)
 		}
+		assertServerMessageType(t, conn, listeningStoppedMessageType)
+	}
+}
+
+func TestServerRestartsAfterSpeechEndpoint(t *testing.T) {
+	// Model Deepgram ending its stream after one completed utterance. No manual
+	// listening_stop is sent; the next tap must be able to start a fresh stream.
+	server := NewServer(transcriberFunc(func(
+		ctx context.Context,
+		audio <-chan []byte,
+		completed chan<- string,
+		observe stt.TranscriptObserver,
+	) error {
+		select {
+		case chunk := <-audio:
+			if err := observe(string(chunk)); err != nil {
+				return err
+			}
+			completed <- string(chunk)
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}), Handlers{
+		Authenticate: func(string) (tool.Scope, error) {
+			return tool.Scope{UserID: "user", SessionID: "session"}, nil
+		},
+		Utterance: func(_ context.Context, _ tool.Scope, text string) (UtteranceResult, error) {
+			return UtteranceResult{Text: "reply to " + text}, nil
+		},
+	})
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	conn, _, err := websocket.DefaultDialer.Dial(websocketTestURL(httpServer.URL), nil)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"I just left the gym", "What should I eat?"} {
+		if err := conn.WriteJSON(map[string]string{"type": listeningStartMessageType}); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte(text)); err != nil {
+			t.Fatal(err)
+		}
+		assertServerMessage(t, conn, userTranscriptMessageType, text)
+		assertServerMessageType(t, conn, assistantThinkingMessageType)
+		assertServerMessage(t, conn, assistantResponseMessageType, "reply to "+text)
 		assertServerMessageType(t, conn, listeningStoppedMessageType)
 	}
 }

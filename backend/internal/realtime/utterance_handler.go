@@ -9,10 +9,7 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
-type utteranceDelivery struct {
-	messageID        string
-	announceThinking bool
-}
+const completedUtteranceBuffer = 10
 
 func (s *Server) transcribeConnection(
 	ctx context.Context,
@@ -54,7 +51,6 @@ func (s *Server) transcribeConnection(
 			scope,
 			writer,
 			utterance,
-			utteranceDelivery{announceThinking: true},
 		); err != nil {
 			return err
 		}
@@ -68,7 +64,6 @@ func (s *Server) handleCompletedUtterance(
 	scope tool.Scope,
 	writer jsonWriter,
 	utterance string,
-	delivery utteranceDelivery,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -76,13 +71,11 @@ func (s *Server) handleCompletedUtterance(
 	if isRepeatRequest(utterance) {
 		return writer.WriteJSON(serverMessage{
 			Type: assistantRepeatMessageType,
-			ID:   delivery.messageID,
 		})
 	}
 	if s.handlers.Utterance == nil {
 		return writer.WriteJSON(serverMessage{
 			Type: assistantDoneMessageType,
-			ID:   delivery.messageID,
 		})
 	}
 	releaseTurn, err := s.turns.acquire(ctx, scope)
@@ -93,13 +86,8 @@ func (s *Server) handleCompletedUtterance(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if delivery.announceThinking {
-		if err := writer.WriteJSON(serverMessage{
-			Type: assistantThinkingMessageType,
-			ID:   delivery.messageID,
-		}); err != nil {
-			return fmt.Errorf("write assistant thinking state: %w", err)
-		}
+	if err := writer.WriteJSON(serverMessage{Type: assistantThinkingMessageType}); err != nil {
+		return fmt.Errorf("write assistant thinking state: %w", err)
 	}
 	result, err := s.handlers.Utterance(ctx, scope, utterance)
 	if len(result.WorkspaceResources) > 0 {
@@ -112,7 +100,6 @@ func (s *Server) handleCompletedUtterance(
 		slog.ErrorContext(ctx, "failed to handle utterance", "error", err)
 		if writeErr := writer.WriteJSON(serverMessage{
 			Type: assistantDoneMessageType,
-			ID:   delivery.messageID,
 		}); writeErr != nil {
 			return fmt.Errorf("write assistant done state: %w", writeErr)
 		}
@@ -122,7 +109,6 @@ func (s *Server) handleCompletedUtterance(
 	if response == "" {
 		if err := writer.WriteJSON(serverMessage{
 			Type: assistantDoneMessageType,
-			ID:   delivery.messageID,
 		}); err != nil {
 			return fmt.Errorf("write assistant done state: %w", err)
 		}
@@ -130,7 +116,6 @@ func (s *Server) handleCompletedUtterance(
 	}
 	if err := writer.WriteJSON(serverMessage{
 		Type:                 assistantResponseMessageType,
-		ID:                   delivery.messageID,
 		Text:                 response,
 		AwaitingConfirmation: result.AwaitingConfirmation,
 	}); err != nil {
