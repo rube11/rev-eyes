@@ -1117,7 +1117,6 @@ function MemoryComposer({
       >
         <header>
           <div>
-            <p className="section-label">New memory</p>
             <h2 id="memory-composer-title">Add a memory</h2>
           </div>
           <button
@@ -1142,54 +1141,56 @@ function MemoryComposer({
             />
           </label>
           <label className="field">
-            <span>What should the glasses remember?</span>
+            <span>Details</span>
             <textarea
               value={summary}
               onChange={(event) => setSummary(event.target.value)}
               maxLength={500}
               rows={6}
-              placeholder="Write the detail in a way that will be useful later."
+              placeholder="What should Eyes remember?"
               required
             />
             <small>{summary.length} / 500</small>
           </label>
-          <div className="field-pair">
-            <label className="field">
-              <span>Kind</span>
-              <select
-                value={kind}
-                onChange={(event) =>
-                  setKind(event.target.value as MemoryKind)
-                }
-              >
-                {memoryKinds.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Topic</span>
-              <select
-                value={topic}
-                onChange={(event) => setTopic(event.target.value)}
-              >
-                {memoryTopics.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+          <details className="composer-options">
+            <summary>More options</summary>
+            <div className="field-pair">
+              <label className="field">
+                <span>Kind</span>
+                <select
+                  value={kind}
+                  onChange={(event) =>
+                    setKind(event.target.value as MemoryKind)
+                  }
+                >
+                  {memoryKinds.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Topic</span>
+                <select
+                  value={topic}
+                  onChange={(event) => setTopic(event.target.value)}
+                >
+                  {memoryTopics.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </details>
           {error ? (
             <p className="form-error" role="alert">
               {error}
             </p>
           ) : null}
           <footer>
-            <p>Your assistant can use this in future conversations.</p>
             <button className="primary-action" type="submit" disabled={saving}>
               {saving ? 'Saving…' : 'Save memory'}
             </button>
