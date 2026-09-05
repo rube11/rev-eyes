@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 
+import { HomeView } from './HomeView'
+import { ConversationLog } from './ConversationLog'
+import type { SendChatMessage } from './ChatComposer'
+import { workspaceResources } from './workspaceTypes'
+import { getAssistantStatus } from './assistantStatus'
+import type { WorkspaceErrors } from './workspaceLoad'
 import type {
   AutomationKind,
   MemoryKind,
@@ -13,11 +19,17 @@ import type {
 } from './workspaceTypes'
 
 type WorkspaceProps = {
+  onSendChat?: SendChatMessage
+  userId?: string
   data: WorkspaceData
   email: string
   glassesStatus: string
-  latestResponse: string
-  dataError?: string
+  reconnecting?: boolean
+  onReconnectGlasses?: () => void
+  resourceErrors?: WorkspaceErrors
+  lastSyncedAt?: string
+  syncing?: boolean
+  onRetry?: () => void
   isDemo: boolean
   onCreateMemory: (input: NewMemoryInput) => Promise<void>
   onDeleteAutomation: (
@@ -39,7 +51,7 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   { id: 'now', label: 'Home' },
-  { id: 'conversations', label: 'Conversations' },
+  { id: 'conversations', label: 'Chats' },
   { id: 'memories', label: 'Memories' },
   { id: 'watches', label: 'Watches' },
   { id: 'tasks', label: 'Tasks' },
@@ -47,7 +59,7 @@ const navItems: NavItem[] = [
 
 const viewTitles: Record<WorkspaceView, string> = {
   now: 'Home',
-  conversations: 'Conversations',
+  conversations: 'Chats',
   memories: 'Memories',
   watches: 'Watches',
   tasks: 'Tasks',
@@ -82,21 +94,6 @@ function isWorkspaceView(value: string): value is WorkspaceView {
 function initialView(): WorkspaceView {
   const hash = window.location.hash.replace(/^#/u, '')
   return isWorkspaceView(hash) ? hash : 'now'
-}
-
-function formatClock(value: Date): string {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(value)
-}
-
-function formatDay(value: Date): string {
-  return new Intl.DateTimeFormat(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  }).format(value)
 }
 
 function formatDateTime(value: string): string {
@@ -147,48 +144,6 @@ function formatInterval(minutes: number): string {
 function shorten(value: string, limit: number): string {
   const text = value.replace(/\s+/gu, ' ').trim()
   return text.length <= limit ? text : `${text.slice(0, limit - 1).trimEnd()}…`
-}
-
-function connectedFromStatus(status: string): boolean {
-  const normalized = status.toLowerCase().trim()
-  return (
-    normalized.length > 0 &&
-    !['connecting', 'reconnecting', 'disconnected', 'offline'].includes(
-      normalized,
-    )
-  )
-}
-
-function friendlyDeviceStatus(status: string): string {
-  const normalized = status.toLowerCase()
-  if (normalized === 'listening') {
-    return 'Listening'
-  }
-  if (normalized === 'sleeping') {
-    return 'Standby'
-  }
-  if (normalized === 'thinking') {
-    return 'Thinking'
-  }
-  if (normalized === 'starting microphone') {
-    return 'Starting microphone'
-  }
-  if (normalized === 'microphone unavailable') {
-    return 'Mic unavailable'
-  }
-  if (normalized === 'glasses command failed') {
-    return 'Needs attention'
-  }
-  if (normalized === 'connected') {
-    return 'Connected'
-  }
-  if (normalized.includes('connect') && !normalized.includes('disconnect')) {
-    return 'Connecting'
-  }
-  if (normalized === 'disconnected' || normalized === 'offline') {
-    return 'Offline'
-  }
-  return 'Needs attention'
 }
 
 function NavIcon({ view }: { view: WorkspaceView }) {
@@ -262,7 +217,6 @@ function EmptyState({
 }) {
   return (
     <div className="empty-state">
-      <span className="empty-state__rule" aria-hidden="true" />
       <h3>{title}</h3>
       <p>{body}</p>
     </div>
@@ -270,463 +224,16 @@ function EmptyState({
 }
 
 function PageIntro({
-  eyebrow,
-  title,
-  description,
-  action,
+  title, action,
 }: {
-  eyebrow: string
   title: string
-  description: string
   action?: React.ReactNode
 }) {
   return (
     <header className="page-intro">
-      <div>
-        <p className="section-label">{eyebrow}</p>
-        <h1>{title}</h1>
-        <p className="page-intro__description">{description}</p>
-      </div>
-      {action ? <div className="page-intro__action">{action}</div> : null}
+      <h1>{title}</h1>
+      {action}
     </header>
-  )
-}
-
-type DaybookEntry = {
-  id: string
-  view: Exclude<WorkspaceView, 'now'>
-  label: string
-  title: string
-  body: string
-  timestamp: string
-}
-
-function formatDaybookDate(value: string, currentTime: Date): string {
-  const date = new Date(value)
-  const currentDay = new Date(
-    currentTime.getFullYear(),
-    currentTime.getMonth(),
-    currentTime.getDate(),
-  ).getTime()
-  const entryDay = new Date(
-    date.getFullYear(),
-    date.getMonth(),
-    date.getDate(),
-  ).getTime()
-  const difference = Math.round((entryDay - currentDay) / 86_400_000)
-
-  if (difference === 0) return 'Today'
-  if (difference === -1) return 'Yesterday'
-  if (difference === 1) return 'Tomorrow'
-
-  return new Intl.DateTimeFormat(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  }).format(date)
-}
-
-function DaybookRow({
-  entry,
-  currentTime,
-  onNavigate,
-}: {
-  entry: DaybookEntry
-  currentTime: Date
-  onNavigate: (view: WorkspaceView) => void
-}) {
-  return (
-    <button
-      className="home-daybook-row"
-      type="button"
-      onClick={() => onNavigate(entry.view)}
-    >
-      <time dateTime={entry.timestamp}>
-        <strong>{formatClock(new Date(entry.timestamp))}</strong>
-        <span>{formatDaybookDate(entry.timestamp, currentTime)}</span>
-      </time>
-      <span className="home-daybook-row__content">
-        <small>{entry.label}</small>
-        <strong>{entry.title}</strong>
-        <span>{shorten(entry.body, 120)}</span>
-      </span>
-      <span className="home-daybook-row__arrow" aria-hidden="true">
-        →
-      </span>
-    </button>
-  )
-}
-
-function NowView({
-  data,
-  onNavigate,
-  onAddMemory,
-  currentTime,
-}: {
-  data: WorkspaceData
-  onNavigate: (view: WorkspaceView) => void
-  onAddMemory: () => void
-  currentTime: Date
-}) {
-  const nowTime = currentTime.getTime()
-  const activeWatches = data.watches.filter((watch) => watch.status === 'active')
-  const proposedTasks = data.tasks
-    .filter((task) => task.status === 'proposed')
-    .sort(
-      (left, right) =>
-        new Date(right.createdAt).getTime() -
-        new Date(left.createdAt).getTime(),
-    )
-  const confirmedTasks = data.tasks.filter(
-    (task) => task.status === 'accepted',
-  )
-  const pastDueTasks = confirmedTasks
-    .filter((task) => new Date(task.dueAt).getTime() < nowTime)
-    .sort(
-      (left, right) =>
-        new Date(right.dueAt).getTime() - new Date(left.dueAt).getTime(),
-    )
-  const upcomingTasks = confirmedTasks
-    .filter((task) => new Date(task.dueAt).getTime() >= nowTime)
-    .sort(
-      (left, right) =>
-        new Date(left.dueAt).getTime() - new Date(right.dueAt).getTime(),
-    )
-  const recentMemories = [...data.memories].sort(
-    (left, right) =>
-      new Date(right.updatedAt).getTime() -
-      new Date(left.updatedAt).getTime(),
-  )
-  const recentConversations = [...data.conversations]
-    .sort(
-      (left, right) =>
-        new Date(right.lastActivityAt).getTime() -
-        new Date(left.lastActivityAt).getTime(),
-    )
-    .slice(0, 4)
-
-  const overdueTask = pastDueTasks[0]
-  const nextTask = upcomingTasks[0]
-  let focusLabel = 'Daily docket'
-  let focusTitle =
-    String(data.conversations.length + data.memories.length) + ' saved items'
-  let focusMeta = 'Nothing needs immediate attention.'
-  let focusView: Exclude<WorkspaceView, 'now'> | undefined
-  let focusActionLabel = ''
-
-  if (overdueTask) {
-    focusLabel = 'Past due · ' + relativeTime(overdueTask.dueAt)
-    focusTitle = overdueTask.title
-    focusMeta = 'Scheduled for ' + formatDateTime(overdueTask.dueAt)
-    focusView = 'tasks'
-    focusActionLabel = 'Open reminder'
-  } else if (proposedTasks.length) {
-    focusLabel = 'Needs a decision'
-    focusTitle =
-      String(proposedTasks.length) +
-      ' suggested ' +
-      (proposedTasks.length === 1 ? 'task' : 'tasks')
-    focusMeta = proposedTasks[0].title
-    focusView = 'tasks'
-    focusActionLabel = 'Review tasks'
-  } else if (nextTask) {
-    focusLabel = 'Next reminder'
-    focusTitle = nextTask.title
-    focusMeta =
-      formatDateTime(nextTask.dueAt) + ' · ' + relativeTime(nextTask.dueAt)
-    focusView = 'tasks'
-    focusActionLabel = 'Open reminder'
-  } else if (activeWatches.length) {
-    focusLabel = 'Active watch'
-    focusTitle = activeWatches[0].query
-    focusMeta = activeWatches[0].condition
-    focusView = 'watches'
-    focusActionLabel = 'View watch'
-  }
-
-  const daybookEntries: DaybookEntry[] = [
-    ...proposedTasks.slice(0, 1).map(
-      (task): DaybookEntry => ({
-        id: 'proposal-' + task.id,
-        view: 'tasks',
-        label: 'Needs review',
-        title: task.title,
-        body: task.schedule,
-        timestamp: task.createdAt,
-      }),
-    ),
-    ...upcomingTasks.slice(0, 1).map(
-      (task): DaybookEntry => ({
-        id: 'task-' + task.id,
-        view: 'tasks',
-        label: 'Scheduled reminder',
-        title: task.title,
-        body: task.schedule,
-        timestamp: task.dueAt,
-      }),
-    ),
-    ...recentMemories.slice(0, 1).map(
-      (memory): DaybookEntry => ({
-        id: 'memory-' + memory.id,
-        view: 'memories',
-        label: 'Context updated',
-        title: memory.title,
-        body: memory.summary,
-        timestamp: memory.updatedAt,
-      }),
-    ),
-    ...activeWatches.slice(0, 1).map(
-      (watch): DaybookEntry => ({
-        id: 'watch-' + watch.id,
-        view: 'watches',
-        label: watch.nextCheckAt ? 'Next watch check' : 'Active watch',
-        title: watch.query,
-        body: watch.condition,
-        timestamp: watch.nextCheckAt ?? watch.createdAt,
-      }),
-    ),
-  ].sort(
-    (left, right) =>
-      new Date(left.timestamp).getTime() -
-      new Date(right.timestamp).getTime(),
-  )
-
-  const daybookSummary =
-    String(pastDueTasks.length).padStart(2, '0') +
-    ' past due · ' +
-    String(proposedTasks.length).padStart(2, '0') +
-    ' need review · ' +
-    String(activeWatches.length).padStart(2, '0') +
-    ' active watches'
-
-  const longDay = new Intl.DateTimeFormat(undefined, {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-  }).format(currentTime)
-
-  return (
-    <div className="home home--daybook">
-      <section className="home-docket" aria-labelledby="home-title">
-        <span className="home-docket__index" aria-hidden="true">
-          01
-        </span>
-        <div className="home-docket__heading">
-          <p className="section-label">{focusLabel}</p>
-          <h1 id="home-title">{focusTitle}</h1>
-          <p>{focusMeta}</p>
-        </div>
-        {focusView ? (
-          <button
-            className="home-command home-command--primary"
-            type="button"
-            onClick={() => onNavigate(focusView)}
-          >
-            {focusActionLabel}
-            <span aria-hidden="true">→</span>
-          </button>
-        ) : null}
-      </section>
-
-      <section className="home-daybook" aria-labelledby="home-daybook-title">
-        <header className="home-daybook__date">
-          <div>
-            <p className="section-label">Today</p>
-            <h2 id="home-daybook-title">{longDay}</h2>
-          </div>
-          <p>{daybookSummary}</p>
-        </header>
-
-        <div className="home-daybook__planner">
-          {daybookEntries.length > 0 ? (
-            daybookEntries.map((entry) => (
-              <DaybookRow
-                key={entry.id}
-                entry={entry}
-                currentTime={currentTime}
-                onNavigate={onNavigate}
-              />
-            ))
-          ) : (
-            <p className="home-daybook__clear">No scheduled context today.</p>
-          )}
-          <div className="home-daybook__add">
-            <span className="section-label">Later</span>
-            <button className="home-command" type="button" onClick={onAddMemory}>
-              <span aria-hidden="true">＋</span>
-              Add something to remember
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section className="home-margins" aria-labelledby="home-margins-title">
-        <header className="home-margins__head">
-          <div>
-            <p className="section-label">Yesterday's margins</p>
-            <h2 id="home-margins-title">Loose context</h2>
-          </div>
-          <span>{recentConversations.length} recent conversations</span>
-        </header>
-        <div className="home-margins__list">
-          {recentConversations.length > 0 ? (
-            recentConversations.map((conversation) => (
-              <button
-                className="home-margin-row"
-                type="button"
-                key={conversation.id}
-                onClick={() => onNavigate('conversations')}
-              >
-                <time dateTime={conversation.lastActivityAt}>
-                  {relativeTime(conversation.lastActivityAt)}
-                </time>
-                <span>
-                  <strong>{conversation.title}</strong>
-                  <span>{shorten(conversation.summary, 150)}</span>
-                </span>
-                <span aria-hidden="true">→</span>
-              </button>
-            ))
-          ) : (
-            <p className="home-margins__empty">No loose context yet.</p>
-          )}
-        </div>
-      </section>
-    </div>
-  )
-}
-
-function ConversationsView({ data }: { data: WorkspaceData }) {
-  const [query, setQuery] = useState('')
-  const [selectedId, setSelectedId] = useState(
-    data.conversations[0]?.id ?? '',
-  )
-
-  const filtered = useMemo(() => {
-    const normalized = query.toLowerCase().trim()
-    if (!normalized) {
-      return data.conversations
-    }
-    return data.conversations.filter((conversation) =>
-      [
-        conversation.title,
-        conversation.summary,
-        ...conversation.transcript.map((line) => line.text),
-      ]
-        .join(' ')
-        .toLowerCase()
-        .includes(normalized),
-    )
-  }, [data.conversations, query])
-
-  const selected =
-    filtered.find((conversation) => conversation.id === selectedId) ??
-    filtered[0]
-
-  return (
-    <>
-      <PageIntro
-        eyebrow="History"
-        title="Conversations"
-        description="Search and revisit what you and your assistant talked about."
-      />
-      <div className="browser-layout conversation-browser">
-        <section className="browser-index" aria-label="Conversation list">
-          <label className="search-field">
-            <span>Search conversations</span>
-            <input
-              type="search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Type to filter…"
-            />
-            <kbd>/</kbd>
-          </label>
-          <p className="result-count">
-            {filtered.length}{' '}
-            {filtered.length === 1 ? 'conversation' : 'conversations'}
-          </p>
-          <div className="index-list">
-            {filtered.map((conversation) => (
-              <button
-                className={`index-row${
-                  selected?.id === conversation.id ? ' is-selected' : ''
-                }`}
-                type="button"
-                key={conversation.id}
-                onClick={() => setSelectedId(conversation.id)}
-              >
-                <span className="index-row__date">
-                  {formatDateTime(conversation.lastActivityAt)}
-                </span>
-                <strong>{conversation.title}</strong>
-                <span>{conversation.summary}</span>
-              </button>
-            ))}
-          </div>
-          {filtered.length === 0 ? (
-            <EmptyState
-              title="No matching conversation"
-              body="Try another word or phrase."
-            />
-          ) : null}
-        </section>
-
-        <section className="browser-detail transcript-detail">
-          {selected ? (
-            <>
-              <header className="detail-header">
-                <p className="section-label">
-                  {formatDateTime(selected.startedAt)}
-                </p>
-                <h2>{selected.title}</h2>
-                <div className="detail-meta">
-                  <span>
-                    <StatusMark active={selected.status === 'active'} />
-                    {selected.status}
-                  </span>
-                  <span>{selected.transcript.length} turns</span>
-                </div>
-              </header>
-              <div className="transcript">
-                {selected.transcript.length > 0 ? (
-                  selected.transcript.map((line) => (
-                    <article
-                      className={`transcript-line transcript-line--${line.speaker}`}
-                      key={line.id}
-                    >
-                      <div className="transcript-line__speaker">
-                        <span>
-                          {line.speaker === 'user'
-                            ? 'YOU'
-                            : line.speaker === 'assistant'
-                              ? 'REV'
-                              : '—'}
-                        </span>
-                        <time dateTime={line.startedAt}>
-                          {formatClock(new Date(line.startedAt))}
-                        </time>
-                      </div>
-                      <p>{line.text}</p>
-                    </article>
-                  ))
-                ) : (
-                  <EmptyState
-                    title="Nothing was saved"
-                    body="There is no conversation history for this moment."
-                  />
-                )}
-              </div>
-            </>
-          ) : (
-            <EmptyState
-              title="No conversations yet"
-              body="Your conversations with the assistant will appear here."
-            />
-          )}
-        </section>
-      </div>
-    </>
   )
 }
 
@@ -1202,10 +709,17 @@ function MemoryComposer({
 }
 
 export function Workspace({
+  onSendChat,
+  userId,
   data,
   email,
   glassesStatus,
-  dataError,
+  reconnecting = false,
+  onReconnectGlasses,
+  resourceErrors = {},
+  lastSyncedAt,
+  syncing = false,
+  onRetry,
   isDemo,
   onCreateMemory,
   onDeleteAutomation,
@@ -1244,6 +758,8 @@ export function Workspace({
 
   const navCount = (item: WorkspaceView): number | undefined => {
     switch (item) {
+      case 'watches':
+        return data.watches.filter((watch) => watch.status === 'proposed').length || undefined
       case 'tasks':
         return (
           data.tasks.filter((task) => task.status === 'proposed').length ||
@@ -1254,15 +770,15 @@ export function Workspace({
     }
   }
 
-  const connected = connectedFromStatus(glassesStatus)
-  const deviceStatus = friendlyDeviceStatus(glassesStatus)
+  const assistant = getAssistantStatus(glassesStatus, isDemo)
+  const connected = assistant.active
+  const deviceStatus = assistant.label
+  const failedResources = workspaceResources.filter((resource) => resourceErrors[resource])
+  const unavailable = view !== 'now' && resourceErrors[view] === 'unavailable'
   const accountLabel = isDemo ? 'Preview mode' : shorten(email, 24)
   const accountInitial = isDemo
     ? 'P'
     : (email.trim().charAt(0).toUpperCase() || 'A')
-  const viewNumber = String(
-    navItems.findIndex((item) => item.id === view) + 1,
-  ).padStart(2, '0')
 
   return (
     <div className="workspace">
@@ -1276,10 +792,8 @@ export function Workspace({
           >
             rev/eyes
           </button>
-          <span>wearable assistant</span>
         </div>
         <nav aria-label="Main navigation">
-          <p className="nav-heading">Menu</p>
           {navItems.map((item) => {
             const count = navCount(item.id)
             return (
@@ -1325,55 +839,69 @@ export function Workspace({
         <header className="topbar">
           <div className="topbar__location">
             <span className="topbar__wordmark">rev/eyes</span>
-            <span className="topbar__folio-index" aria-hidden="true">
-              {viewNumber}
-            </span>
             <strong>{viewTitles[view]}</strong>
           </div>
           <div className="topbar__right">
-            {isDemo ? <span className="demo-label">Preview</span> : null}
-            <time className="topbar__clock" dateTime={now.toISOString()}>
-              <span className="topbar__date">{formatDay(now)}</span>
-              <strong className="topbar__time">{formatClock(now)}</strong>
-            </time>
-            <span
-              className={`connection-label${
-                connected ? ' connection-label--online' : ''
-              }`}
-              aria-label={`Even G2 ${deviceStatus}`}
-            >
-              <span className="connection-label__mark" aria-hidden="true" />
-              <span>{deviceStatus}</span>
-            </span>
+            {onRetry ? <button className="refresh-action" type="button" disabled={syncing} onClick={onRetry} title={lastSyncedAt ? `Last updated ${formatDateTime(lastSyncedAt)}` : 'Reload saved items'}>{syncing ? 'Refreshing…' : 'Refresh'}</button> : null}
+            <details className="connection-menu">
+              <summary
+                className={`connection-label${connected ? ' connection-label--online' : ''}`}
+                aria-label={`Even G2 ${deviceStatus}. Connection details`}
+              >
+                <span className="connection-label__mark" aria-hidden="true" />
+                <span>{deviceStatus}</span>
+              </summary>
+              <div>
+                <strong>{isDemo ? 'Preview' : 'Even G2'}</strong>
+                <p>{assistant.detail}</p>
+                {!isDemo && onReconnectGlasses ? <button className="connection-reconnect" type="button"
+                  disabled={reconnecting} onClick={onReconnectGlasses}>
+                  {reconnecting ? 'Reconnecting…' : 'Reconnect glasses'}
+                </button> : null}
+              </div>
+            </details>
+            {!isDemo && !connected && onReconnectGlasses ? <button className="connection-retry" type="button"
+              aria-label="Reconnect glasses" disabled={reconnecting} onClick={onReconnectGlasses}>
+              {reconnecting ? 'Reconnecting…' : 'Reconnect'}
+            </button> : null}
+            <details className="account-menu">
+              <summary aria-label="Account menu">{accountInitial}</summary>
+              <div><p>{isDemo ? 'Sample data · changes are not saved' : email}</p><button type="button" onClick={onSignOut}>{isDemo ? 'Exit preview' : 'Sign out'}</button></div>
+            </details>
           </div>
         </header>
 
-        {dataError ? (
+        {failedResources.length > 0 ? (
           <div className="data-notice" role="status">
-            <span aria-hidden="true">i</span>
-            <p>Some information may be out of date. We’ll keep trying.</p>
+            <div>
+              <strong>Some sections couldn’t refresh.</strong>
+              <p>{failedResources.map((resource) => `${viewTitles[resource]}: ${resourceErrors[resource] === 'stale' ? 'showing last loaded data' : 'unavailable'}`).join(' · ')}. We’ll keep retrying; other sections remain available.</p>
+            </div>
+            <button type="button" className="refresh-action" disabled={syncing} onClick={onRetry}>{syncing ? 'Retrying…' : 'Try again'}</button>
           </div>
         ) : null}
 
         <div className={`page${view === 'now' ? ' page--home' : ''}`} key={view}>
+          {unavailable ? <EmptyState title={`${viewTitles[view]} couldn’t load`} body="This section is unavailable right now. Use Try again above to reload it. Other sections remain available." /> : null}
           {view === 'now' ? (
-            <NowView
+            <HomeView
               data={data}
+              resourceErrors={resourceErrors}
               onNavigate={navigate}
               onAddMemory={() => setComposerOpen(true)}
               currentTime={now}
             />
           ) : null}
-          {view === 'conversations' ? (
-            <ConversationsView data={data} />
+          {!unavailable && view === 'conversations' ? (
+            <ConversationLog conversations={data.conversations} userId={userId} onSend={onSendChat} />
           ) : null}
-          {view === 'memories' ? (
+          {!unavailable && view === 'memories' ? (
             <MemoriesView
               data={data}
               onAdd={() => setComposerOpen(true)}
             />
           ) : null}
-          {view === 'watches' ? (
+          {!unavailable && view === 'watches' ? (
             <WatchesView
               data={data}
               currentTime={now}
@@ -1385,7 +913,7 @@ export function Workspace({
               }
             />
           ) : null}
-          {view === 'tasks' ? (
+          {!unavailable && view === 'tasks' ? (
             <TasksView
               data={data}
               currentTime={now}
