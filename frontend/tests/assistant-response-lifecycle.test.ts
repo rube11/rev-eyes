@@ -18,12 +18,11 @@ test("calculates bounded reading time from response words", () => {
   )
 })
 
-test("keeps the conversation active through the post-display grace period", () => {
+test("keeps follow-up listening open for 30 seconds from the reply", () => {
   type Task = { callback: () => void; delayMs: number; canceled: boolean }
   const tasks: Task[] = []
   const events: string[] = []
   const lifecycle = new AssistantResponseLifecycle({
-    conversationGraceMs: 8_000,
     onDisplayExpired: () => events.push("display"),
     onConversationExpired: () => events.push("conversation"),
     scheduleTimer: (callback, delayMs) => {
@@ -39,7 +38,7 @@ test("keeps the conversation active through the post-display grace period", () =
 
   assert.equal(lifecycle.begin("a short response"), 5_000)
   assert.equal(lifecycle.active, true)
-  assert.deepEqual(tasks.map((task) => task.delayMs), [5_000, 13_000])
+  assert.deepEqual(tasks.map((task) => task.delayMs), [5_000, 30_000])
 
   tasks[0].callback()
   assert.deepEqual(events, ["display"])
@@ -76,4 +75,24 @@ test("canceling invalidates both pending deadlines", () => {
     task.callback()
   }
   assert.equal(callbacks, 0)
+})
+
+test("a new reply invalidates old callbacks and keeps the same 30-second deadline", () => {
+  const tasks: { callback: () => void; delayMs: number }[] = []
+  const events: string[] = []
+  const lifecycle = new AssistantResponseLifecycle({
+    onDisplayExpired: () => events.push("display"),
+    onConversationExpired: () => events.push("conversation"),
+    scheduleTimer: (callback, delayMs) => tasks.push({ callback, delayMs }),
+    cancelTimer: () => {},
+  })
+  lifecycle.begin("Short reply")
+  lifecycle.begin("word ".repeat(100))
+  tasks[0].callback()
+  tasks[1].callback()
+  assert.deepEqual(events, [])
+  assert.equal(lifecycle.active, true)
+  assert.deepEqual(tasks.slice(2).map(task => task.delayMs), [14_000, 30_000])
+  tasks[3].callback()
+  assert.equal(lifecycle.active, false)
 })
