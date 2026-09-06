@@ -29,6 +29,7 @@ func TestConfirmerResolvesKnownProposalKinds(t *testing.T) {
 		want       string
 	}{
 		{"accept reminder", "Yes please!", KindReminder, StatusAccepted, "Okay, I saved that reminder."},
+		{"save reminder", "Save that.", KindReminder, StatusAccepted, "Okay, I saved that reminder."},
 		{"reject reminder", "Nope.", KindReminder, StatusRejected, "Okay, I won't create that reminder."},
 		{"accept watch", "Go ahead", KindWatch, StatusAccepted, "Okay, I'll watch for that."},
 		{"reject watch", "Never mind", KindWatch, StatusRejected, "Okay, I won't create that watch."},

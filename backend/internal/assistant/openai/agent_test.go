@@ -65,6 +65,13 @@ func TestAgentReturnsText(t *testing.T) {
 	if !strings.Contains(request.Instructions, "call search_web before answering") {
 		t.Fatalf("instructions = %q", request.Instructions)
 	}
+	if !strings.Contains(request.Instructions, "budgets, preferences") ||
+		!strings.Contains(request.Instructions, "Use research mode for recommendations") ||
+		!strings.Contains(request.Instructions, "authoritative domain filters") ||
+		!strings.Contains(request.Instructions, "real bare hostname containing a dot") ||
+		!strings.Contains(request.Instructions, "one well-formed research search") {
+		t.Fatalf("search instructions = %q", request.Instructions)
+	}
 	if !strings.Contains(request.Instructions, "Use propose_watch once") {
 		t.Fatalf("instructions = %q", request.Instructions)
 	}
@@ -76,6 +83,17 @@ func TestAgentReturnsText(t *testing.T) {
 	}
 	if !strings.Contains(request.Instructions, "the glasses can render each result separately") {
 		t.Fatalf("instructions = %q", request.Instructions)
+	}
+	if !strings.Contains(request.Instructions, "Never output more than three numbered lines") ||
+		!strings.Contains(request.Instructions, "Group shopping and grocery items") {
+		t.Fatalf("list instructions = %q", request.Instructions)
+	}
+	if !strings.Contains(request.Instructions, "meaningful state transition") ||
+		!strings.Contains(request.Instructions, "at most one timely next step") {
+		t.Fatalf("transition instructions = %q", request.Instructions)
+	}
+	if !strings.Contains(request.Instructions, "within 420 characters") {
+		t.Fatalf("response length instructions = %q", request.Instructions)
 	}
 	if !request.Tools[0].Strict || request.Store {
 		t.Fatalf("tool strict = %v, store = %v", request.Tools[0].Strict, request.Store)

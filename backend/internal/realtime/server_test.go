@@ -152,6 +152,10 @@ func TestServerExchangesScopedLocationAndAssistantMessages(t *testing.T) {
 			return UtteranceResult{
 				Text:                 "reply to " + utterance,
 				AwaitingConfirmation: true,
+				WorkspaceResources: []WorkspaceResource{
+					WorkspaceConversations,
+					WorkspaceTasks,
+				},
 			}, nil
 		},
 		Disconnect: func(scope tool.Scope) {
@@ -191,6 +195,16 @@ func TestServerExchangesScopedLocationAndAssistantMessages(t *testing.T) {
 
 	assertServerMessage(t, conn, userTranscriptMessageType, "where am I")
 	assertServerMessageType(t, conn, assistantThinkingMessageType)
+	var change serverMessage
+	if err := conn.ReadJSON(&change); err != nil {
+		t.Fatalf("ReadJSON() workspace change error = %v", err)
+	}
+	if change.Type != workspaceChangedMessageType ||
+		len(change.Resources) != 2 ||
+		change.Resources[0] != WorkspaceConversations ||
+		change.Resources[1] != WorkspaceTasks {
+		t.Fatalf("workspace change = %+v", change)
+	}
 	var response serverMessage
 	if err := conn.ReadJSON(&response); err != nil {
 		t.Fatalf("ReadJSON() error = %v", err)
@@ -432,6 +446,10 @@ func TestServerControlsTranscriptionLifecycle(t *testing.T) {
 	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		t.Fatalf("SetReadDeadline() error = %v", err)
 	}
+	// Retired clip-upload headers must not arm the live microphone stream.
+	if err := conn.WriteJSON(map[string]string{"type": "candidate_audio"}); err != nil {
+		t.Fatalf("WriteJSON() error = %v", err)
+	}
 	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("ignored")); err != nil {
 		t.Fatalf("WriteMessage() error = %v", err)
 	}
@@ -468,6 +486,57 @@ func TestServerControlsTranscriptionLifecycle(t *testing.T) {
 		if err := conn.WriteJSON(map[string]string{"type": listeningStopMessageType}); err != nil {
 			t.Fatalf("WriteJSON() error = %v", err)
 		}
+		assertServerMessageType(t, conn, listeningStoppedMessageType)
+	}
+}
+
+func TestServerRestartsAfterSpeechEndpoint(t *testing.T) {
+	// Model Deepgram ending its stream after one completed utterance. No manual
+	// listening_stop is sent; the next tap must be able to start a fresh stream.
+	server := NewServer(transcriberFunc(func(
+		ctx context.Context,
+		audio <-chan []byte,
+		completed chan<- string,
+		observe stt.TranscriptObserver,
+	) error {
+		select {
+		case chunk := <-audio:
+			if err := observe(string(chunk)); err != nil {
+				return err
+			}
+			completed <- string(chunk)
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}), Handlers{
+		Authenticate: func(string) (tool.Scope, error) {
+			return tool.Scope{UserID: "user", SessionID: "session"}, nil
+		},
+		Utterance: func(_ context.Context, _ tool.Scope, text string) (UtteranceResult, error) {
+			return UtteranceResult{Text: "reply to " + text}, nil
+		},
+	})
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	conn, _, err := websocket.DefaultDialer.Dial(websocketTestURL(httpServer.URL), nil)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"I just left the gym", "What should I eat?"} {
+		if err := conn.WriteJSON(map[string]string{"type": listeningStartMessageType}); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte(text)); err != nil {
+			t.Fatal(err)
+		}
+		assertServerMessage(t, conn, userTranscriptMessageType, text)
+		assertServerMessageType(t, conn, assistantThinkingMessageType)
+		assertServerMessage(t, conn, assistantResponseMessageType, "reply to "+text)
 		assertServerMessageType(t, conn, listeningStoppedMessageType)
 	}
 }

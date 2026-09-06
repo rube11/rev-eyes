@@ -1,5 +1,8 @@
 import { supabase } from '../../shared/api/supabase'
 import { env } from '../../shared/config/env'
+import { readConversationTranscript } from './conversationTranscript'
+import { settleWorkspaceLoads } from './workspaceLoad'
+import type { WorkspaceLoadResult } from './workspaceLoad'
 import type {
   AutomationKind,
   ConversationItem,
@@ -11,6 +14,7 @@ import type {
   TranscriptItem,
   WatchItem,
   WorkspaceData,
+  WorkspaceResource,
 } from './workspaceTypes'
 
 type SessionRow = {
@@ -37,6 +41,7 @@ type MemoryRow = {
   status: MemoryItem['status']
   created_at: string
   updated_at: string
+  expires_at: string | null
 }
 
 type WatchRow = {
@@ -62,6 +67,44 @@ type TaskRow = {
   resolved_at: string | null
 }
 
+const transcriptHistoryLimit = 1000
+const transcriptRefreshLimit = 100
+
+export async function sendChatMessage(accessToken: string, sessionId: string, text: string): Promise<string> {
+  const response = await fetch(`${env.apiBaseUrl}/workspace/conversations/${encodeURIComponent(sessionId)}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
+    signal: AbortSignal.timeout(100_000),
+  }).catch(() => { throw new Error('Connection lost. Check the log before sending again.') })
+  if (!response.ok) {
+    if (response.status === 401) throw new Error('Please sign in again to send a message.')
+    if (response.status === 404) throw new Error('This chat is unavailable. Refresh and try again.')
+    throw new Error('Couldn’t finish this turn. Check the log before sending again.')
+  }
+  const result = await response.json() as { text?: unknown }
+  if (typeof result.text !== 'string') throw new Error('Couldn’t confirm the reply. Check the log before sending again.')
+  return result.text
+}
+
+export function loadConversationTranscript(userId: string, sessionId: string, signal: AbortSignal) {
+  return readConversationTranscript(async (offset, limit) => {
+    const { data, error } = await supabase
+      .from('transcript_utterances')
+      .select('id,session_id,speaker,text,started_at')
+      .eq('user_id', userId)
+      .eq('session_id', sessionId)
+      .order('started_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(offset, offset + limit - 1)
+      .abortSignal(signal)
+    if (error) throw error
+    return (data as TranscriptRow[]).map((row) => ({
+      id: row.id, speaker: row.speaker, text: row.text, startedAt: row.started_at,
+    }))
+  }, signal)
+}
+
 function shorten(text: string, limit: number): string {
   const normalized = text.replace(/\s+/gu, ' ').trim()
   return normalized.length <= limit
@@ -79,20 +122,105 @@ function mapMemory(row: MemoryRow): MemoryItem {
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    expiresAt: row.expires_at ?? undefined,
   }
 }
 
-export async function loadWorkspaceData(
+function mapConversations(
+  sessionRows: SessionRow[],
+  transcriptRows: TranscriptRow[],
+  current: ConversationItem[] = [],
+): ConversationItem[] {
+  const transcriptBySession = new Map<
+    string,
+    Map<string, TranscriptItem>
+  >()
+  for (const conversation of current) {
+    transcriptBySession.set(
+      conversation.id,
+      new Map(conversation.transcript.map((item) => [item.id, item])),
+    )
+  }
+
+  for (const row of transcriptRows) {
+    const transcript =
+      transcriptBySession.get(row.session_id) ??
+      new Map<string, TranscriptItem>()
+    transcript.set(row.id, {
+      id: row.id,
+      speaker: row.speaker,
+      text: row.text,
+      startedAt: row.started_at,
+    })
+    transcriptBySession.set(row.session_id, transcript)
+  }
+
+  return sessionRows.map((session, index): ConversationItem => {
+    const transcript = [
+      ...(transcriptBySession.get(session.id)?.values() ?? []),
+    ]
+      .sort(
+        (left, right) =>
+          new Date(left.startedAt).getTime() -
+            new Date(right.startedAt).getTime() ||
+          left.id.localeCompare(right.id),
+      )
+      .slice(-transcriptHistoryLimit)
+    const firstUserLine = transcript.find((line) => line.speaker === 'user')
+    const lastAssistantLine = [...transcript]
+      .reverse()
+      .find((line) => line.speaker === 'assistant')
+
+    return {
+      id: session.id,
+      title: firstUserLine
+        ? shorten(firstUserLine.text, 58)
+        : `Conversation ${String(index + 1).padStart(2, '0')}`,
+      summary: lastAssistantLine
+        ? shorten(lastAssistantLine.text, 118)
+        : 'No assistant response was recorded.',
+      status: session.status,
+      startedAt: session.started_at,
+      lastActivityAt: session.last_activity_at,
+      transcript,
+    }
+  })
+}
+
+function mapWatches(rows: WatchRow[]): WatchItem[] {
+  return rows.map((row): WatchItem => ({
+    id: row.id,
+    query: row.query,
+    condition: row.condition,
+    intervalMinutes: row.interval_minutes,
+    expiresAt: row.expires_at,
+    status: row.status,
+    createdAt: row.created_at,
+    nextCheckAt: row.next_check_at ?? undefined,
+    lastCheckedAt: row.last_checked_at ?? undefined,
+    seenCount: row.seen_urls.length,
+  }))
+}
+
+function mapTasks(rows: TaskRow[]): TaskItem[] {
+  return rows.map((row): TaskItem => ({
+    id: row.id,
+    title: row.title,
+    schedule: row.schedule,
+    dueAt: row.due_at,
+    status: row.status,
+    createdAt: row.created_at,
+    resolvedAt: row.resolved_at ?? undefined,
+  }))
+}
+
+async function loadConversations(
   userId: string,
   signal: AbortSignal,
-): Promise<WorkspaceData> {
-  const [
-    sessionsResult,
-    transcriptResult,
-    memoriesResult,
-    watchesResult,
-    tasksResult,
-  ] = await Promise.all([
+  transcriptLimit: number,
+  current: ConversationItem[] = [],
+): Promise<ConversationItem[]> {
+  const [sessionsResult, transcriptResult] = await Promise.all([
     supabase
       .from('sessions')
       .select('id,status,started_at,last_activity_at')
@@ -105,123 +233,107 @@ export async function loadWorkspaceData(
       .select('id,session_id,speaker,text,started_at')
       .eq('user_id', userId)
       .order('started_at', { ascending: false })
-      .limit(1000)
-      .abortSignal(signal),
-    supabase
-      .from('memories')
-      .select('id,title,summary,topics,kind,status,created_at,updated_at')
-      .eq('user_id', userId)
-      .eq('status', 'active')
-      .order('updated_at', { ascending: false })
-      .limit(200)
-      .abortSignal(signal),
-    supabase
-      .from('watches')
-      .select(
-        'id,query,condition,interval_minutes,expires_at,status,created_at,next_check_at,last_checked_at,seen_urls',
-      )
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(50)
-      .abortSignal(signal),
-    supabase
-      .from('task_proposals')
-      .select('id,title,schedule,due_at,status,created_at,resolved_at')
-      .eq('user_id', userId)
-      .order('due_at', { ascending: true })
-      .limit(100)
+      .limit(transcriptLimit)
       .abortSignal(signal),
   ])
 
-  const firstError = [
-    sessionsResult.error,
-    transcriptResult.error,
-    memoriesResult.error,
-    watchesResult.error,
-    tasksResult.error,
-  ].find(Boolean)
-
+  const firstError = sessionsResult.error ?? transcriptResult.error
   if (firstError) {
     throw new Error(firstError.message)
   }
 
-  const transcriptBySession = new Map<string, TranscriptItem[]>()
-  for (const row of (transcriptResult.data ?? []) as TranscriptRow[]) {
-    const item: TranscriptItem = {
-      id: row.id,
-      speaker: row.speaker,
-      text: row.text,
-      startedAt: row.started_at,
-    }
-    const transcript = transcriptBySession.get(row.session_id) ?? []
-    transcript.push(item)
-    transcriptBySession.set(row.session_id, transcript)
+  return mapConversations(
+    (sessionsResult.data ?? []) as SessionRow[],
+    (transcriptResult.data ?? []) as TranscriptRow[],
+    current,
+  )
+}
+
+async function loadMemories(
+  userId: string,
+  signal: AbortSignal,
+): Promise<MemoryItem[]> {
+  const now = new Date().toISOString()
+  const { data, error } = await supabase
+    .from('memories')
+    .select('id,title,summary,topics,kind,status,created_at,updated_at,expires_at')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .or(`expires_at.is.null,expires_at.gt.${now}`)
+    .order('updated_at', { ascending: false })
+    .limit(200)
+    .abortSignal(signal)
+
+  if (error) {
+    throw new Error(error.message)
   }
-  for (const transcript of transcriptBySession.values()) {
-    transcript.sort(
-      (left, right) =>
-        new Date(left.startedAt).getTime() -
-        new Date(right.startedAt).getTime(),
+  return ((data ?? []) as MemoryRow[]).map(mapMemory)
+}
+
+async function loadWatches(
+  userId: string,
+  signal: AbortSignal,
+): Promise<WatchItem[]> {
+  const { data, error } = await supabase
+    .from('watches')
+    .select(
+      'id,query,condition,interval_minutes,expires_at,status,created_at,next_check_at,last_checked_at,seen_urls',
     )
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(50)
+    .abortSignal(signal)
+
+  if (error) {
+    throw new Error(error.message)
   }
+  return mapWatches((data ?? []) as WatchRow[])
+}
 
-  const conversations = ((sessionsResult.data ?? []) as SessionRow[]).map(
-    (session, index): ConversationItem => {
-      const transcript = transcriptBySession.get(session.id) ?? []
-      const firstUserLine = transcript.find((line) => line.speaker === 'user')
-      const lastAssistantLine = [...transcript]
-        .reverse()
-        .find((line) => line.speaker === 'assistant')
+async function loadTasks(
+  userId: string,
+  signal: AbortSignal,
+): Promise<TaskItem[]> {
+  const { data, error } = await supabase
+    .from('task_proposals')
+    .select('id,title,schedule,due_at,status,created_at,resolved_at')
+    .eq('user_id', userId)
+    .order('due_at', { ascending: true })
+    .limit(100)
+    .abortSignal(signal)
 
-      return {
-        id: session.id,
-        title: firstUserLine
-          ? shorten(firstUserLine.text, 58)
-          : `Conversation ${String(index + 1).padStart(2, '0')}`,
-        summary: lastAssistantLine
-          ? shorten(lastAssistantLine.text, 118)
-          : 'No assistant response was recorded.',
-        status: session.status,
-        startedAt: session.started_at,
-        lastActivityAt: session.last_activity_at,
-        transcript,
-      }
-    },
-  )
-
-  const watches = ((watchesResult.data ?? []) as WatchRow[]).map(
-    (row): WatchItem => ({
-      id: row.id,
-      query: row.query,
-      condition: row.condition,
-      intervalMinutes: row.interval_minutes,
-      expiresAt: row.expires_at,
-      status: row.status,
-      createdAt: row.created_at,
-      nextCheckAt: row.next_check_at ?? undefined,
-      lastCheckedAt: row.last_checked_at ?? undefined,
-      seenCount: row.seen_urls.length,
-    }),
-  )
-
-  const tasks = ((tasksResult.data ?? []) as TaskRow[]).map(
-    (row): TaskItem => ({
-      id: row.id,
-      title: row.title,
-      schedule: row.schedule,
-      dueAt: row.due_at,
-      status: row.status,
-      createdAt: row.created_at,
-      resolvedAt: row.resolved_at ?? undefined,
-    }),
-  )
-
-  return {
-    conversations,
-    memories: ((memoriesResult.data ?? []) as MemoryRow[]).map(mapMemory),
-    watches,
-    tasks,
+  if (error) {
+    throw new Error(error.message)
   }
+  return mapTasks((data ?? []) as TaskRow[])
+}
+
+export function loadWorkspaceData(
+  userId: string,
+  signal: AbortSignal,
+): Promise<WorkspaceLoadResult> {
+  return settleWorkspaceLoads({
+    conversations: () => loadConversations(userId, signal, transcriptHistoryLimit),
+    memories: () => loadMemories(userId, signal),
+    watches: () => loadWatches(userId, signal),
+    tasks: () => loadTasks(userId, signal),
+  })
+}
+
+export function refreshWorkspaceData(
+  userId: string,
+  current: WorkspaceData,
+  resources: readonly WorkspaceResource[],
+  signal: AbortSignal,
+): Promise<WorkspaceLoadResult> {
+  return settleWorkspaceLoads({
+    ...(resources.includes('conversations') ? {
+      conversations: () => loadConversations(userId, signal, transcriptRefreshLimit, current.conversations),
+    } : {}),
+    ...(resources.includes('memories') ? { memories: () => loadMemories(userId, signal) } : {}),
+    ...(resources.includes('watches') ? { watches: () => loadWatches(userId, signal) } : {}),
+    ...(resources.includes('tasks') ? { tasks: () => loadTasks(userId, signal) } : {}),
+  })
 }
 
 export async function saveMemory(
@@ -240,7 +352,7 @@ export async function saveMemory(
       entities: [],
       status: 'active',
     })
-    .select('id,title,summary,topics,kind,status,created_at,updated_at')
+    .select('id,title,summary,topics,kind,status,created_at,updated_at,expires_at')
     .single()
 
   if (error) {
@@ -525,6 +637,15 @@ export function createDemoWorkspaceData(): WorkspaceData {
       },
     ],
     tasks: [
+      {
+        id: 'demo-task-past-due',
+        title: 'Pick up the library books',
+        schedule: 'earlier today',
+        dueAt: fromNow(-3 * hour),
+        status: 'accepted',
+        createdAt: fromNow(-day),
+        resolvedAt: fromNow(-day + minute),
+      },
       {
         id: 'demo-task-01',
         title: 'Send the beta build to Noah',

@@ -26,6 +26,7 @@ const testSchema = `{
 
 type recordingTool struct {
 	mu        sync.Mutex
+	name      string
 	scopes    []tool.Scope
 	arguments []string
 	result    tool.Result
@@ -36,11 +37,189 @@ type recordingTool struct {
 }
 
 func (t *recordingTool) Spec() tool.Spec {
+	name := t.name
+	if name == "" {
+		name = "lookup"
+	}
 	return tool.Spec{
-		Name:        "lookup",
+		Name:        name,
 		Description: "Look up a value.",
 		Parameters:  json.RawMessage(testSchema),
 		ReadOnly:    !t.mutating,
+	}
+}
+
+func TestAgentReportsSuccessfulProposalCreation(t *testing.T) {
+	t.Parallel()
+
+	proposal := &recordingTool{
+		name:     proposeTaskToolName,
+		mutating: true,
+		result:   tool.Result{Content: `{"status":"proposed"}`},
+	}
+	requestNumber := 0
+	agent := testAgent(t, proposal, func(w http.ResponseWriter, _ *http.Request) {
+		requestNumber++
+		if requestNumber == 1 {
+			writeJSON(t, w, map[string]any{
+				"output": []any{map[string]any{
+					"type":      "function_call",
+					"call_id":   "call-proposal",
+					"name":      proposeTaskToolName,
+					"arguments": `{"value":"tomorrow"}`,
+				}},
+			})
+			return
+		}
+		writeJSON(t, w, map[string]any{
+			"output": []any{map[string]any{
+				"type": "message",
+				"content": []any{map[string]any{
+					"type": "output_text",
+					"text": "Should I save that?",
+				}},
+			}},
+		})
+	})
+
+	result, err := agent.RespondWithResult(
+		context.Background(),
+		tool.Scope{},
+		"Remind me tomorrow.",
+		session.Conversation{},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("RespondWithResult() error = %v", err)
+	}
+	if result.Text != "Should I save that?" || !result.ProposalCreated {
+		t.Fatalf("RespondWithResult() = %#v", result)
+	}
+}
+
+func TestAgentDoesNotReportFailedProposalCreation(t *testing.T) {
+	t.Parallel()
+
+	proposal := &recordingTool{
+		name:     proposeTaskToolName,
+		mutating: true,
+		err:      errors.New("proposal unavailable"),
+	}
+	requestNumber := 0
+	agent := testAgent(t, proposal, func(w http.ResponseWriter, _ *http.Request) {
+		requestNumber++
+		if requestNumber == 1 {
+			writeJSON(t, w, map[string]any{
+				"output": []any{map[string]any{
+					"type":      "function_call",
+					"call_id":   "call-proposal",
+					"name":      proposeTaskToolName,
+					"arguments": `{"value":"tomorrow"}`,
+				}},
+			})
+			return
+		}
+		writeJSON(t, w, map[string]any{
+			"output": []any{map[string]any{
+				"type": "message",
+				"content": []any{map[string]any{
+					"type": "output_text",
+					"text": "I couldn't prepare that reminder.",
+				}},
+			}},
+		})
+	})
+
+	result, err := agent.RespondWithResult(
+		context.Background(),
+		tool.Scope{},
+		"Remind me tomorrow.",
+		session.Conversation{},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("RespondWithResult() error = %v", err)
+	}
+	if result.ProposalCreated {
+		t.Fatalf("RespondWithResult() = %#v, want no proposal metadata", result)
+	}
+}
+
+func TestAgentPreservesProposalCreationWhenFinalResponseFails(t *testing.T) {
+	t.Parallel()
+
+	proposal := &recordingTool{
+		name:     proposeTaskToolName,
+		mutating: true,
+		result:   tool.Result{Content: `{"status":"proposed"}`},
+	}
+	requestNumber := 0
+	agent := testAgent(t, proposal, func(w http.ResponseWriter, _ *http.Request) {
+		requestNumber++
+		if requestNumber == 1 {
+			writeJSON(t, w, map[string]any{
+				"output": []any{map[string]any{
+					"type":      "function_call",
+					"call_id":   "call-proposal",
+					"name":      proposeTaskToolName,
+					"arguments": `{"value":"tomorrow"}`,
+				}},
+			})
+			return
+		}
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	})
+
+	result, err := agent.RespondWithResult(
+		context.Background(),
+		tool.Scope{},
+		"Remind me tomorrow.",
+		session.Conversation{},
+		nil,
+	)
+	if err == nil {
+		t.Fatal("RespondWithResult() error = nil")
+	}
+	if !result.ProposalCreated {
+		t.Fatalf("RespondWithResult() = %#v, want proposal metadata", result)
+	}
+}
+
+func TestAgentPreservesProposalCreationWhenFinalResponseIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	proposal := &recordingTool{
+		name:     proposeTaskToolName,
+		mutating: true,
+		result:   tool.Result{Content: `{"status":"proposed"}`},
+	}
+	requestNumber := 0
+	agent := testAgent(t, proposal, func(w http.ResponseWriter, _ *http.Request) {
+		requestNumber++
+		output := []any{}
+		if requestNumber == 1 {
+			output = []any{map[string]any{
+				"type":      "function_call",
+				"call_id":   "call-proposal",
+				"name":      proposeTaskToolName,
+				"arguments": `{"value":"tomorrow"}`,
+			}}
+		}
+		writeJSON(t, w, map[string]any{"output": output})
+	})
+
+	result, err := agent.RespondWithResult(
+		context.Background(),
+		tool.Scope{},
+		"Remind me tomorrow.",
+		session.Conversation{},
+		nil,
+	)
+	if err == nil {
+		t.Fatal("RespondWithResult() error = nil")
+	}
+	if !result.ProposalCreated {
+		t.Fatalf("RespondWithResult() = %#v, want proposal metadata", result)
 	}
 }
 

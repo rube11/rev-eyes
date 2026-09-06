@@ -34,9 +34,10 @@ func (f SearchFunc) Search(ctx context.Context, query string) ([]Item, error) {
 
 // Dispatcher checks one scheduled watch and flushes a newly queued update.
 type Dispatcher struct {
-	repository Repository
-	searcher   Searcher
-	notifier   PendingNotifier
+	repository       Repository
+	searcher         Searcher
+	notifier         PendingNotifier
+	workspaceChanged func(userID string)
 }
 
 func NewDispatcher(
@@ -56,6 +57,11 @@ func NewDispatcher(
 	return &Dispatcher{repository: repository, searcher: searcher, notifier: notifier}, nil
 }
 
+// SetWorkspaceChanged registers delivery after a scheduled watch changes.
+func (d *Dispatcher) SetWorkspaceChanged(workspaceChanged func(userID string)) {
+	d.workspaceChanged = workspaceChanged
+}
+
 func (d *Dispatcher) RunResource(ctx context.Context, resourceID string) error {
 	claimed, exists, err := d.repository.ClaimScheduled(ctx, resourceID)
 	if err != nil {
@@ -72,6 +78,9 @@ func (d *Dispatcher) RunResource(ctx context.Context, resourceID string) error {
 	notify, err := d.repository.Record(ctx, claimed, items)
 	if err != nil {
 		return fmt.Errorf("record watch %s: %w", claimed.ID, err)
+	}
+	if d.workspaceChanged != nil {
+		d.workspaceChanged(claimed.UserID)
 	}
 	if !notify {
 		return nil

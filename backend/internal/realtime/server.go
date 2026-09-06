@@ -14,72 +14,7 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
-const (
-	completedUtteranceBuffer = 10
-	maxMessageSize           = 1 << 20
-)
-
-const (
-	locationMessageType       = "location"
-	listeningStartMessageType = "listening_start"
-	listeningStopMessageType  = "listening_stop"
-
-	assistantDoneMessageType     = "assistant_done"
-	assistantResponseMessageType = "assistant_response"
-	assistantThinkingMessageType = "assistant_thinking"
-	listeningStoppedMessageType  = "listening_stopped"
-	notificationMessageType      = "notification"
-	notificationAckMessageType   = "notification_ack"
-	userTranscriptMessageType    = "user_transcript"
-)
-
-type Authenticator func(ticket string) (tool.Scope, error)
-type UtteranceResult struct {
-	Text                 string
-	AwaitingConfirmation bool
-}
-
-type UtteranceHandler func(
-	ctx context.Context,
-	scope tool.Scope,
-	utterance string,
-) (UtteranceResult, error)
-type LocationHandler func(ctx context.Context, scope tool.Scope, update LocationUpdate) error
-type NotificationAckHandler func(ctx context.Context, scope tool.Scope, notificationID string) error
-
-type Handlers struct {
-	Authenticate    Authenticator
-	CheckOrigin     func(r *http.Request) bool
-	Connect         func(ctx context.Context, scope tool.Scope) error
-	Utterance       UtteranceHandler
-	Location        LocationHandler
-	NotificationAck NotificationAckHandler
-	Disconnect      func(scope tool.Scope)
-}
-
-type LocationUpdate struct {
-	Latitude       float64 `json:"latitude"`
-	Longitude      float64 `json:"longitude"`
-	AccuracyMeters float64 `json:"accuracy_meters,omitempty"`
-}
-
-type clientMessage struct {
-	Type string `json:"type"`
-	ID   string `json:"id,omitempty"`
-	LocationUpdate
-}
-
-type serverMessage struct {
-	Type                 string `json:"type"`
-	ID                   string `json:"id,omitempty"`
-	Text                 string `json:"text,omitempty"`
-	Error                string `json:"error,omitempty"`
-	AwaitingConfirmation bool   `json:"awaiting_confirmation,omitempty"`
-}
-
-type jsonWriter interface {
-	WriteJSON(value any) error
-}
+const maxMessageSize = 1 << 20
 
 type incomingMessage struct {
 	messageType int
@@ -89,6 +24,7 @@ type incomingMessage struct {
 type Server struct {
 	transcriber stt.Transcriber
 	handlers    Handlers
+	turns       *turnCoordinator
 	upgrader    websocket.Upgrader
 	hub         *Hub
 }
@@ -107,6 +43,7 @@ func NewServerWithHub(transcriber stt.Transcriber, hub *Hub, handlers Handlers) 
 		transcriber: transcriber,
 		handlers:    handlers,
 		hub:         hub,
+		turns:       newTurnCoordinator(),
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
@@ -156,7 +93,6 @@ func (s *Server) serveConnection(
 	ctx, cancel := context.WithCancel(parent)
 	messages := make(chan incomingMessage)
 	go s.readMessages(ctx, conn, messages)
-
 	var audio chan []byte
 	var transcription <-chan error
 	defer func() {
@@ -201,6 +137,7 @@ func (s *Server) serveConnection(
 
 			if incoming.messageType == websocket.BinaryMessage {
 				if audio == nil {
+					clear(incoming.data)
 					continue
 				}
 				select {
@@ -272,85 +209,6 @@ func (s *Server) serveConnection(
 			}
 		}
 	}
-}
-
-func (s *Server) transcribeConnection(
-	ctx context.Context,
-	scope tool.Scope,
-	writer jsonWriter,
-	audio <-chan []byte,
-) error {
-	completed := make(chan string, completedUtteranceBuffer)
-	done := make(chan error, 1)
-
-	go func() {
-		err := s.transcriber.Transcribe(
-			ctx,
-			audio,
-			completed,
-			func(transcript string) error {
-				transcript = strings.TrimSpace(transcript)
-				if transcript == "" {
-					return nil
-				}
-				if err := writer.WriteJSON(serverMessage{
-					Type: userTranscriptMessageType,
-					Text: transcript,
-				}); err != nil {
-					return fmt.Errorf("write user transcript: %w", err)
-				}
-				return nil
-			},
-		)
-		close(completed)
-		done <- err
-	}()
-
-	for utterance := range completed {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if s.handlers.Utterance == nil {
-			continue
-		}
-
-		if err := writer.WriteJSON(serverMessage{
-			Type: assistantThinkingMessageType,
-		}); err != nil {
-			return fmt.Errorf("write assistant thinking state: %w", err)
-		}
-		result, err := s.handlers.Utterance(ctx, scope, utterance)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			slog.ErrorContext(ctx, "failed to handle utterance", "error", err)
-			if writeErr := writer.WriteJSON(serverMessage{
-				Type: assistantDoneMessageType,
-			}); writeErr != nil {
-				return fmt.Errorf("write assistant done state: %w", writeErr)
-			}
-			continue
-		}
-		response := strings.TrimSpace(result.Text)
-		if response == "" {
-			if err := writer.WriteJSON(serverMessage{
-				Type: assistantDoneMessageType,
-			}); err != nil {
-				return fmt.Errorf("write assistant done state: %w", err)
-			}
-			continue
-		}
-		if err := writer.WriteJSON(serverMessage{
-			Type:                 assistantResponseMessageType,
-			Text:                 response,
-			AwaitingConfirmation: result.AwaitingConfirmation,
-		}); err != nil {
-			return fmt.Errorf("write assistant response: %w", err)
-		}
-	}
-
-	return <-done
 }
 
 // ServeHTTP authenticates and handles a realtime WebSocket connection.

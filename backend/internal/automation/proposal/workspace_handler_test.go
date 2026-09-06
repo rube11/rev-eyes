@@ -81,6 +81,14 @@ func TestWorkspaceHandlerApprovesProposalAndTriggersRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWorkspaceHandler() error = %v", err)
 	}
+	var (
+		changedUser string
+		changedKind Kind
+	)
+	handler.SetWorkspaceChanged(func(userID string, kind Kind) {
+		changedUser = userID
+		changedKind = kind
+	})
 
 	mux := http.NewServeMux()
 	mux.Handle(
@@ -101,6 +109,9 @@ func TestWorkspaceHandlerApprovesProposalAndTriggersRegistration(t *testing.T) {
 	}
 	if !triggered {
 		t.Fatal("schedule registration was not triggered")
+	}
+	if changedUser != workspaceTestUserID || changedKind != KindReminder {
+		t.Fatalf("workspace change = %q, %q", changedUser, changedKind)
 	}
 }
 
@@ -142,6 +153,14 @@ func TestWorkspaceHandlerDeletesAndTriggersCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWorkspaceHandler() error = %v", err)
 	}
+	var (
+		changedUser string
+		changedKind Kind
+	)
+	handler.SetWorkspaceChanged(func(userID string, kind Kind) {
+		changedUser = userID
+		changedKind = kind
+	})
 
 	mux := http.NewServeMux()
 	mux.Handle(
@@ -162,6 +181,9 @@ func TestWorkspaceHandlerDeletesAndTriggersCancellation(t *testing.T) {
 	}
 	if !triggered {
 		t.Fatal("schedule cancellation was not triggered")
+	}
+	if changedUser != workspaceTestUserID || changedKind != KindWatch {
+		t.Fatalf("workspace change = %q, %q", changedUser, changedKind)
 	}
 }
 

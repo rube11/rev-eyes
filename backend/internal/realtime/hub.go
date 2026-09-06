@@ -5,9 +5,12 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+const websocketWriteTimeout = 5 * time.Second
 
 type connection struct {
 	socket  *websocket.Conn
@@ -18,7 +21,15 @@ type connection struct {
 func (c *connection) WriteJSON(value any) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return c.socket.WriteJSON(value)
+	if err := c.socket.SetWriteDeadline(time.Now().Add(websocketWriteTimeout)); err != nil {
+		_ = c.socket.Close()
+		return err
+	}
+	if err := c.socket.WriteJSON(value); err != nil {
+		_ = c.socket.Close()
+		return err
+	}
+	return nil
 }
 
 // Hub tracks active connections for user-targeted realtime delivery.
@@ -33,12 +44,9 @@ func NewHub() *Hub {
 	return &Hub{connections: make(map[string]map[*connection]struct{})}
 }
 
-// Send delivers a notification and reports whether any active connection received it.
-func (h *Hub) Send(userID, notificationID, text string) bool {
+func (h *Hub) send(userID string, message serverMessage) bool {
 	userID = strings.TrimSpace(userID)
-	notificationID = strings.TrimSpace(notificationID)
-	text = strings.TrimSpace(text)
-	if userID == "" || notificationID == "" || text == "" {
+	if userID == "" {
 		return false
 	}
 
@@ -55,11 +63,7 @@ func (h *Hub) Send(userID, notificationID, text string) bool {
 
 	delivered := false
 	for _, conn := range connections {
-		if err := conn.WriteJSON(serverMessage{
-			Type: notificationMessageType,
-			ID:   notificationID,
-			Text: text,
-		}); err != nil {
+		if err := conn.WriteJSON(message); err != nil {
 			slog.Debug("failed to send realtime message", "user_id", userID, "error", err)
 			_ = conn.socket.Close()
 			continue
@@ -67,6 +71,33 @@ func (h *Hub) Send(userID, notificationID, text string) bool {
 		delivered = true
 	}
 	return delivered
+}
+
+// Send delivers a notification and reports whether any active connection received it.
+func (h *Hub) Send(userID, notificationID, text string) bool {
+	notificationID = strings.TrimSpace(notificationID)
+	text = strings.TrimSpace(text)
+	if notificationID == "" || text == "" {
+		return false
+	}
+
+	return h.send(userID, serverMessage{
+		Type: notificationMessageType,
+		ID:   notificationID,
+		Text: text,
+	})
+}
+
+// WorkspaceChanged tells active clients which workspace slices need refreshing.
+func (h *Hub) WorkspaceChanged(userID string, resources ...WorkspaceResource) bool {
+	if len(resources) == 0 {
+		return false
+	}
+
+	return h.send(userID, serverMessage{
+		Type:      workspaceChangedMessageType,
+		Resources: resources,
+	})
 }
 
 func (h *Hub) register(conn *connection) bool {

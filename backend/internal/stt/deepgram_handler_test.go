@@ -9,7 +9,7 @@ import (
 	msginterfaces "github.com/deepgram/deepgram-go-sdk/v3/pkg/api/listen/v1/websocket/interfaces"
 )
 
-func TestDeepgramHandlerAccumulatesNaturalPausesUntilExplicitFinalize(t *testing.T) {
+func TestDeepgramHandlerCompletesAtSpeechEndpoint(t *testing.T) {
 	completed := make(chan string, 1)
 	var updates []string
 	handler := newDeepgramHandler(
@@ -27,11 +27,10 @@ func TestDeepgramHandlerAccumulatesNaturalPausesUntilExplicitFinalize(t *testing
 	}{
 		{deepgramMessage("remind me", false, false, false), ""},
 		{deepgramMessage("remind me", false, false, false), ""},
-		{deepgramMessage("remind me", true, true, false), "remind me"},
+		{deepgramMessage("remind me", true, false, false), "remind me"},
 		{deepgramMessage("tomorrow", false, false, false), "remind me"},
 		{deepgramMessage("tomorrow", false, false, false), "remind me"},
-		{deepgramMessage("tomorrow", true, true, false), "remind me tomorrow"},
-		{deepgramMessage("at nine", true, true, false), "remind me tomorrow at nine"},
+		{deepgramMessage("tomorrow", true, false, false), "remind me tomorrow"},
 	}
 	for index, step := range messages {
 		if err := handler.Message(step.message); err != nil {
@@ -41,6 +40,9 @@ func TestDeepgramHandlerAccumulatesNaturalPausesUntilExplicitFinalize(t *testing
 			t.Fatalf("step %d transcript = %q, want %q", index, got, step.wantTranscript)
 		}
 		assertNoCompletedUtterance(t, completed)
+	}
+	if err := handler.Message(deepgramMessage("at nine", true, true, false)); err != nil {
+		t.Fatalf("speech endpoint Message() error = %v", err)
 	}
 
 	wantUpdates := []string{
@@ -52,24 +54,21 @@ func TestDeepgramHandlerAccumulatesNaturalPausesUntilExplicitFinalize(t *testing
 		t.Fatalf("updates = %#v, want %#v", updates, wantUpdates)
 	}
 
-	if err := handler.Message(deepgramMessage("", false, false, true)); err != nil {
-		t.Fatalf("finalize Message() error = %v", err)
-	}
 	select {
 	case utterance := <-completed:
 		if utterance != "remind me tomorrow at nine" {
 			t.Fatalf("completed utterance = %q", utterance)
 		}
 	default:
-		t.Fatal("explicitly finalized utterance was not completed")
+		t.Fatal("speech endpoint did not complete the utterance")
 	}
 	if got := handler.Transcript(); got != "" {
-		t.Fatalf("transcript after finalize = %q, want empty", got)
+		t.Fatalf("transcript after speech endpoint = %q, want empty", got)
 	}
 	select {
-	case <-handler.Finalized():
+	case <-handler.Endpointed():
 	default:
-		t.Fatal("finalization signal was not closed")
+		t.Fatal("speech endpoint signal was not closed")
 	}
 }
 
@@ -85,8 +84,8 @@ func TestDeepgramHandlerIncludesFinalSegmentFromExplicitFinalize(t *testing.T) {
 		},
 	)
 
-	if err := handler.Message(deepgramMessage("hello", true, true, false)); err != nil {
-		t.Fatalf("natural pause Message() error = %v", err)
+	if err := handler.Message(deepgramMessage("hello", true, false, false)); err != nil {
+		t.Fatalf("final segment Message() error = %v", err)
 	}
 	assertNoCompletedUtterance(t, completed)
 

@@ -125,6 +125,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	realtimeHub := realtime.NewHub()
 	workspaceAutomationHandler, err := proposal.NewWorkspaceHandler(
 		tokenVerifier.Verify,
 		proposalStore,
@@ -133,6 +134,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	workspaceAutomationHandler.SetWorkspaceChanged(
+		func(userID string, kind proposal.Kind) {
+			resource := realtime.WorkspaceWatches
+			if kind == proposal.KindReminder {
+				resource = realtime.WorkspaceTasks
+			}
+			realtimeHub.WorkspaceChanged(userID, resource)
+		},
+	)
 
 	classifier, err := openai.NewClassifier(
 		os.Getenv("OPENAI_API_KEY"),
@@ -141,6 +151,27 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	memoryModel := strings.TrimSpace(os.Getenv("OPENAI_MEMORY_MODEL"))
+	if memoryModel == "" {
+		memoryModel = os.Getenv("OPENAI_ROUTER_MODEL")
+	}
+	memoryExtractor, err := openai.NewMemoryExtractor(
+		os.Getenv("OPENAI_API_KEY"),
+		memoryModel,
+	)
+	if err != nil {
+		return err
+	}
+	memoryRecorder, err := memory.NewRecorder(
+		memoryExtractor,
+		memoryStore,
+	)
+	if err != nil {
+		return err
+	}
+	memoryRecorder.SetOnStored(func(userID string) {
+		realtimeHub.WorkspaceChanged(userID, realtime.WorkspaceMemories)
+	})
 
 	transcriber, err := stt.NewDeepgramTranscriber(os.Getenv("DEEPGRAM_API_KEY"))
 	if err != nil {
@@ -203,7 +234,6 @@ func run() error {
 		return err
 	}
 
-	realtimeHub := realtime.NewHub()
 	notificationService, err := notification.NewService(notificationStore, realtimeHub)
 	if err != nil {
 		return err
@@ -230,6 +260,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	watchDispatcher.SetWorkspaceChanged(func(userID string) {
+		realtimeHub.WorkspaceChanged(userID, realtime.WorkspaceWatches)
+	})
 	scheduledEventDispatcher, err := scheduler.NewDispatcher(
 		scheduledEventStore,
 		reminderDispatcher,
@@ -247,9 +280,11 @@ func run() error {
 	}
 	go registrationDispatcher.Run(ctx)
 	go scheduledEventDispatcher.Run(ctx)
+	go memoryRecorder.Run(ctx)
 	realtimeServer := realtime.NewServerWithHub(transcriber, realtimeHub, realtime.Handlers{
-		Authenticate: tickets.Consume,
-		CheckOrigin:  origins.Allows,
+		Authenticate:   tickets.Consume,
+		PrepareSession: sessionStore.Reopen,
+		CheckOrigin:    origins.Allows,
 		Connect: func(ctx context.Context, scope tool.Scope) error {
 			return notificationService.Flush(ctx, scope.UserID)
 		},
@@ -271,7 +306,7 @@ func run() error {
 				utterance,
 				assistantService,
 				sessionStore,
-				memoryStore,
+				memoryRecorder,
 			)
 		},
 		Location: func(_ context.Context, scope tool.Scope, update realtime.LocationUpdate) error {
@@ -287,6 +322,9 @@ func run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", web.Health)
 	mux.Handle("/auth/ws-ticket", origins.Handler(ticketHandler))
+	textChatAPI := origins.Handler(realtimeServer.TextHandler(tokenVerifier.Verify, sessionStore.Reopen))
+	mux.Handle("POST /workspace/conversations/{session_id}/messages", textChatAPI)
+	mux.Handle("OPTIONS /workspace/conversations/{session_id}/messages", textChatAPI)
 	workspaceAutomationAPI := origins.Handler(workspaceAutomationHandler)
 	mux.Handle(
 		"POST /workspace/automations/{kind}/{resource_id}/decision",

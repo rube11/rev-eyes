@@ -24,9 +24,10 @@ type WorkspaceCommander interface {
 }
 
 type WorkspaceHandler struct {
-	verifier        auth.TokenVerifier
-	commander       WorkspaceCommander
-	triggerSchedule func()
+	verifier         auth.TokenVerifier
+	commander        WorkspaceCommander
+	triggerSchedule  func()
+	workspaceChanged func(userID string, kind Kind)
 }
 
 func NewWorkspaceHandler(
@@ -48,6 +49,13 @@ func NewWorkspaceHandler(
 		commander:       commander,
 		triggerSchedule: triggerSchedule,
 	}, nil
+}
+
+// SetWorkspaceChanged registers delivery for successful owner-scoped changes.
+func (h *WorkspaceHandler) SetWorkspaceChanged(
+	workspaceChanged func(userID string, kind Kind),
+) {
+	h.workspaceChanged = workspaceChanged
 }
 
 func (h *WorkspaceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -110,6 +118,9 @@ func (h *WorkspaceHandler) resolve(
 	if resolution.Status == StatusAccepted {
 		h.triggerSchedule()
 	}
+	if h.workspaceChanged != nil {
+		h.workspaceChanged(userID, kind)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -132,6 +143,9 @@ func (h *WorkspaceHandler) delete(
 	}
 	if cancellationQueued {
 		h.triggerSchedule()
+	}
+	if h.workspaceChanged != nil {
+		h.workspaceChanged(userID, kind)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

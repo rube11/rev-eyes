@@ -25,6 +25,11 @@ type Scope struct {
 	SessionID   string
 	UtteranceID string
 	TimeZone    string
+	// AlwaysRespond is set by the authenticated text-chat endpoint, never by audio.
+	AlwaysRespond bool
+	// MemoryReview is set only by the service: answering from stored context,
+	// with no agent tools allowed during this turn.
+	MemoryReview bool
 }
 
 // Result is the normalized output returned by a tool.

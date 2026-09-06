@@ -73,6 +73,10 @@ func TestDispatcherChecksScheduledWatchAndFlushesUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDispatcher() error = %v", err)
 	}
+	var changed string
+	dispatcher.SetWorkspaceChanged(func(userID string) {
+		changed = userID
+	})
 
 	if err := dispatcher.RunResource(context.Background(), "watch-1"); err != nil {
 		t.Fatalf("RunResource() error = %v", err)
@@ -82,6 +86,9 @@ func TestDispatcherChecksScheduledWatchAndFlushesUpdate(t *testing.T) {
 	}
 	if len(notifier.users) != 1 || notifier.users[0] != "user-1" {
 		t.Fatalf("notified users = %#v", notifier.users)
+	}
+	if changed != "user-1" {
+		t.Fatalf("workspace changed user = %q", changed)
 	}
 }
 

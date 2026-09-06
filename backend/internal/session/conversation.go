@@ -30,6 +30,9 @@ type Message struct {
 
 // Conversation is the compacted summary followed by the recent transcript.
 type Conversation struct {
+	// Profile is fresh user context supplied by the assistant, never compacted
+	// or persisted as conversation history.
+	Profile  string
 	Summary  string
 	Messages []Message
 }
