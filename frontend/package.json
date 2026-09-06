@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "build:beta": "tsc -b && vite build --mode beta",
     "lint": "eslint .",
-    "test": "tsc -p tsconfig.test.json && node node_modules/.tmp/frontend-tests/tests/index.test.js",
+    "test": "tsc -p tsconfig.test.json && node node_modules/.tmp/frontend-tests/tests/index.test.js && node --test tests/runtime-follow-up.test.cjs",
     "pack:beta": "pnpm build:beta && evenhub pack app.json dist --output rev-eyes-beta.ehpk",
     "qr": "evenhub qr",
     "preview": "vite preview"

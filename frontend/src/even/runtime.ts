@@ -161,6 +161,7 @@ export async function initializeEvenExperience(
   let connectGeneration = 0
   let connectionAbort: AbortController | undefined
   let suppressClicksUntil = 0
+  let responseWindowGeneration = 0
 
   onStatus("Connecting")
   await renderGlassesPage(buildCompactPage("CONNECTING"))
@@ -200,11 +201,12 @@ export async function initializeEvenExperience(
   }
 
   function cancelAssistantResponseWindow(): void {
+    responseWindowGeneration += 1
     responseLifecycle.cancel()
   }
 
   function resetAssistantInteraction(): void {
-    responseLifecycle.cancel()
+    cancelAssistantResponseWindow()
   }
 
   function handleResponseDisplayExpired(): void {
@@ -216,36 +218,44 @@ export async function initializeEvenExperience(
         visibleAssistant !== presentation ||
         sleeping ||
         currentNotification ||
-        listeningState !== "idle" ||
+        listeningState !== "listening" ||
         thinking ||
         awaitingResponse
       ) {
         return
       }
       visibleAssistant = undefined
-      await showReady()
+      await showListening()
     })
   }
 
   function handleResponseConversationExpired(): void {
+    const generation = responseWindowGeneration
     void enqueueTransition(async () => {
       if (
+        generation !== responseWindowGeneration ||
         responseLifecycle.active ||
         sleeping ||
         currentNotification ||
-        listeningState !== "idle" ||
         thinking ||
         awaitingResponse
       ) {
         return
       }
+      if (listeningState === "listening" || listeningState === "starting") {
+        listeningState = "stopping"
+        sendControl("listening_stop")
+        await stopAudioCapture()
+      }
+      reportStatus("Connected")
       await showReady()
     })
   }
 
-  async function startAudioCapture(): Promise<boolean> {
+  async function startAudioCapture(followUp = false): Promise<boolean> {
     return audioCapture.start(
-      () => active && !sleeping && socketIsOpen(),
+      () => active && !sleeping && socketIsOpen() &&
+        (!followUp || responseLifecycle.active),
     )
   }
 
@@ -384,7 +394,7 @@ export async function initializeEvenExperience(
     clearThinkingAnimation()
     try {
       await setPage(
-        buildMessagePage(presentation.message, "TAP TO RESPOND"),
+        buildMessagePage(presentation.message, "OPENING FOLLOW-UP"),
         "message",
       )
     } catch (error) {
@@ -402,6 +412,11 @@ export async function initializeEvenExperience(
     }
     // Do not spend the user's reading time waiting for the SDK render call.
     responseLifecycle.begin(presentation.sourceText)
+    // The server ignores starts until the previous transcription has finished.
+    // If it is still stopping, listening_stopped will open the follow-up stream.
+    if (listeningState === "idle") {
+      await startListening(true)
+    }
   }
 
   async function showIdlePrompt(prompt: string) {
@@ -521,7 +536,13 @@ export async function initializeEvenExperience(
       return
     }
 
+    const wasFollowUp = responseLifecycle.active
     cancelAssistantResponseWindow()
+    if (wasFollowUp && (listeningState === "listening" || listeningState === "starting")) {
+      listeningState = "stopping"
+      sendControl("listening_stop")
+      await stopAudioCapture()
+    }
     seenNotificationIds.add(id)
     const notification = {
       id,
@@ -792,9 +813,9 @@ export async function initializeEvenExperience(
         listeningState === "starting" ||
         listeningState === "listening"
       ) {
+        listeningState = "stopping"
         sendControl("listening_stop")
       }
-      listeningState = "idle"
       await stopAudioCapture()
     }
 
@@ -852,6 +873,11 @@ export async function initializeEvenExperience(
           return
         }
         latestTranscript = message.text
+        // Speech within the window owns the turn; do not cut it off at 30s.
+        if (listeningState === "listening") {
+          cancelAssistantResponseWindow()
+          visibleAssistant = undefined
+        }
         if (sleeping) {
           reportStatus("Sleeping")
           return
@@ -932,6 +958,7 @@ export async function initializeEvenExperience(
           return
         }
         if (message.error) {
+          cancelAssistantResponseWindow()
           awaitingResponse = false
           latestTranscript = ""
           reportStatus(message.error)
@@ -941,6 +968,10 @@ export async function initializeEvenExperience(
           }
         } else {
           awaitingResponse = false
+          if (responseLifecycle.active && !currentNotification) {
+            await startListening(true)
+            return
+          }
           reportStatus("Connected")
           if (currentNotification) {
             return
@@ -968,6 +999,7 @@ export async function initializeEvenExperience(
     }
 
     if (listeningState === "listening") {
+      cancelAssistantResponseWindow()
       listeningState = "stopping"
       awaitingResponse = true
       const sent = sendControl("listening_stop")
@@ -1009,17 +1041,29 @@ export async function initializeEvenExperience(
       return
     }
 
+    await startListening()
+  }
+
+  async function startListening(followUp = false) {
+    if (!active || sleeping || currentNotification || !socketIsOpen() ||
+        listeningState !== "idle" || (followUp && !responseLifecycle.active)) {
+      return
+    }
     latestTranscript = ""
     idlePrompt = undefined
-    resetAssistantInteraction()
-    visibleAssistant = undefined
+    if (!followUp) {
+      resetAssistantInteraction()
+      visibleAssistant = undefined
+    }
     listeningState = "starting"
     reportStatus("Starting microphone")
-    await setPage(buildCompactPage("STARTING MICROPHONE"), "compact")
+    if (!followUp) {
+      await setPage(buildCompactPage("STARTING MICROPHONE"), "compact")
+    }
     if (!active || listeningState !== "starting") {
       return
     }
-    const started = await startAudioCapture()
+    const started = await startAudioCapture(followUp)
     if (!active || listeningState !== "starting") {
       if (started) {
         await stopAudioCapture()
@@ -1028,6 +1072,11 @@ export async function initializeEvenExperience(
     }
     if (!started) {
       listeningState = "idle"
+      if (followUp && !responseLifecycle.active) {
+        reportStatus("Connected")
+        await showReady()
+        return
+      }
       reportStatus("Microphone unavailable")
       await showIdlePrompt("MIC UNAVAILABLE  ·  TAP TO RETRY")
       return
@@ -1043,7 +1092,11 @@ export async function initializeEvenExperience(
     }
     listeningState = "listening"
     reportStatus("Listening")
-    await showListening()
+    if (followUp && visibleAssistant) {
+      await setPage(buildMessagePage(visibleAssistant.message, "LISTENING  ·  FOLLOW UP"), "message")
+    } else {
+      await showListening()
+    }
   }
 
   const stopEvents = bridge.onEvenHubEvent((event) => {
