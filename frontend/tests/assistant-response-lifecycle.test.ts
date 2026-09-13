@@ -1,98 +1,50 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { AssistantResponseLifecycle } from "../src/even/assistant-response-lifecycle.js"
 
-import {
-  AssistantResponseLifecycle,
-  responseDisplayMilliseconds,
-} from "../src/even/assistant-response-lifecycle.js"
-
-test("calculates bounded reading time from response words", () => {
-  assert.equal(responseDisplayMilliseconds(""), 5_000)
-  assert.equal(
-    responseDisplayMilliseconds("one two three four five six seven eight nine ten"),
-    5_333,
-  )
-  assert.equal(
-    responseDisplayMilliseconds(Array.from({ length: 100 }, () => "word").join(" ")),
-    14_000,
-  )
-})
-
-test("keeps follow-up listening open for 30 seconds from the reply", () => {
-  type Task = { callback: () => void; delayMs: number; canceled: boolean }
-  const tasks: Task[] = []
-  const events: string[] = []
+function fixture() {
+  const tasks: { callback: () => void; delay: number; canceled: boolean }[] = []
+  let expired = 0
   const lifecycle = new AssistantResponseLifecycle({
-    onDisplayExpired: () => events.push("display"),
-    onConversationExpired: () => events.push("conversation"),
-    scheduleTimer: (callback, delayMs) => {
-      const task = { callback, delayMs, canceled: false }
+    onConversationExpired: () => expired++,
+    scheduleTimer: (callback, delay) => {
+      const task = { callback, delay, canceled: false }
       tasks.push(task)
       return task
     },
-    cancelTimer: (handle) => {
-      const task = handle as Task
-      task.canceled = true
-    },
+    cancelTimer: handle => { (handle as typeof tasks[number]).canceled = true },
   })
+  return { tasks, lifecycle, expired: () => expired }
+}
 
-  assert.equal(lifecycle.begin("a short response"), 5_000)
-  assert.equal(lifecycle.active, true)
-  assert.deepEqual(tasks.map((task) => task.delayMs), [5_000, 30_000])
-
-  tasks[0].callback()
-  assert.deepEqual(events, ["display"])
-  assert.equal(lifecycle.active, true)
-
-  tasks[1].callback()
-  assert.deepEqual(events, ["display", "conversation"])
-  assert.equal(lifecycle.active, false)
+test("only microphone capture expires; no reading deadline is scheduled", () => {
+  const f = fixture()
+  f.lifecycle.begin()
+  assert.deepEqual(f.tasks.map(task => task.delay), [30_000])
+  assert.equal(f.lifecycle.active, true)
+  f.tasks[0].callback()
+  assert.equal(f.expired(), 1)
+  assert.equal(f.lifecycle.active, false)
 })
 
-test("canceling invalidates both pending deadlines", () => {
-  type Task = { callback: () => void; canceled: boolean }
-  const tasks: Task[] = []
-  let callbacks = 0
-  const lifecycle = new AssistantResponseLifecycle({
-    onDisplayExpired: () => callbacks += 1,
-    onConversationExpired: () => callbacks += 1,
-    scheduleTimer: (callback) => {
-      const task = { callback, canceled: false }
-      tasks.push(task)
-      return task
-    },
-    cancelTimer: (handle) => {
-      const task = handle as Task
-      task.canceled = true
-    },
-  })
-
-  lifecycle.begin("response")
-  lifecycle.cancel()
-  assert.equal(lifecycle.active, false)
-  assert.ok(tasks.every((task) => task.canceled))
-  for (const task of tasks) {
-    task.callback()
-  }
-  assert.equal(callbacks, 0)
+test("cancel invalidates callbacks already queued by the clock", () => {
+  const f = fixture()
+  f.lifecycle.begin()
+  f.lifecycle.cancel()
+  f.tasks[0].callback()
+  assert.equal(f.tasks[0].canceled, true)
+  assert.equal(f.expired(), 0)
+  assert.equal(f.lifecycle.active, false)
 })
 
-test("a new reply invalidates old callbacks and keeps the same 30-second deadline", () => {
-  const tasks: { callback: () => void; delayMs: number }[] = []
-  const events: string[] = []
-  const lifecycle = new AssistantResponseLifecycle({
-    onDisplayExpired: () => events.push("display"),
-    onConversationExpired: () => events.push("conversation"),
-    scheduleTimer: (callback, delayMs) => tasks.push({ callback, delayMs }),
-    cancelTimer: () => {},
-  })
-  lifecycle.begin("Short reply")
-  lifecycle.begin("word ".repeat(100))
-  tasks[0].callback()
-  tasks[1].callback()
-  assert.deepEqual(events, [])
-  assert.equal(lifecycle.active, true)
-  assert.deepEqual(tasks.slice(2).map(task => task.delayMs), [14_000, 30_000])
-  tasks[3].callback()
-  assert.equal(lifecycle.active, false)
+test("a new reply replaces the old microphone deadline", () => {
+  const f = fixture()
+  f.lifecycle.begin()
+  f.lifecycle.begin()
+  f.tasks[0].callback()
+  assert.equal(f.expired(), 0)
+  assert.equal(f.lifecycle.active, true)
+  f.tasks[1].callback()
+  assert.equal(f.expired(), 1)
+  assert.equal(f.lifecycle.active, false)
 })

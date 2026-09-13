@@ -12,6 +12,8 @@ import type {
 import {
   buildCompactPage,
   buildMessagePage,
+  buildMessageStatus,
+  glassesMessagePages,
   buildSleepPage,
   buildTranscriptContent,
   buildTranscriptPage,
@@ -25,6 +27,7 @@ import {
   renderGlassesPage,
   resumeGlassesPage,
   upgradeTranscriptText,
+  upgradeMessageStatus,
 } from "./glasses-page-host"
 import {
   parseRealtimeServerMessage,
@@ -57,7 +60,7 @@ type SocketBinding = {
   handleMessage: (event: MessageEvent<unknown>) => void
 }
 
-const THINKING_FRAME_DELAY_MS = 480
+const TRANSCRIPT_UPDATE_MS = 250
 const CONNECTION_TIMEOUT_MS = 10_000
 const RELEASE_CLICK_SUPPRESSION_MS = 750
 
@@ -139,7 +142,11 @@ export async function initializeEvenExperience(
   let socketBinding: SocketBinding | undefined
   let listeningState: ListeningState = "idle"
   let surface: DisplaySurface = "compact"
-  let transcriptLayoutHasBody = false
+  let transcriptLayoutThinking = false
+  let lastTranscriptContent = ""
+  let messagePageIndex = 0
+  let pendingTranscript: RealtimeServerMessage | undefined
+  let transcriptTimer: ReturnType<typeof setTimeout> | undefined
   let locationStarted = false
   let awaitingResponse = false
   let sleeping = false
@@ -153,8 +160,6 @@ export async function initializeEvenExperience(
   let idlePrompt: string | undefined
   let latestTranscript = ""
   let thinking = false
-  let thinkingFrame = 0
-  let thinkingTimer: ReturnType<typeof setTimeout> | undefined
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined
   let reconnectAttempt = 0
   let connecting = false
@@ -172,7 +177,6 @@ export async function initializeEvenExperience(
   })
   const responseLifecycle = new AssistantResponseLifecycle({
     onConversationExpired: handleResponseConversationExpired,
-    onDisplayExpired: handleResponseDisplayExpired,
   })
   function reportStatus(status: string) {
     if (active) {
@@ -209,26 +213,6 @@ export async function initializeEvenExperience(
     cancelAssistantResponseWindow()
   }
 
-  function handleResponseDisplayExpired(): void {
-    const presentation = visibleAssistant
-    void enqueueTransition(async () => {
-      if (
-        !presentation ||
-        !responseLifecycle.active ||
-        visibleAssistant !== presentation ||
-        sleeping ||
-        currentNotification ||
-        listeningState !== "listening" ||
-        thinking ||
-        awaitingResponse
-      ) {
-        return
-      }
-      visibleAssistant = undefined
-      await showListening()
-    })
-  }
-
   function handleResponseConversationExpired(): void {
     const generation = responseWindowGeneration
     void enqueueTransition(async () => {
@@ -248,7 +232,11 @@ export async function initializeEvenExperience(
         await stopAudioCapture()
       }
       reportStatus("Connected")
-      await showReady()
+      if (visibleAssistant && surface === "message") {
+        await refreshAnswerStatus()
+      } else {
+        await showReady()
+      }
     })
   }
 
@@ -265,10 +253,6 @@ export async function initializeEvenExperience(
 
   function clearThinkingAnimation() {
     thinking = false
-    if (thinkingTimer !== undefined) {
-      clearTimeout(thinkingTimer)
-      thinkingTimer = undefined
-    }
   }
 
   function clearReconnectTimer() {
@@ -295,49 +279,27 @@ export async function initializeEvenExperience(
     if (!active || currentNotification) {
       return
     }
-    const frame = thinking ? thinkingFrame : undefined
-    const hasBody = latestTranscript.trim().length > 0
+    const content = buildTranscriptContent(latestTranscript)
     const canUpgrade =
-      surface === "transcript" && transcriptLayoutHasBody === hasBody
+      surface === "transcript" && transcriptLayoutThinking === thinking
 
     if (canUpgrade) {
-      const upgraded = await upgradeTranscriptText(
-        buildTranscriptContent(latestTranscript, frame),
-      )
+      if (lastTranscriptContent === content) return
+      const upgraded = await upgradeTranscriptText(content)
       if (upgraded || !active) {
+        lastTranscriptContent = content
         return
       }
     }
 
     await setPage(
-      buildTranscriptPage(latestTranscript, frame),
+      buildTranscriptPage(latestTranscript, thinking),
       "transcript",
     )
     if (active) {
-      transcriptLayoutHasBody = hasBody
+      transcriptLayoutThinking = thinking
+      lastTranscriptContent = content
     }
-  }
-
-  function scheduleThinkingFrame() {
-    if (
-      !active ||
-      !thinking ||
-      currentNotification ||
-      thinkingTimer !== undefined
-    ) {
-      return
-    }
-    thinkingTimer = setTimeout(() => {
-      thinkingTimer = undefined
-      void enqueueTransition(async () => {
-        if (!thinking || currentNotification) {
-          return
-        }
-        thinkingFrame = (thinkingFrame + 1) % 3
-        await renderTranscript()
-        scheduleThinkingFrame()
-      })
-    }, THINKING_FRAME_DELAY_MS)
   }
 
   async function startThinkingAnimation() {
@@ -345,9 +307,7 @@ export async function initializeEvenExperience(
       return
     }
     thinking = true
-    thinkingFrame = 0
     await renderTranscript()
-    scheduleThinkingFrame()
   }
 
   async function showReady() {
@@ -384,7 +344,30 @@ export async function initializeEvenExperience(
 
   async function showPresentation(presentation: GlassesMessage) {
     clearThinkingAnimation()
+    messagePageIndex = 0
     await setPage(buildMessagePage(presentation), "message")
+  }
+
+  function answerAction(): string {
+    return responseLifecycle.active && listeningState === "listening"
+      ? "Listening" : "Tap to talk"
+  }
+
+  async function refreshAnswerStatus() {
+    if (!visibleAssistant || surface !== "message" || currentNotification) return
+    const message = visibleAssistant.message
+    const action = answerAction()
+    const upgraded = await upgradeMessageStatus(buildMessageStatus(message, action, messagePageIndex))
+    if (!upgraded) await setPage(buildMessagePage(message, action, messagePageIndex), "message")
+  }
+
+  async function turnMessagePage(direction: number) {
+    const message = currentNotification?.message ?? visibleAssistant?.message
+    if (sleeping || surface !== "message" || !message) return
+    const index = Math.max(0, Math.min(glassesMessagePages(message).length - 1, messagePageIndex + direction))
+    if (index === messagePageIndex) return
+    messagePageIndex = index
+    await setPage(buildMessagePage(message, currentNotification ? "Tap to dismiss" : answerAction(), index), "message")
   }
 
   async function showAssistantPresentation(
@@ -394,7 +377,7 @@ export async function initializeEvenExperience(
     clearThinkingAnimation()
     try {
       await setPage(
-        buildMessagePage(presentation.message, "OPENING FOLLOW-UP"),
+        buildMessagePage(presentation.message, "Opening mic", messagePageIndex),
         "message",
       )
     } catch (error) {
@@ -411,7 +394,7 @@ export async function initializeEvenExperience(
       return
     }
     // Do not spend the user's reading time waiting for the SDK render call.
-    responseLifecycle.begin(presentation.sourceText)
+    responseLifecycle.begin()
     // The server ignores starts until the previous transcription has finished.
     // If it is still stopping, listening_stopped will open the follow-up stream.
     if (listeningState === "idle") {
@@ -432,6 +415,7 @@ export async function initializeEvenExperience(
     }
 
     resetAssistantInteraction()
+    takePendingTranscript()
     clearThinkingAnimation()
     latestTranscript = ""
     sleeping = true
@@ -670,8 +654,25 @@ export async function initializeEvenExperience(
       if (!message) {
         return
       }
+      if (socket !== nextSocket) return
+      if (message.type === "user_transcript" && message.text) {
+        // Receipt, not delayed rendering, owns the follow-up deadline.
+        if (listeningState === "listening") cancelAssistantResponseWindow()
+        pendingTranscript = message
+        if (transcriptTimer === undefined) {
+          transcriptTimer = setTimeout(() => {
+            const pending = takePendingTranscript()
+            void enqueueTransition(async () => {
+              if (socket === nextSocket && pending) await handleServerMessage(pending)
+            })
+          }, TRANSCRIPT_UPDATE_MS)
+        }
+        return
+      }
+      const pending = takePendingTranscript()
       void enqueueTransition(async () => {
         if (socket === nextSocket) {
+          if (pending) await handleServerMessage(pending)
           await handleServerMessage(message)
         }
       })
@@ -684,6 +685,14 @@ export async function initializeEvenExperience(
     socketBinding = { socket: nextSocket, handleMessage, handleClose }
     nextSocket.addEventListener("message", handleMessage)
     nextSocket.addEventListener("close", handleClose)
+  }
+
+  function takePendingTranscript() {
+    if (transcriptTimer !== undefined) clearTimeout(transcriptTimer)
+    transcriptTimer = undefined
+    const pending = pendingTranscript
+    pendingTranscript = undefined
+    return pending
   }
 
   async function handleConnected(nextSocket: WebSocket) {
@@ -805,6 +814,7 @@ export async function initializeEvenExperience(
     presentation: AssistantPresentation,
   ): Promise<void> {
     resetAssistantInteraction()
+    messagePageIndex = 0
     awaitingResponse = false
     clearThinkingAnimation()
     visibleAssistant = undefined
@@ -976,7 +986,9 @@ export async function initializeEvenExperience(
           if (currentNotification) {
             return
           }
-          if (wasThinking && latestTranscript) {
+          if (visibleAssistant && surface === "message") {
+            await refreshAnswerStatus()
+          } else if (wasThinking && latestTranscript) {
             await renderTranscript()
           } else if (wasThinking || stoppedUnexpectedly) {
             await showReady()
@@ -1014,6 +1026,11 @@ export async function initializeEvenExperience(
         return
       }
       reportStatus("Thinking")
+      // A tap on a still-visible reply dismisses it and closes follow-up.
+      if (visibleAssistant && surface === "message" && !latestTranscript) {
+        await showReady()
+        return
+      }
       await startThinkingAnimation()
       return
     }
@@ -1074,7 +1091,8 @@ export async function initializeEvenExperience(
       listeningState = "idle"
       if (followUp && !responseLifecycle.active) {
         reportStatus("Connected")
-        await showReady()
+        if (visibleAssistant) await refreshAnswerStatus()
+        else await showReady()
         return
       }
       reportStatus("Microphone unavailable")
@@ -1093,7 +1111,7 @@ export async function initializeEvenExperience(
     listeningState = "listening"
     reportStatus("Listening")
     if (followUp && visibleAssistant) {
-      await setPage(buildMessagePage(visibleAssistant.message, "LISTENING  ·  FOLLOW UP"), "message")
+      await refreshAnswerStatus()
     } else {
       await showListening()
     }
@@ -1124,11 +1142,19 @@ export async function initializeEvenExperience(
       }
       return
     }
-    if (isLongPressEvent(event)) {
+    if (eventType === OsEventTypeList.SCROLL_TOP_EVENT) {
+      void enqueueTransition(() => turnMessagePage(-1))
+    } else if (eventType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
+      void enqueueTransition(() => turnMessagePage(1))
+    } else if (isLongPressEvent(event)) {
       suppressClicksUntil = Date.now() + RELEASE_CLICK_SUPPRESSION_MS
       void enqueueTransition(enterSleep)
     } else if (isClickEvent(event) && Date.now() >= suppressClicksUntil) {
-      void enqueueTransition(handleClick)
+      const pending = takePendingTranscript()
+      void enqueueTransition(async () => {
+        if (pending) await handleServerMessage(pending)
+        await handleClick()
+      })
     }
   })
 
@@ -1144,6 +1170,7 @@ export async function initializeEvenExperience(
       return teardownPromise ?? Promise.resolve()
     }
     active = false
+    takePendingTranscript()
     connectGeneration += 1
     connectionAbort?.abort()
     connectionAbort = undefined

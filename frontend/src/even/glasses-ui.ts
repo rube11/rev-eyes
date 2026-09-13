@@ -1,210 +1,103 @@
-import {
-  RebuildPageContainer,
-  TextContainerProperty,
-} from "@evenrealities/even_hub_sdk"
+import { RebuildPageContainer, TextContainerProperty } from "@evenrealities/even_hub_sdk"
+import { paginateGlassesText, wrapGlassesText } from "./text-layout"
 
 const DISPLAY_WIDTH = 576
 const DISPLAY_HEIGHT = 288
-const COMPACT_CARD_WIDTH = 220
-const COMPACT_CARD_HEIGHT = 36
-const TRANSCRIPT_CARD_WIDTH = 360
-const TRANSCRIPT_CARD_HEIGHT = 56
-const DISPLAY_MARGIN = 24
+const MARGIN = 24
+const CONTENT_WIDTH = DISPLAY_WIDTH - MARGIN * 2
 
-export type GlassesMessage =
-  | { kind: "answer"; body: string }
-  | { kind: "results"; intro: string; items: string[] }
-  | { kind: "reminder" | "update"; body: string }
-
-const listItemPattern = /^\s*(?:[-*•]|\d{1,2}[.)])\s+(.+)$/u
-
-function truncate(value: string, limit: number): string {
-  const characters = Array.from(value.trim())
-  return characters.length <= limit
-    ? characters.join("")
-    : `${characters.slice(0, limit - 1).join("")}…`
-}
-
-function tail(value: string, limit: number): string {
-  const characters = Array.from(value.trim())
-  return characters.length <= limit
-    ? characters.join("")
-    : `…${characters.slice(-(limit - 1)).join("")}`
-}
-
-function cleanLine(value: string): string {
-  return value
-    .replace(/\[(.+?)\]\(https?:\/\/[^)]+\)/giu, "$1")
-    .replace(/\*\*|__/gu, "")
-    .replace(/`([^`]+)`/gu, "$1")
-    .replace(/^#{1,6}\s+/u, "")
-    .replace(/\s+/gu, " ")
-    .trim()
+export type GlassesMessage = {
+  kind: "answer" | "results" | "reminder" | "update"
+  body: string
 }
 
 function cleanText(value: string): string {
-  const listMarkers = Array.from(value.matchAll(/(?:^|\s)\d{1,2}[.)]\s+/gu))
-  const expanded = listMarkers.length > 1
-    ? value.replace(/\s+(?=\d{1,2}[.)]\s+)/gu, "\n")
-    : value
-
-  return expanded
-    .replace(/\r\n?/gu, "\n")
+  return value.replace(/\r\n?/gu, "\n")
+    .replace(/\[(.+?)\]\(https?:\/\/[^)]+\)/giu, "$1")
+    .replace(/\*\*|__/gu, "")
+    .replace(/`([^`]+)`/gu, "$1")
     .split("\n")
-    .map(cleanLine)
-    .join("\n")
-    .replace(/\n{3,}/gu, "\n\n")
-    .trim()
+    .map(line => line.replace(/^#{1,6}\s+/u, "").replace(/\s+/gu, " ").trim())
+    .join("\n").replace(/\n{3,}/gu, "\n\n").trim()
 }
 
-export function presentGlassesMessage(text: string): GlassesMessage {
-  const cleaned = cleanText(text)
-  if (/^reminder\s*:/iu.test(cleaned)) {
-    return {
-      kind: "reminder",
-      body: truncate(cleaned.replace(/^reminder\s*:\s*/iu, ""), 250),
-    }
-  }
-  if (/^possible update on\s+/iu.test(cleaned)) {
-    return { kind: "update", body: truncate(cleaned, 250) }
-  }
+export function presentGlassesMessage(value: string): GlassesMessage {
+  const body = cleanText(value)
+  const kind = /^reminder\s*:/iu.test(body) ? "reminder"
+    : /^possible update on\s+/iu.test(body) ? "update"
+      : body.split("\n").filter(line => /^(?:[-*•]|\d{1,2}[.)])\s+/u.test(line)).length >= 2
+        ? "results" : "answer"
+  // Keep the entire answer, including every list item and its closing paragraph.
+  return { kind, body }
+}
 
-  const lines = cleaned.split("\n").filter(Boolean)
-  const firstItem = lines.findIndex((line) => listItemPattern.test(line))
-  const items = lines
-    .map((line) => line.match(listItemPattern)?.[1])
-    .filter((item): item is string => Boolean(item))
-
-  if (items.length >= 2) {
-    return {
-      kind: "results",
-      intro: truncate(lines.slice(0, firstItem).join(" ") || "Top matches", 74),
-      items: items.slice(0, 3),
-    }
-  }
-  return { kind: "answer", body: truncate(cleaned, 340) }
+export function glassesMessagePages(message: GlassesMessage): string[] {
+  return paginateGlassesText(message.body)
 }
 
 function text(data: Partial<TextContainerProperty>): TextContainerProperty {
-  return new TextContainerProperty(data)
+  return new TextContainerProperty({ borderWidth: 0, paddingLength: 0, ...data })
 }
 
 function page(containers: TextContainerProperty[]): RebuildPageContainer {
-  return new RebuildPageContainer({
-    containerTotalNum: containers.length,
-    textObject: containers,
+  return new RebuildPageContainer({ containerTotalNum: containers.length, textObject: containers })
+}
+
+function status(content: string, name = "message-status"): TextContainerProperty {
+  return text({
+    xPosition: MARGIN, yPosition: 244, width: CONTENT_WIDTH, height: 32,
+    containerID: 2, containerName: name, content, isEventCapture: 0,
   })
 }
 
 export function buildSleepPage(): RebuildPageContainer {
-  return page([
-    text({
-      xPosition: 0,
-      yPosition: 0,
-      width: DISPLAY_WIDTH,
-      height: DISPLAY_HEIGHT,
-      containerID: 1,
-      containerName: "sleep-wake",
-      // Keep an event target mounted without drawing anything in the HUD.
-      content: " ",
-      isEventCapture: 1,
-    }),
-  ])
+  return page([text({
+    xPosition: 0, yPosition: 0, width: DISPLAY_WIDTH, height: DISPLAY_HEIGHT,
+    containerID: 1, containerName: "sleep-wake", content: " ", isEventCapture: 1,
+  })])
 }
 
 export function buildCompactPage(content: string): RebuildPageContainer {
+  return page([text({
+    xPosition: MARGIN, yPosition: 228, width: CONTENT_WIDTH, height: 56,
+    containerID: 1, containerName: "compact-control",
+    content: wrapGlassesText(cleanText(content)).slice(0, 2).join("\n"), isEventCapture: 1,
+  })])
+}
+
+export function buildTranscriptContent(content: string): string {
+  // Only the live transcript is a moving window; saved answers are never cut.
+  return wrapGlassesText(cleanText(content).replace(/\n/gu, " ")).slice(-2).join("\n") || " "
+}
+
+export function buildTranscriptPage(content: string, thinking = false): RebuildPageContainer {
   return page([
     text({
-      xPosition: DISPLAY_WIDTH - COMPACT_CARD_WIDTH - DISPLAY_MARGIN,
-      yPosition: DISPLAY_HEIGHT - COMPACT_CARD_HEIGHT - DISPLAY_MARGIN,
-      width: COMPACT_CARD_WIDTH,
-      height: COMPACT_CARD_HEIGHT,
-      borderWidth: 1,
-      borderRadius: 10,
-      paddingLength: 8,
-      containerID: 1,
-      containerName: "compact-control",
-      content: truncate(cleanText(content).replace(/\n/gu, " "), 28).toUpperCase(),
-      isEventCapture: 1,
+      xPosition: MARGIN, yPosition: 148, width: CONTENT_WIDTH, height: 80,
+      containerID: 1, containerName: "live-transcript",
+      content: buildTranscriptContent(content), isEventCapture: 1,
     }),
+    status(thinking ? "Thinking" : "Listening", "transcript-status"),
   ])
 }
 
-export function buildTranscriptPage(
-  content: string,
-  thinkingFrame?: number,
-): RebuildPageContainer {
-  const transcriptContent = buildTranscriptContent(content, thinkingFrame)
-  const thinking = thinkingFrame !== undefined
-  const transcript = tail(
-    cleanText(content).replace(/\n/gu, " "),
-    thinking ? 66 : 82,
-  )
-  const width = transcript ? TRANSCRIPT_CARD_WIDTH : COMPACT_CARD_WIDTH
-  const height = transcript ? TRANSCRIPT_CARD_HEIGHT : COMPACT_CARD_HEIGHT
-  return page([
-    text({
-      xPosition: DISPLAY_WIDTH - width - DISPLAY_MARGIN,
-      yPosition: DISPLAY_HEIGHT - height - DISPLAY_MARGIN,
-      width,
-      height,
-      borderWidth: 1,
-      borderRadius: 10,
-      paddingLength: transcript ? 9 : 8,
-      containerID: 1,
-      containerName: "live-transcript",
-      content: transcriptContent,
-      isEventCapture: 1,
-    }),
-  ])
-}
-
-export function buildTranscriptContent(
-  content: string,
-  thinkingFrame?: number,
-): string {
-  const thinking = thinkingFrame !== undefined
-  const label = thinking
-    ? `THINKING ${"·".repeat((thinkingFrame % 3) + 1)}`
-    : "YOU"
-  const transcript = tail(
-    cleanText(content).replace(/\n/gu, " "),
-    thinking ? 66 : 82,
-  )
-  return transcript ? `${label}  /  ${transcript}` : label
-}
-
-function resultText(item: string, index: number): string {
-  const number = String(index + 1).padStart(2, "0")
-  return `${number}  ${truncate(item, 52)}`
+export function buildMessageStatus(message: GlassesMessage, action: string, pageIndex = 0): string {
+  const count = glassesMessagePages(message).length
+  const current = Math.max(0, Math.min(count - 1, pageIndex))
+  return count > 1 ? `${current + 1}/${count} · Scroll · ${action}` : action
 }
 
 export function buildMessagePage(
-  message: GlassesMessage,
-  action = "TAP TO DISMISS",
+  message: GlassesMessage, action = "Tap to dismiss", pageIndex = 0,
 ): RebuildPageContainer {
-  const label = message.kind.toUpperCase()
-  const content = message.kind === "results"
-    ? `${label}  /  ${truncate(message.intro, 44)}\n\n${message.items
-      .map(resultText)
-      .join("\n\n")}`
-    : message.kind === "answer"
-      ? truncate(message.body.replace(/\n+/gu, " "), 300)
-      : `${label}\n\n${truncate(message.body.replace(/\n+/gu, " "), 280)}`
-
+  const pages = glassesMessagePages(message)
+  const index = Math.max(0, Math.min(pages.length - 1, pageIndex))
   return page([
     text({
-      xPosition: DISPLAY_MARGIN,
-      yPosition: 34,
-      width: DISPLAY_WIDTH - DISPLAY_MARGIN * 2,
-      height: 220,
-      borderWidth: 1,
-      borderRadius: 14,
-      paddingLength: 14,
-      containerID: 1,
-      containerName: `${message.kind}-output`,
-      content: `${content}\n\n${action}`,
-      isEventCapture: 1,
+      xPosition: MARGIN, yPosition: 20, width: CONTENT_WIDTH, height: 208,
+      containerID: 1, containerName: `${message.kind}-output`,
+      content: pages[index], isEventCapture: 1,
     }),
+    status(buildMessageStatus(message, action, index)),
   ])
 }
