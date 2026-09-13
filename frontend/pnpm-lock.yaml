@@ -27,6 +27,9 @@ importers:
       '@evenrealities/evenhub-cli':
         specifier: 0.1.13
         version: 0.1.13(@types/node@24.12.2)(typescript@6.0.3)
+      '@evenrealities/evenhub-simulator':
+        specifier: 0.9.5
+        version: 0.9.5
       '@types/node':
         specifier: ^24.12.2
         version: 24.12.2
@@ -187,6 +190,46 @@ packages:
     hasBin: true
     peerDependencies:
       typescript: ^5
+
+  '@evenrealities/evenhub-simulator@0.9.5':
+    resolution: {integrity: sha512-pGqNoog8BI9qatQQOwqgaz+jWHvktjIcrCIHkWNrwGpN8oCZIkz9oIFdtstpk6CG/QiO3NhFuaVpInBYb3KhfQ==}
+    hasBin: true
+
+  '@evenrealities/sim-darwin-arm64@0.9.5':
+    resolution: {integrity: sha512-BDEFOrECb/jyocMuw5LbVew/KgBElgtLAQgNngcvOf6/Rx6GLadeLDj3LMKLbbhIYHLmM5cx1HX8AgSjon3kvg==}
+    cpu: [arm64]
+    os: [darwin]
+    hasBin: true
+
+  '@evenrealities/sim-darwin-x64@0.9.5':
+    resolution: {integrity: sha512-fZ+FcZUZ0kQqY56vmUI9blPpNEQ1bGmdyrvAz/ibxpXd4dtD8ej4qjGKPl1ZI2+OSTy7b4oS512o/day+Cp+FA==}
+    cpu: [x64]
+    os: [darwin]
+    hasBin: true
+
+  '@evenrealities/sim-linux-arm64@0.9.5':
+    resolution: {integrity: sha512-HAYPupYYQ75d/+fevQtTk6ZNxNuU5/ZFJ/GUmd6mhIwsiiCAUr1rXyO1wJJwP59gQut/Y62rEdh950yzP+5oag==}
+    cpu: [arm64]
+    os: [linux]
+    hasBin: true
+
+  '@evenrealities/sim-linux-x64@0.9.5':
+    resolution: {integrity: sha512-N2Aoye8an5CWew7WaVREFXOtdt4cxta9pzpZq0ojd+IInGjBvTilqepPn5PJay8w3Al5m25G5nz+JT/KepTzgg==}
+    cpu: [x64]
+    os: [linux]
+    hasBin: true
+
+  '@evenrealities/sim-win32-arm64@0.9.5':
+    resolution: {integrity: sha512-lXCRa9cFz9YXzWhLlct3Qk7WpolUl/zbWZFfZYMYCaCnDT1i5ME1Obs4eQv65e/IPjNL7nu67Ff4Dwp1WCrG8g==}
+    cpu: [arm64]
+    os: [win32]
+    hasBin: true
+
+  '@evenrealities/sim-win32-x64@0.9.5':
+    resolution: {integrity: sha512-AwN4O1tOxFr+VwXKZjCHb353HyJOSHTlagnsgoOehabNY1p3GmlpUfwD2R30uSCKUNO4gEzEKtbkSCbncqcZ4g==}
+    cpu: [x64]
+    os: [win32]
+    hasBin: true
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -402,36 +445,42 @@ packages:
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [arm64]
     os: [linux]
+    libc: [glibc]
 
   '@rolldown/binding-linux-arm64-musl@1.0.0-rc.17':
     resolution: {integrity: sha512-b/CgbwAJpmrRLp02RPfhbudf5tZnN9nsPWK82znefso832etkem8H7FSZwxrOI9djcdTP7U6YfNhbRnh7djErg==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [arm64]
     os: [linux]
+    libc: [musl]
 
   '@rolldown/binding-linux-ppc64-gnu@1.0.0-rc.17':
     resolution: {integrity: sha512-4EII1iNGRUN5WwGbF/kOh/EIkoDN9HsupgLQoXfY+D1oyJm7/F4t5PYU5n8SWZgG0FEwakyM8pGgwcBYruGTlA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [ppc64]
     os: [linux]
+    libc: [glibc]
 
   '@rolldown/binding-linux-s390x-gnu@1.0.0-rc.17':
     resolution: {integrity: sha512-AH8oq3XqQo4IibpVXvPeLDI5pzkpYn0WiZAfT05kFzoJ6tQNzwRdDYQ45M8I/gslbodRZwW8uxLhbSBbkv96rA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [s390x]
     os: [linux]
+    libc: [glibc]
 
   '@rolldown/binding-linux-x64-gnu@1.0.0-rc.17':
     resolution: {integrity: sha512-cLnjV3xfo7KslbU41Z7z8BH/E1y5mzUYzAqih1d1MDaIGZRCMqTijqLv76/P7fyHuvUcfGsIpqCdddbxLLK9rA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [x64]
     os: [linux]
+    libc: [glibc]
 
   '@rolldown/binding-linux-x64-musl@1.0.0-rc.17':
     resolution: {integrity: sha512-0phclDw1spsL7dUB37sIARuis2tAgomCJXAHZlpt8PXZ4Ba0dRP1e+66lsRqrfhISeN9bEGNjQs+T/Fbd7oYGw==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [x64]
     os: [linux]
+    libc: [musl]
 
   '@rolldown/binding-openharmony-arm64@1.0.0-rc.17':
     resolution: {integrity: sha512-0ag/hEgXOwgw4t8QyQvUCxvEg+V0KBcA6YuOx9g0r02MprutRF5dyljgm3EmR02O292UX7UeS6HzWHAl6KgyhA==}
@@ -933,24 +982,28 @@ packages:
     engines: {node: '>= 12.0.0'}
     cpu: [arm64]
     os: [linux]
+    libc: [glibc]
 
   lightningcss-linux-arm64-musl@1.32.0:
     resolution: {integrity: sha512-UpQkoenr4UJEzgVIYpI80lDFvRmPVg6oqboNHfoH4CQIfNA+HOrZ7Mo7KZP02dC6LjghPQJeBsvXhJod/wnIBg==}
     engines: {node: '>= 12.0.0'}
     cpu: [arm64]
     os: [linux]
+    libc: [musl]
 
   lightningcss-linux-x64-gnu@1.32.0:
     resolution: {integrity: sha512-V7Qr52IhZmdKPVr+Vtw8o+WLsQJYCTd8loIfpDaMRWGUZfBOYEJeyJIkqGIDMZPwPx24pUMfwSxxI8phr/MbOA==}
     engines: {node: '>= 12.0.0'}
     cpu: [x64]
     os: [linux]
+    libc: [glibc]
 
   lightningcss-linux-x64-musl@1.32.0:
     resolution: {integrity: sha512-bYcLp+Vb0awsiXg/80uCRezCYHNg1/l3mt0gzHnWV9XP1W5sKa5/TCdGWaR/zBM2PeF/HbsQv/j2URNOiVuxWg==}
     engines: {node: '>= 12.0.0'}
     cpu: [x64]
     os: [linux]
+    libc: [musl]
 
   lightningcss-win32-arm64-msvc@1.32.0:
     resolution: {integrity: sha512-8SbC8BR40pS6baCM8sbtYDSwEVQd4JlFTOlaD3gWGHfThTcABnNDBda6eTZeqbofalIJhFx0qKzgHJmcPTnGdw==}
@@ -1387,6 +1440,33 @@ snapshots:
       zod: 4.3.6
     transitivePeerDependencies:
       - '@types/node'
+
+  '@evenrealities/evenhub-simulator@0.9.5':
+    optionalDependencies:
+      '@evenrealities/sim-darwin-arm64': 0.9.5
+      '@evenrealities/sim-darwin-x64': 0.9.5
+      '@evenrealities/sim-linux-arm64': 0.9.5
+      '@evenrealities/sim-linux-x64': 0.9.5
+      '@evenrealities/sim-win32-arm64': 0.9.5
+      '@evenrealities/sim-win32-x64': 0.9.5
+
+  '@evenrealities/sim-darwin-arm64@0.9.5':
+    optional: true
+
+  '@evenrealities/sim-darwin-x64@0.9.5':
+    optional: true
+
+  '@evenrealities/sim-linux-arm64@0.9.5':
+    optional: true
+
+  '@evenrealities/sim-linux-x64@0.9.5':
+    optional: true
+
+  '@evenrealities/sim-win32-arm64@0.9.5':
+    optional: true
+
+  '@evenrealities/sim-win32-x64@0.9.5':
+    optional: true
 
   '@humanfs/core@0.19.2':
     dependencies:

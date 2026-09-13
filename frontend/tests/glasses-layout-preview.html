@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Glasses layout preview — no audio or backend</title>
+<style>body{background:#151515;color:#eee;font:16px system-ui;padding:24px}button{padding:12px;margin:8px}pre{white-space:pre-wrap}</style>
+<h1>Glasses layout preview</h1>
+<p>Synthetic text only. No microphone, account, or backend connection.</p>
+<button id="previous">Previous page</button><button id="next">Next page</button>
+<button id="transcript">Transcript</button><button id="thinking">Thinking</button>
+<pre id="status"></pre>
+<script type="module">
+  import { buildMessagePage, buildTranscriptPage, glassesMessagePages, presentGlassesMessage } from '../src/even/glasses-ui.ts'
+  import { getEvenBridge, renderGlassesPage } from '../src/even/glasses-page-host.ts'
+  import { OsEventTypeList } from '@evenrealities/even_hub_sdk'
+  const message = presentGlassesMessage('Here is the complete plan. Take each step at your own pace.\n\n- Prepare the ingredients and read the instructions.\n- Set aside time for a short walk.\n- Review tomorrow’s schedule.\n- Put the remaining supplies away.\n\nThis closing paragraph must remain available on the last page. Nothing should cover the final line.')
+  let index = 0
+  const pages = glassesMessagePages(message)
+  async function show() {
+    await renderGlassesPage(buildMessagePage(message, 'Tap to talk', index))
+    document.getElementById('status').textContent = `Page ${index + 1}/${pages.length}\n${pages[index]}`
+  }
+  async function turn(direction) { index = Math.max(0, Math.min(pages.length - 1, index + direction)); await show() }
+  document.getElementById('previous').onclick = () => turn(-1)
+  document.getElementById('next').onclick = () => turn(1)
+  document.getElementById('transcript').onclick = () => renderGlassesPage(buildTranscriptPage('This is a longer live transcript. Only its latest two wrapped lines should appear without covering the status below.'))
+  document.getElementById('thinking').onclick = () => renderGlassesPage(buildTranscriptPage('The final words should stay still while the answer is being prepared.', true))
+  const bridge = await getEvenBridge()
+  bridge.onEvenHubEvent(event => {
+    const type = event.textEvent?.eventType ?? event.sysEvent?.eventType ?? event.listEvent?.eventType
+    if (type === OsEventTypeList.SCROLL_TOP_EVENT) void turn(-1)
+    if (type === OsEventTypeList.SCROLL_BOTTOM_EVENT) void turn(1)
+  })
+  await show()
+</script>
+</html>
