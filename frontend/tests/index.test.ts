@@ -1,4 +1,5 @@
 import "./assistant-response-lifecycle.test.js"
+import "./text-layout.test.js"
 import "./audio.test.js"
 import "./realtime-protocol.test.js"
 import "./realtime-socket.test.js"
