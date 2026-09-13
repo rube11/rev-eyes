@@ -25,6 +25,7 @@ import { Workspace } from '../features/workspace/Workspace'
 import { ConnectionSession } from '../even/connection-session'
 import { updateWorkspaceErrors } from '../features/workspace/workspaceLoad'
 import type { WorkspaceErrors, WorkspaceLoadResult } from '../features/workspace/workspaceLoad'
+import { Homepage } from '../features/landing/Homepage'
 import { SignIn } from '../features/auth/SignIn'
 import { sessionStorage, supabase } from '../shared/api/supabase'
 
@@ -93,6 +94,14 @@ function App() {
   const [session, setSession] = useState<Session | null | undefined>(
     isDemoMode ? null : undefined,
   )
+  const [showSignIn, setShowSignIn] = useState(window.location.hash === '#sign-in')
+
+  useEffect(() => {
+    const onHashChange = () => setShowSignIn(window.location.hash === '#sign-in')
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
+
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [authError, setAuthError] = useState('')
@@ -171,8 +180,11 @@ function App() {
     }
 
     let active = true
-    let unsubscribeAuth: (() => void) | undefined
     const updateSession = (nextSession: Session | null) => {
+      if (nextSession && window.location.hash === '#sign-in') {
+        window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
+        setShowSignIn(false)
+      }
       const nextUserId = nextSession?.user.id
       if (sessionUserIdRef.current !== nextUserId) {
         sessionUserIdRef.current = nextUserId
@@ -187,26 +199,30 @@ function App() {
       }
       setSession(nextSession)
     }
+    // Ignore Supabase's initial event; getSession owns restoration. Later
+    // explicit sign-ins must still work if restoration returned an error.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (active && event !== 'INITIAL_SESSION') {
+        setSessionError('')
+        updateSession(nextSession)
+      }
+    })
     void supabase.auth.getSession().then(({ data, error }) => {
       if (active) {
         if (error) {
           setSessionError('Could not restore your sign-in. Check your connection and retry.')
-        } else {
-          updateSession(data.session)
-          // Subscribe only after restoration succeeds. A failed native read
-          // must show the retry screen, not trigger an initial signed-out event.
-          const subscription = supabase.auth.onAuthStateChange((_event, nextSession) => {
-            if (active && _event !== 'INITIAL_SESSION') updateSession(nextSession)
-          })
-          unsubscribeAuth = () => subscription.data.subscription.unsubscribe()
         }
+        updateSession(error ? null : data.session)
       }
     }).catch(() => {
-      if (active) setSessionError('Could not restore your sign-in. Reopen the app to retry.')
+      if (active) {
+        updateSession(null)
+        setSessionError('Could not restore your sign-in. Reopen the app to retry.')
+      }
     })
     return () => {
       active = false
-      unsubscribeAuth?.()
+      subscription.unsubscribe()
     }
   }, [])
 
@@ -434,6 +450,7 @@ function App() {
         setAuthError('We could not sign you in. Check your email and password and try again.')
         return
       }
+      setSessionError('')
       setPassword('')
       setGlassesStatus('Connecting')
     } catch {
@@ -608,31 +625,34 @@ function App() {
     )
   }
 
-  if (storageError || sessionError) {
-    return (
-      <main className="boot-screen">
-        <span className="boot-screen__brand">rev/eyes</span>
-        <p role="alert">{storageError || sessionError}</p>
-        <button className="auth-submit" onClick={() => window.location.reload()}>Reload app</button>
-      </main>
-    )
-  }
-
-  if (session === undefined) {
+  // Storage failure must never expose a workspace or block the public homepage.
+  if (!storageError && !sessionError && session === undefined) {
     return <LoadingScreen label="Checking your account" />
   }
 
-  if (!session) {
+  if (storageError || !session) {
+    if (!showSignIn) return <Homepage />
     return (
       <SignIn
         email={email}
         password={password}
-        error={authError}
+        error={storageError || authError || sessionError}
         submitting={submitting}
+        storageUnavailable={Boolean(storageError)}
         onEmailChange={setEmail}
         onPasswordChange={setPassword}
         onSubmit={signIn}
       />
+    )
+  }
+
+  if (sessionError) {
+    return (
+      <main className="boot-screen">
+        <span className="boot-screen__brand">rev/eyes</span>
+        <p role="alert">{sessionError}</p>
+        <button className="auth-submit" onClick={() => window.location.reload()}>Reload app</button>
+      </main>
     )
   }
 

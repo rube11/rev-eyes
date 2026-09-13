@@ -6,6 +6,7 @@ export function SignIn({
   password,
   error,
   submitting,
+  storageUnavailable = false,
   onEmailChange,
   onPasswordChange,
   onSubmit,
@@ -14,6 +15,7 @@ export function SignIn({
   password: string
   error: string
   submitting: boolean
+  storageUnavailable?: boolean
   onEmailChange: (value: string) => void
   onPasswordChange: (value: string) => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
@@ -71,7 +73,7 @@ export function SignIn({
       <section className="auth-access">
         <form className="auth-form" onSubmit={onSubmit}>
           <header>
-            <span className="auth-wordmark">rev/eyes</span>
+            <a className="auth-wordmark" href="#">rev/eyes</a>
             <h2>Sign in</h2>
           </header>
           <label className="field">
@@ -103,7 +105,7 @@ export function SignIn({
               {error}
             </p>
           ) : null}
-          <button className="auth-submit" type="submit" disabled={submitting}>
+          <button className="auth-submit" type="submit" disabled={submitting || storageUnavailable}>
             <span>{submitting ? 'Signing in…' : 'Sign in'}</span>
           </button>
         </form>
