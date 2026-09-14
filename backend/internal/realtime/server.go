@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/rube11/rev-eyes/backend/internal/ambient"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
@@ -67,7 +68,10 @@ type CandidateAudioHandler func(
 	format stt.AudioFormat,
 ) (string, error)
 
+type AmbientListener func(context.Context, <-chan ambient.Input, func(ambient.Clip)) error
+
 type Handlers struct {
+	Ambient                AmbientListener
 	Authenticate           Authenticator
 	CandidateAudio         CandidateAudioHandler
 	CandidateMaxConcurrent int
@@ -228,6 +232,9 @@ func (s *Server) serveConnection(
 	candidateWorkerDone := make(chan struct{})
 	go s.runCandidateWorker(ctx, scope, conn, candidateJobs, candidateWorkerDone)
 
+	var ambientActive bool
+	var ambientCancel context.CancelFunc
+	var ambientInputs chan ambient.Input
 	var audio chan []byte
 	var transcription <-chan error
 	var pendingCandidate *candidateAudioHeader
@@ -244,8 +251,19 @@ func (s *Server) serveConnection(
 	}()
 
 	finishTranscription := func(transcriptionErr error) error {
+		if ambientCancel != nil {
+			ambientCancel()
+			ambientCancel = nil
+		}
 		audio = nil
 		transcription = nil
+		ambientActive = false
+		// The reader may have queued a frame concurrently with worker exit.
+		for len(ambientInputs) > 0 {
+			event := <-ambientInputs
+			clearCandidateAudio(event.PCM)
+		}
+		ambientInputs = nil
 
 		message := serverMessage{Type: listeningStoppedMessageType}
 		if transcriptionErr != nil && !errors.Is(transcriptionErr, context.Canceled) {
@@ -329,10 +347,24 @@ func (s *Server) serveConnection(
 					}
 					continue
 				}
+				if ambientActive {
+					if len(incoming.data) > 32000 {
+						clearCandidateAudio(incoming.data)
+						return errors.New("ambient audio frame exceeds one second")
+					}
+					select {
+					case ambientInputs <- ambient.Input{PCM: incoming.data}:
+					default:
+						clearCandidateAudio(incoming.data)
+						return errors.New("ambient audio queue full")
+					}
+					continue
+				}
 				if audio == nil {
 					clearCandidateAudio(incoming.data)
 					continue
 				}
+
 				select {
 				case audio <- incoming.data:
 				case transcriptionErr := <-transcription:
@@ -368,7 +400,7 @@ func (s *Server) serveConnection(
 
 			case candidateAudioMessageType:
 				header := message.candidateHeader()
-				if audioMode == audioModeLegacy || transcription != nil {
+				if audioMode == audioModeLegacy || audioMode == audioModeAmbient || transcription != nil {
 					slog.WarnContext(ctx, "rejected candidate audio during legacy transcription")
 					if err := conn.WriteJSON(candidateDoneMessage(message.ID)); err != nil {
 						return fmt.Errorf("write candidate mode rejection: %w", err)
@@ -418,7 +450,57 @@ func (s *Server) serveConnection(
 					)
 				}
 
+			case "ambient_start":
+				if transcription != nil {
+					continue
+				}
+				if audioMode == audioModeUnset {
+					audioMode = audioModeAmbient
+				}
+				if s.handlers.Ambient == nil || s.handlers.CandidateAudio == nil || audioMode != audioModeAmbient {
+					if err := conn.WriteJSON(serverMessage{Type: listeningStoppedMessageType, Error: "Server listening unavailable"}); err != nil {
+						return err
+					}
+					continue
+				}
+				audioMode = audioModeAmbient
+				ambientActive = true
+				ambientInputs = make(chan ambient.Input, 16)
+				ambientCtx, stopAmbient := context.WithCancel(ctx)
+				ambientCancel = stopAmbient
+				done := make(chan error, 1)
+				transcription = done
+				go func(input <-chan ambient.Input) {
+					done <- s.listenAmbient(ambientCtx, conn, input, candidateJobs)
+				}(ambientInputs)
+
+			case "ambient_stop":
+				if ambientActive {
+					ambientCancel()
+					if err := finishTranscription(<-transcription); err != nil {
+						return err
+					}
+				}
+			case "ambient_reply_arm", "ambient_reply_disarm":
+				if ambientActive {
+					select {
+					case ambientInputs <- ambient.Input{Control: message.Type}:
+					default:
+						return errors.New("ambient control queue full")
+					}
+				}
 			case listeningStartMessageType:
+				if ambientActive {
+					select {
+					case ambientInputs <- ambient.Input{Control: message.Type}:
+					default:
+						return errors.New("ambient control queue full")
+					}
+					continue
+				}
+				if audioMode == audioModeAmbient {
+					continue
+				} // Never fall back to paid streaming.
 				if audioMode == audioModeCandidate {
 					if err := conn.WriteJSON(serverMessage{
 						Type:  listeningStoppedMessageType,
@@ -440,6 +522,14 @@ func (s *Server) serveConnection(
 				}(audio)
 
 			case listeningStopMessageType:
+				if ambientActive {
+					select {
+					case ambientInputs <- ambient.Input{Control: message.Type}:
+					default:
+						return errors.New("ambient control queue full")
+					}
+					continue
+				}
 				if transcription == nil {
 					if err := conn.WriteJSON(serverMessage{Type: listeningStoppedMessageType}); err != nil {
 						return fmt.Errorf("write listening state: %w", err)

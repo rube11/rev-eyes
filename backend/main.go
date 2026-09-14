@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rube11/rev-eyes/backend/internal/ambient"
 	"github.com/rube11/rev-eyes/backend/internal/assistant"
 	"github.com/rube11/rev-eyes/backend/internal/assistant/openai"
 	"github.com/rube11/rev-eyes/backend/internal/auth"
@@ -28,6 +29,7 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/realtime"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
+	"github.com/rube11/rev-eyes/backend/internal/stt/moonshine"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 	"github.com/rube11/rev-eyes/backend/internal/tool/location"
 	"github.com/rube11/rev-eyes/backend/internal/tool/websearch"
@@ -159,9 +161,27 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	var ambientHandler realtime.AmbientListener
+	if environmentEnabled(os.Getenv("SERVER_MOONSHINE_ENABLED")) {
+		concurrencyValue := strings.TrimSpace(os.Getenv("SERVER_MOONSHINE_MAX_CONCURRENCY"))
+		if concurrencyValue == "" {
+			concurrencyValue = "1"
+		}
+		concurrency, parseErr := parseCandidateAudioConcurrency(concurrencyValue)
+		if parseErr != nil {
+			return fmt.Errorf("SERVER_MOONSHINE_MAX_CONCURRENCY: %w", parseErr)
+		}
+		factory, factoryErr := moonshine.New(os.Getenv("MOONSHINE_MODEL_DIR"), concurrency)
+		if factoryErr != nil {
+			return factoryErr
+		}
+		defer factory.Close()
+		listener := &ambient.Listener{Factory: factory}
+		ambientHandler = listener.Run
+	}
 	var candidateAudioHandler realtime.CandidateAudioHandler
 	candidateMaxConcurrent := 0
-	if environmentEnabled(os.Getenv("CANDIDATE_AUDIO_ENABLED")) {
+	if environmentEnabled(os.Getenv("CANDIDATE_AUDIO_ENABLED")) || ambientHandler != nil {
 		candidateMaxConcurrent, err = parseCandidateAudioConcurrency(
 			os.Getenv("CANDIDATE_AUDIO_MAX_CONCURRENCY"),
 		)
@@ -284,6 +304,7 @@ func run() error {
 	go registrationDispatcher.Run(ctx)
 	go scheduledEventDispatcher.Run(ctx)
 	realtimeServer := realtime.NewServerWithHub(transcriber, realtimeHub, realtime.Handlers{
+		Ambient:                ambientHandler,
 		Authenticate:           tickets.Consume,
 		CandidateAudio:         candidateAudioHandler,
 		CandidateMaxConcurrent: candidateMaxConcurrent,

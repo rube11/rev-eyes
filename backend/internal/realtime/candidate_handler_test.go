@@ -282,3 +282,67 @@ func testCandidateJob(id string, audio []byte) candidateJob {
 		audio: audio,
 	}
 }
+
+func TestAmbientStopCancelsActiveAndQueuedCandidatesButKeepsWorker(t *testing.T) {
+	ambientCtx, stopAmbient := context.WithCancel(context.Background())
+	defer stopAmbient()
+	started := make(chan byte, 3)
+	canceled := make(chan struct{})
+	server := NewServer(echoTranscriber{}, Handlers{
+		CandidateMaxConcurrent: 1,
+		CandidateAudio: func(ctx context.Context, audio []byte, _ stt.AudioFormat) (string, error) {
+			first := audio[0]
+			started <- first
+			if first == 1 {
+				<-ctx.Done()
+				close(canceled)
+				return "", ctx.Err()
+			}
+			return "", nil
+		},
+	})
+	first := testCandidateJob("ambient-active", []byte{1, 0})
+	first.sessionContext = ambientCtx
+	queued := testCandidateJob("ambient-queued", []byte{2, 0})
+	queued.sessionContext = ambientCtx
+	if !server.tryAdmitCandidate(&first) || !server.tryAdmitCandidate(&queued) {
+		t.Fatal("admission failed")
+	}
+	jobs := make(chan candidateJob, 3)
+	done := make(chan struct{})
+	writer := make(channelJSONWriter, 3)
+	go server.runCandidateWorker(context.Background(), tool.Scope{}, writer, jobs, done)
+	jobs <- first
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first clip not started")
+	}
+	jobs <- queued
+	stopAmbient()
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("active transcription not canceled")
+	}
+	jobs <- testCandidateJob("next-session", []byte{3, 0})
+	close(jobs)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("worker leaked")
+	}
+	if next := <-started; next != 3 {
+		t.Fatalf("canceled queued clip reached transcription: %d", next)
+	}
+	for _, pcm := range [][]byte{first.audio, queued.audio} {
+		for _, b := range pcm {
+			if b != 0 {
+				t.Fatal("canceled PCM retained")
+			}
+		}
+	}
+	if len(server.candidateAdmissions) != 0 {
+		t.Fatal("canceled candidates retained admission")
+	}
+}

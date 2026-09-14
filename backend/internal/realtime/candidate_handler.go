@@ -15,10 +15,13 @@ import (
 const defaultCandidateProcessingTimeout = 60 * time.Second
 
 type candidateJob struct {
-	header        candidateAudioHeader
-	audio         []byte
-	acceptedAt    time.Time
-	admissionHeld bool
+	// Ambient jobs share the listener's lifetime; legacy uploaded clips use the
+	// connection context passed to the worker instead.
+	sessionContext context.Context
+	header         candidateAudioHeader
+	audio          []byte
+	acceptedAt     time.Time
+	admissionHeld  bool
 }
 
 func candidateDoneMessage(id string) serverMessage {
@@ -78,7 +81,11 @@ func (s *Server) processCandidateBeforeDeadline(
 	if acceptedAt.IsZero() {
 		acceptedAt = time.Now()
 	}
-	jobCtx, cancel := context.WithDeadline(ctx, acceptedAt.Add(timeout))
+	processingContext := ctx
+	if job.sessionContext != nil {
+		processingContext = job.sessionContext
+	}
+	jobCtx, cancel := context.WithDeadline(processingContext, acceptedAt.Add(timeout))
 	terminalSent := s.processCandidate(jobCtx, scope, writer, job)
 	timedOut := errors.Is(jobCtx.Err(), context.DeadlineExceeded)
 	cancel()
