@@ -998,3 +998,416 @@ MOONSHINE_EXPORT void moonshine_free_tts_synthesizer(
    ``languages`` is comma-separated CLI tags (same as ``moonshine_create_*``
    ``language``); an empty string (or NULL) means all known languages (union of
    keys).
+   ``options`` / ``options_count``: same ``moonshine_option_t`` entries as
+   grapheme phonemizer / G2P
+   (``g2p_root``, ``spanish_narrow_obstruents``, ``oov_onnx_override``, …).
+   TTS-only keys
+   (``voice``, deprecated ``vocoder_engine`` / ``engine``, Piper/Kokoro paths)
+   are ignored here. Non-empty values for in-memory override keys add those
+   canonical key names to the list. On success, writes a comma-separated list to
+   ``*out_dependencies_json`` and returns
+   ``MOONSHINE_ERROR_NONE``. The buffer is allocated with ``malloc``; release
+   with ``free``. On failure (e.g. unknown language token), logs and returns a
+   non-zero error code and sets
+   ``*out_dependencies_json`` to NULL.
+*/
+MOONSHINE_EXPORT int32_t moonshine_get_g2p_dependencies(
+    const char *languages, const struct moonshine_option_t *options,
+    uint64_t options_count, char **out_dependencies_json);
+
+/* Returns merged G2P + TTS vocoder download dependencies as a JSON object with
+   a ``groups`` array (same shape as ``moonshine_get_stt_dependencies``). Each
+   group is ``{ "base_url", "files": [{name,url,size,checksum,checksum_type}]
+   }``.
+   ``languages`` is comma-separated; empty or NULL means all known languages.
+   ``options`` / ``options_count``: same entries as
+   ``moonshine_create_tts_synthesizer_from_files``
+   (``voice`` with optional ``kokoro_`` / ``piper_`` / ``zipvoice_`` prefix,
+   ``g2p_root``, …). Vocoder keys follow Kokoro vs Piper vs ZipVoice selection.
+
+   When ``voice`` selects ZipVoice, an additional group with
+   ``"role":"clone_asr"`` lists the catalog-default STT for the language
+   (including the attention decoder for word timestamps). Local ``name``s are
+   prefixed ``clone_asr/``;
+   ``url``s point at the STT CDN. Bindings should download those files under
+   ``g2p_root/clone_asr/`` (or pass ``clone_asr/...`` memory keys on create).
+
+   On success, ``*out_dependencies_json`` is a NUL-terminated JSON object; free
+   with ``free``.
+*/
+MOONSHINE_EXPORT int32_t moonshine_get_tts_dependencies(
+    const char *languages, const struct moonshine_option_t *options,
+    uint64_t options_count, char **out_dependencies_json);
+
+/* Returns known TTS voices for the requested languages with availability state.
+   ``languages`` is comma-separated; empty or NULL means all registered catalog
+   languages (same tag set as G2P dependencies) that have a resolved TTS layout.
+   ``options`` / ``options_count``: same entries as
+   ``moonshine_create_tts_synthesizer_from_files``
+   (``voice`` prefix selects vocoder for listing; ``vocoder_engine`` /
+   ``engine`` are ignored; Piper/Kokoro path overrides). For accurate ``found``
+   / ``missing``, set an asset root with
+   ``g2p_root`` or the aliases ``path_root``, ``tts_root``, or ``model_root``
+   (see
+   ``MoonshineTTSOptions::parse_options``). If none are set, the implementation
+   uses the process current working directory. Language bindings typically
+   default this to their download/cache directory. The ``voice`` option does not
+   filter the list.
+
+   On success, ``*out_voices_json`` is a NUL-terminated JSON object mapping each
+   language tag to a JSON array of objects ``{"id":"<voice>","state":"found"}``
+   or ``{"id":"<voice>","state":"missing"}``. Voice ids are prefixed with
+   ``kokoro_`` or ``piper_``. Kokoro uses the upstream Kokoro-82M voice id
+   catalog plus any extra ``*.kokorovoice`` in the bundle; Piper lists the
+   language default voice stem plus every voice in the resolved voices
+   directory, in either shipped form (``<stem>.ort``, or the split
+   ``<stem>.model.ort`` plus ``<stem>.weights.ort`` pair). ``found`` means the
+   asset is on disk or supplied via the in-memory file map like
+   ``MoonshineTTS``. Free with ``free``.
+*/
+MOONSHINE_EXPORT int32_t moonshine_get_tts_voices(
+    const char *languages, const struct moonshine_option_t *options,
+    uint64_t options_count, char **out_voices_json);
+
+/* ------------------------------ MODEL DOWNLOAD MANIFESTS ----------------- */
+
+/* Returns the download manifest for a speech-to-text transcription model as a
+   JSON object. This lets language bindings and applications fetch exactly the
+   files a model needs from the CDN (https://download.moonshine.ai) without
+   hardcoding the file layout, then load the model from the resulting
+   directory with moonshine_load_transcriber_from_files.
+
+   ``language`` is a language code (for example ``"en"``) or English name (for
+   example ``"English"``); it must not be empty.
+
+   ``options`` / ``options_count`` accept the same option list you would pass to
+   moonshine_load_transcriber_from_files, so a binding can build one set of
+   options and use it both to resolve this manifest and to load the model.
+   Options that do not change which files are needed are ignored; the ones that
+   do are honored:
+     - ``model_arch``: one of the MOONSHINE_MODEL_ARCH_* constants as a decimal
+       string. When omitted, the default (first) model for the language is
+       used. Note: MOONSHINE_MODEL_ARCH_BASE_STREAMING is defined but not
+       currently published in the model catalog.
+     - ``word_timestamps`` (bool): when true, the optional attention decoder
+       (``decoder_kv_with_attention.ort`` for streaming, or
+       ``decoder_with_attention.ort`` for non-streaming) is included for
+       languages that publish it. This file is only needed to produce word-level
+       timestamps and roughly doubles the download, so it defaults to false.
+     - ``include_spelling`` / ``spelling`` (bool), or ``spelling_model_path``
+       (non-empty path): when set and a spelling model is published for the
+       language, its files are appended as an extra group. Defaults to false.
+   Other options are ignored.
+
+   On success, writes a NUL-terminated JSON object to
+   ``*out_dependencies_json`` and returns ``MOONSHINE_ERROR_NONE``. The shape
+   is:
+     ``{"groups":[{"base_url":"https://download.moonshine.ai/model/tiny-en/quantized/tiny-en","files":[{"name":"encoder_model.ort","url":"https://download.moonshine.ai/model/tiny-en/quantized/tiny-en/encoder_model.ort","size":12345,"checksum":"abc==","checksum_type":"crc32c"},
+   ...]}]}`` Each entry in ``files`` is an object with ``name`` (canonical
+   filename),
+   ``url`` (fully-qualified download URL, i.e. ``base_url + "/" + name``),
+   ``size`` (bytes, or null when unknown), ``checksum`` (base64 digest, or ""),
+   and ``checksum_type`` (e.g. "crc32c", or ""). A model is a single group,
+   plus an optional second group for the spelling model (which uses a different
+   ``base_url``). The buffer is allocated with ``malloc``; release it with
+   ``free``. On failure (empty language, unknown language, or a language that
+   does not publish the requested architecture) returns a non-zero error code,
+   logs which case it is (listing the architectures that language does publish
+   when the language is known), and sets ``*out_dependencies_json`` to NULL. */
+MOONSHINE_EXPORT int32_t moonshine_get_stt_dependencies(
+    const char *language, const struct moonshine_option_t *options,
+    uint64_t options_count, char **out_dependencies_json);
+
+/* Returns the download manifest for an embedding model as a JSON object with
+   the same shape as moonshine_get_stt_dependencies. Load the downloaded
+   directory with moonshine_create_embedding_model.
+
+   ``model_name`` is an embedding model id (for example
+   ``"embeddinggemma-300m"``); pass NULL or an empty string to use the default
+   model.
+
+   ``options`` / ``options_count`` recognize ``variant`` (aliases:
+   ``model_variant``): one of ``"q4"`` or ``"q8"``. ``"fp32"``, ``"fp16"``,
+   and ``"q4f16"`` are no longer supported. When omitted, the model's
+   default variant is used. Other
+   options are ignored. The manifest lists the single all-in-one model file
+   (``model_<variant>.ort``) and ``tokenizer.bin``.
+
+   On success, writes a NUL-terminated JSON object to
+   ``*out_dependencies_json`` (single group, same file-object shape as
+   moonshine_get_stt_dependencies) and returns ``MOONSHINE_ERROR_NONE``; free
+   with ``free``. On failure (unknown model or variant) returns a non-zero
+   error code and sets ``*out_dependencies_json`` to NULL. */
+MOONSHINE_EXPORT int32_t moonshine_get_embedding_dependencies(
+    const char *model_name, const struct moonshine_option_t *options,
+    uint64_t options_count, char **out_dependencies_json);
+
+/* Returns the download manifest for the speaker diarization models as a JSON
+   object with the same shape as moonshine_get_stt_dependencies. Fetch these
+   whenever you intend to pass ``identify_speakers=true`` to a transcriber, and
+   point the transcriber at them with the ``diarization_model_dir`` option (or
+   supply them as ``segmentation.ort`` / ``embedding.ort`` entries to
+   moonshine_load_transcriber_from_memory_files).
+
+   There is one set of diarization models and it has no variants, so this takes
+   no arguments beyond the output pointer. The manifest is a single group of two
+   files totalling about 8.2 MB.
+
+   These models were compiled into the library before version 26.8; a
+   transcriber built with ``identify_speakers=true`` and no diarization models
+   now fails to load rather than falling back. See docs/diarization-models.md.
+
+   The buffer is allocated with ``malloc``; release it with ``free``. Returns
+   ``MOONSHINE_ERROR_NONE`` on success. */
+MOONSHINE_EXPORT int32_t
+moonshine_get_diarization_dependencies(char **out_dependencies_json);
+
+/* Returns the full speech-to-text model catalog as a JSON object, so bindings
+   can build language/model pickers and resolve defaults without their own copy
+   of the tables. The shape is:
+     ``{"languages":[{"code":"en","english_name":"English","models":[{"model_arch":9,"download_url":"https://...","is_default":true},
+   ...]}, ...]}`` The buffer is allocated with ``malloc``; release it with
+   ``free``. Returns
+   ``MOONSHINE_ERROR_NONE`` on success. */
+MOONSHINE_EXPORT int32_t moonshine_get_stt_catalog(char **out_catalog_json);
+
+/* Returns the full text embedding model catalog as a JSON object.
+   The shape is:
+     ``{"models":[{"name":"embeddinggemma-300m","english_name":"Embedding Gemma
+   300M","download_url":"https://...","variants":["q4",
+   ...],"default_variant":"q4"}]}`` The buffer is allocated with ``malloc``;
+   release it with ``free``. Returns
+   ``MOONSHINE_ERROR_NONE`` on success. */
+MOONSHINE_EXPORT int32_t
+moonshine_get_embedding_catalog(char **out_catalog_json);
+
+/* Synthesizes text to speech.
+   ``options`` / ``options_count``: optional per-call overrides using the same
+   ``name`` / ``value`` convention as the synthesizer constructor. Currently
+   only
+   ``speed`` is honored for the duration of this call (Kokoro ONNX input and
+   Piper length scale); other entries are ignored. Pass NULL / 0 to use the
+   synthesizer default speed from construction.
+
+   Returns zero on success, or a non-zero error code on failure.
+*/
+MOONSHINE_EXPORT int32_t moonshine_text_to_speech(
+    int32_t tts_synthesizer_handle, const char *text,
+    const struct moonshine_option_t *options, uint64_t options_count,
+    float **out_audio_data, uint64_t *out_audio_data_size,
+    int32_t *out_sample_rate);
+
+/* Synthesizes speech directly from International Phonetic Alphabet (IPA)
+   phonemes, skipping the grapheme-to-phoneme conversion that
+   ``moonshine_text_to_speech`` performs internally. ``phonemes`` should be an
+   IPA string in the same format produced by ``moonshine_text_to_phonemes`` (a
+   grapheme-to-phonemizer created for the matching language). This lets callers
+   inspect or edit the phonemes between the text-to-phonemes and
+   phonemes-to-speech steps (e.g. to fix pronunciation of a name). The
+   phonemes are normalized to the active vocoder's phoneme inventory before
+   synthesis, so passing the raw ``moonshine_text_to_phonemes`` output for the
+   same language yields audio equivalent to ``moonshine_text_to_speech`` on the
+   original text.
+
+   ``options`` / ``options_count`` behave exactly like
+   ``moonshine_text_to_speech``: only ``speed`` is honored for the duration of
+   the call; pass NULL / 0 to use the synthesizer defaults.
+
+   Returns zero on success, or a non-zero error code on failure.
+*/
+MOONSHINE_EXPORT int32_t moonshine_phonemes_to_speech(
+    int32_t tts_synthesizer_handle, const char *phonemes,
+    const struct moonshine_option_t *options, uint64_t options_count,
+    float **out_audio_data, uint64_t *out_audio_data_size,
+    int32_t *out_sample_rate);
+
+/* --------------------------- STREAMING TEXT TO SPEECH -------------------- */
+
+/* Splits a passage into the utterances a streaming synthesizer would speak one
+   at a time. Exposed on its own so a caller can queue work itself, or show the
+   same boundaries in a UI that the audio will follow.
+
+   ``language`` is the same tag as ``moonshine_create_tts_synthesizer_*``; it
+   selects the abbreviation list ("Dr." and "z.B." do not end a sentence) and
+   the terminators that count (``。！？`` need no trailing space, ``;`` is a
+   question mark only in Greek). NULL or empty applies the language-neutral
+   rules.
+
+   Recognised ``options``:
+     ``split_on_colon``  (bool, default true) break after ":" so a lead-in like
+                         "Warning:" starts playing before the rest is
+                         synthesized.
+     ``min_codepoints``  (int, default 0) merge a unit shorter than this into
+                         the next one, so a stray "Hi." is not spoken alone.
+
+   On success ``*out_units_json`` is a NUL-terminated JSON array of strings;
+   release it with ``moonshine_free_buffer``. An empty or whitespace-only input
+   gives ``[]``. */
+MOONSHINE_EXPORT int32_t
+moonshine_tts_split_utterances(const char *language, const char *text,
+                               const struct moonshine_option_t *options,
+                               uint64_t options_count, char **out_units_json);
+
+/* One piece of synthesized audio from a streaming session. Owned by the
+   synthesizer and valid only until the next call on the same stream, the same
+   convention transcript_t uses. Copy anything you need to keep. */
+struct tts_chunk_t {
+  /* Mono PCM in [-1, 1]. Never NULL when a chunk was returned. */
+  const float *audio_data;
+  uint64_t audio_data_count;
+  int32_t sample_rate;
+  /* The text this chunk covers, or "" when the engine cut on acoustic frames
+     rather than a knowable span of characters (only the first chunk of such an
+     utterance carries text). */
+  const char *text;
+  /* Which queued utterance this came from, counting from 1. Lets a consumer
+     tell where one reply ends and the next begins without tracking flushes. */
+  uint64_t utterance_id;
+  /* Non-zero on the last chunk of an utterance. */
+  int8_t is_final;
+};
+
+/* Streaming synthesis on ``tts_synthesizer_handle``.
+
+   Pull-based and synchronous: text goes in with ``moonshine_tts_push_text`` as
+   it becomes available, and audio comes out of ``moonshine_tts_next_chunk`` a
+   chunk at a time. No thread is created and no callback is invoked, so a
+   binding can drive it from whatever worker suits its platform.
+
+   There is no session object. A synthesizer runs one generation at a time:
+   pushing text starts one, ``moonshine_tts_end_input`` finishes it, and
+   ``moonshine_tts_cancel`` abandons it. While one is in flight the one-shot
+   ``moonshine_tts_synthesize`` returns ``MOONSHINE_ERROR_BUSY`` rather than
+   competing for the model. Calls are internally serialized, so driving the
+   stream from a worker thread is safe; they block each other.
+
+   How much audio a chunk holds depends on the engine. Kokoro cuts inside a
+   sentence where its prosody/decoder stages are installed, which starts
+   playback sooner; everything else emits one chunk per sentence, which still
+   starts on the first clause rather than the last. */
+
+/* Appends text. Pieces are concatenated verbatim, so feeding an LLM's output
+   token by token reassembles the words correctly. Starts a generation if none
+   is running.
+
+   Text is held back until it forms a complete utterance, because synthesizing
+   half a sentence gets the prosody wrong. Anything left over waits for the
+   next push, a ``moonshine_tts_flush``, or ``moonshine_tts_end_input``.
+
+   Returns ``MOONSHINE_ERROR_NONE`` on success. */
+MOONSHINE_EXPORT int32_t moonshine_tts_push_text(int32_t tts_synthesizer_handle,
+                                                 const char *text);
+
+/* Queues whatever text is buffered even though it does not look like a
+   complete sentence. Use it where the caller knows the thought is finished but
+   the punctuation does not say so. */
+MOONSHINE_EXPORT int32_t moonshine_tts_flush(int32_t tts_synthesizer_handle);
+
+/* Declares that no more text is coming. Flushes, then makes
+   ``moonshine_tts_next_chunk`` report ``MOONSHINE_TTS_END_OF_STREAM`` once the
+   queue drains, which also returns the synthesizer to idle. */
+MOONSHINE_EXPORT int32_t
+moonshine_tts_end_input(int32_t tts_synthesizer_handle);
+
+/* Drops queued text, abandons the generation in progress and returns the
+   synthesizer to idle. This is the barge-in path: when someone interrupts the
+   assistant, stop the reply. Safe to call when nothing is streaming. */
+MOONSHINE_EXPORT int32_t moonshine_tts_cancel(int32_t tts_synthesizer_handle);
+
+/* Non-zero while a streaming generation is in flight. */
+MOONSHINE_EXPORT int32_t
+moonshine_tts_is_streaming(int32_t tts_synthesizer_handle);
+
+/* Produces the next chunk of audio, synthesizing it during the call.
+
+   This never waits on another thread: it blocks only for as long as the model
+   takes, and returns immediately when there is nothing to do. ``flags`` is
+   reserved and must be 0. The returned chunk is owned by the synthesizer and
+   is valid only until the next call on it.
+
+   Returns ``MOONSHINE_ERROR_NONE`` with ``*out_chunk`` set when a chunk was
+   produced, ``MOONSHINE_TTS_NEED_TEXT`` when no complete utterance is buffered
+   (push more, or flush), ``MOONSHINE_TTS_END_OF_STREAM`` after
+   ``moonshine_tts_end_input`` and the queue has drained,
+   ``MOONSHINE_TTS_CANCELLED`` once after ``moonshine_tts_cancel`` discarded a
+   reply, or a negative error code. ``*out_chunk`` is set to NULL for every
+   non-success status. */
+MOONSHINE_EXPORT int32_t
+moonshine_tts_next_chunk(int32_t tts_synthesizer_handle, uint32_t flags,
+                         const struct tts_chunk_t **out_chunk);
+
+/* Creates a grapheme to phonemizer from files on disk.
+   Returns a non-negative handle on success, or a negative error code on
+   failure. The error code can be converted to a human-readable string using
+   moonshine_error_to_string.
+
+   Lexicons and bundled ONNX assets are resolved under ``g2p_root`` (or the
+   process current working directory when ``g2p_root`` / ``model_root`` is
+   unset) using the same canonical relative keys as
+   ``MoonshineG2POptions::files`` in the C++ API (for example
+   ``en_us/dict_filtered_heteronyms.tsv``,
+   ``zh_hans/roberta_chinese_base_upos_onnx/meta.json``,
+   ``zh_hans/roberta_chinese_base_upos_onnx/model.model.ort``,
+   ``en_us/g2p-config.json``, ``en_us/oov/model.ort``,
+   ``en_us/oov/onnx-config.json``). Japanese and Arabic tok-POS / diacritizer
+   bundles use the same pattern under ``ja/...`` and
+   ``ar_msa/...``. Korean rule G2P uses ``ko/dict.tsv`` only. Models that ship
+   as a split ORT pair need both ``<stem>.model.ort`` and
+   ``<stem>.weights.ort`` present.
+
+   Every model is ORT-format. Moonshine cannot load a ``.onnx``: the wasm and
+   mobile runtimes are minimal ONNX Runtime builds with no ONNX parser
+   compiled in. Convert one with ``scripts/convert-models-to-ort.py``.
+*/
+MOONSHINE_EXPORT int32_t moonshine_create_grapheme_to_phonemizer_from_files(
+    const char *language, const char **filenames, uint64_t filenames_count,
+    const struct moonshine_option_t *options, uint64_t options_count,
+    int32_t moonshine_version);
+
+/* Creates a grapheme to phonemizer from memory.
+   Returns a non-negative handle on success, or a negative error code on
+   failure. The error code can be converted to a human-readable string using
+   moonshine_error_to_string.
+
+   ``filenames[i]`` is the canonical ``MoonshineG2POptions::files`` key.
+   When ``memory[i]`` is non-NULL and ``memory_sizes[i]`` > 0, that buffer is
+   used as the asset bytes (not copied—keep valid until the phonemizer is
+   freed). When ``memory[i]`` is NULL or size zero, the key is also used as a
+   path relative to ``g2p_root``, like path-only map entries.
+
+   Register every file the engine needs: language lexicon ``dict.tsv`` paths,
+   English ``g2p-config.json`` and the OOV model keys under ``en_us/oov/``, and
+   for model bundles the ``meta.json``, ``vocab.txt``,
+   ``tokenizer_config.json``, and ``model.ort`` keys under the bundle directory
+   key (or both halves of a split pair). English OOV overrides use
+   ``oov_onnx_override`` for the model bytes and ``oov_onnx_config`` for the
+   merged JSON config UTF-8 text; those key names predate the move to ORT and
+   are kept for compatibility, but the bytes must be ORT-format.
+
+   Every model buffer must be a self-contained ORT model. Moonshine cannot
+   load a ``.onnx``, and there is no support for a sidecar weights file:
+   convert with ``scripts/convert-models-to-ort.py``.
+*/
+MOONSHINE_EXPORT int32_t moonshine_create_grapheme_to_phonemizer_from_memory(
+    const char *language, const char **filenames,
+    const uint64_t filenames_count, const uint8_t **memory,
+    const uint64_t *memory_sizes, const struct moonshine_option_t *options,
+    uint64_t options_count, int32_t moonshine_version);
+
+/* Releases the resources used by a grapheme to phonemizer. */
+MOONSHINE_EXPORT void moonshine_free_grapheme_to_phonemizer(
+    int32_t grapheme_to_phonemizer_handle);
+
+/* Converts a text into the equivalent International Phonetic Alphabet (IPA)
+   phonemes. Returns zero on success, or a non-zero error code on failure.
+*/
+MOONSHINE_EXPORT int32_t moonshine_text_to_phonemes(
+    int32_t grapheme_to_phonemizer_handle, const char *text,
+    const struct moonshine_option_t *options, uint64_t options_count,
+    const char **out_phonemes, uint64_t *out_phonemes_count);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
