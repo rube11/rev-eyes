@@ -12,6 +12,36 @@ type TranscriberRuntime = {
   sttModel?: unknown
 }
 
+type LoadingModel = {
+  loadPromise?: Promise<void>
+  isModelLoading?: boolean
+  isLoaded?: () => boolean
+  model?: { encoder?: { release(): Promise<void> }; decoder?: { release(): Promise<void> } }
+}
+
+export async function loadMoonshineTranscriber(transcriber: Transcriber): Promise<void> {
+  const model = (transcriber as unknown as TranscriberRuntime).sttModel as LoadingModel | undefined
+  const work = transcriber.load()
+  const attempt = model?.loadPromise
+  try {
+    await work
+  } catch (error) {
+    // 0.1.29 caches rejected loadModel() promises and never clears its loading
+    // flag on failure. Only clear the attempt that actually rejected; do not
+    // interrupt another loader or reset a healthy/shared inference model.
+    if (model && attempt && model.loadPromise === attempt && model.isLoaded?.() === false) {
+      model.loadPromise = undefined
+      model.isModelLoading = false
+      const partial = model.model
+      const encoder = partial?.encoder
+      const decoder = partial?.decoder
+      if (partial) { partial.encoder = undefined; partial.decoder = undefined }
+      await Promise.allSettled([encoder?.release(), decoder?.release()])
+    }
+    throw error
+  }
+}
+
 // Moonshine does not currently expose lifecycle access for its internally
 // created AudioContext. Keep the compatibility cast in one place so repeated
 // app/session initialization does not leak browser audio contexts.

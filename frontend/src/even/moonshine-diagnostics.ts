@@ -52,7 +52,7 @@ export class MoonshineDiagnostics {
     running: boolean,
   ): void {
     if (this.enabled && running && text.trim().length > 0) {
-      console.debug(`[Moonshine shadow] ${kind}:`, text)
+      console.debug(`[Moonshine shadow] ${kind}: ${text.length} characters`)
       this.publish({ event: "transcript", kind, text })
     }
   }

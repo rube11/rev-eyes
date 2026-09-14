@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Eyes · Listening test</title></head>
+<body><main>
+  <header><span>EYES / LAB</span><small>Moonshine · build 1</small></header>
+  <h1>Does listening<br>survive the lock?</h1>
+  <p>Start here, lock your phone, then speak at 30 seconds, 2 minutes, and 5 minutes. Don’t tap the glasses.</p>
+  <section class="status" aria-live="polite"><span id="status">Ready to test</span><small id="storage">Results stay on this phone</small></section>
+  <div class="actions"><button id="start">Start test</button><button id="stop" disabled>Stop</button><button id="retry" disabled>Retry audio</button></div>
+  <div class="options"><label><input id="recover" type="checkbox"> Attempt recovery automatically (up to twice)</label><label><input id="transcripts" type="checkbox"> Save recognized text in this report</label></div>
+  <p class="note">Say “Eyes, test one”, then “test two”, “test three”, and “test four”. By default, only these test markers and text lengths are saved. No raw audio, chats, or memories are saved. Model downloads require internet; recognition does not use our backend.</p>
+  <h2>Audio path <small id="elapsed">Not running</small></h2>
+  <dl id="metrics"><div><dt>Glasses audio</dt><dd>—</dd></div><div><dt>Audio adapter</dt><dd>—</dd></div><div><dt>Moonshine</dt><dd>—</dd></div><div><dt>Speech / transcripts</dt><dd>—</dd></div></dl>
+  <p class="note">A test stops after 7 minutes when JavaScript next runs. Timestamps show when callbacks execute, not when the glasses recorded audio. “Hidden” does not prove the phone was locked.</p>
+  <h2>Timeline <button id="clear" class="quiet">Clear</button></h2>
+  <ol id="timeline"><li>No test events yet.</li></ol>
+  <div class="actions"><button id="export" class="quiet">Show report</button><button id="reload" class="quiet">Reload app</button></div>
+  <textarea id="report" aria-label="Diagnostic report; select and copy to share" readonly hidden></textarea>
+  <p class="note">If inference stalls, reload is required. The test never starts overlapping work on a stuck model. Reload does not resume recording automatically.</p>
+</main><script type="module" src="/src/diagnostics/main.ts"></script></body>
+</html>

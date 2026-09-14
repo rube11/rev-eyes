@@ -10,6 +10,7 @@ import { AudioCaptureSession } from "./audio-capture-session"
 import type { AudioCaptureState, AudioDeviceControls } from "./audio"
 import { MoonshineDiagnosticTransport } from "./moonshine-diagnostic-transport"
 import type { CandidateFinalizedEvent } from "./candidate-audio-window"
+import type { MoonshineDiagnosticEvent } from "./moonshine-diagnostic-event"
 
 export type { MoonshineRunResult } from "./moonshine-shadow"
 export type { CandidateFinalizedEvent } from "./candidate-audio-window"
@@ -25,6 +26,7 @@ type CandidateAudioClientOptions = {
   onCandidateSent?: (candidateID: string) => void
   onRunComplete?: (result: MoonshineRunResult) => void
   onVoiceReplyStarted?: () => void
+  onDiagnostic?: (event: MoonshineDiagnosticEvent) => void
 }
 
 // CandidateAudioClient owns device capture, local transcription, and the
@@ -33,6 +35,7 @@ export class CandidateAudioClient {
   private readonly capture: AudioCaptureSession
   private readonly transport: CandidateAudioTransport
   private readonly transcriber: MoonshineShadowTranscriber | undefined
+  private lastPcmAt = 0
 
   constructor(options: CandidateAudioClientOptions) {
     this.transport = new CandidateAudioTransport({
@@ -50,13 +53,24 @@ export class CandidateAudioClient {
           debugTranscripts: options.debugTranscripts,
           onCandidate: (candidate) => this.transport.send(candidate),
           onCandidateFinalized: options.onCandidateFinalized,
-          onDiagnostic: (event) => diagnostics.send(event),
+          onDiagnostic: (event) => {
+            options.onDiagnostic?.(event)
+            diagnostics.send(event)
+          },
           onRunComplete: options.onRunComplete,
           onVoiceReplyStarted: options.onVoiceReplyStarted,
         })
       : undefined
     this.capture = new AudioCaptureSession({
-      device: options.device,
+      device: {
+        ...options.device,
+        start: async () => {
+          const started = await options.device.start()
+          this.lastPcmAt = Date.now()
+          return started
+        },
+        isHealthy: () => Date.now() - this.lastPcmAt < 5_000 && options.device.isHealthy?.() !== false,
+      },
       local: this.transcriber,
       localRequired: options.candidateAudioEnabled,
     })
@@ -69,6 +83,10 @@ export class CandidateAudioClient {
 
   isReady(): boolean {
     return this.transcriber?.isReady() === true
+  }
+
+  snapshot() {
+    return { ...this.transcriber?.snapshot(), capture: this.capture.state, lastPcmAt: this.lastPcmAt }
   }
 
   hasInFlightCandidates(): boolean {
@@ -102,6 +120,7 @@ export class CandidateAudioClient {
   }
 
   push(pcm: Uint8Array): void {
+    this.lastPcmAt = Date.now()
     this.transcriber?.push(pcm)
   }
 

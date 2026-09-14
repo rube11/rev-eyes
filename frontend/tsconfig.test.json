@@ -13,6 +13,8 @@
     "rootDir": "."
   },
   "include": [
+    "src/diagnostics/log.ts",
+    "tests/diagnostic-log.test.ts",
     "src/even/audio.ts",
     "src/even/audio-capture-session.ts",
     "src/even/assistant-conversation-state.ts",

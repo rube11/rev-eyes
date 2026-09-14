@@ -1,4 +1,5 @@
 const DEFAULT_MAX_PENDING_INFERENCES = 4
+const DEFAULT_INFERENCE_TIMEOUT_MS = 15_000
 
 type InferenceModel = {
   generate: (audio: Float32Array) => Promise<string | undefined>
@@ -12,16 +13,20 @@ type InferenceGuardState = {
   originalGenerate: InferenceModel["generate"]
   pending: number
   tail: Promise<void>
+  timeoutMilliseconds: number
+  failed: boolean
 }
 
 type InferenceGuardOptions = {
   maxPending?: number
   onError?: (message: string) => void
+  timeoutMilliseconds?: number
 }
 
 export type MoonshineInferenceLifecycle = {
   beginSession: () => void
   endSession: () => void
+  isHealthy: () => boolean
 }
 
 const guardedModels = new WeakMap<object, InferenceGuardState>()
@@ -60,14 +65,26 @@ async function runInference(
   epoch: number,
   audio: Float32Array,
 ): Promise<string> {
-  if (!isCurrentSession(state, owner, epoch)) {
+  if (state.failed || !isCurrentSession(state, owner, epoch)) {
     return ""
   }
 
   let lastError: unknown
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const text = await state.originalGenerate(audio)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const text = await Promise.race([
+        state.originalGenerate(audio),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            // A timeout is not cancellation. Quarantine this shared model;
+            // overlapping ONNX work would be unsafe even in a new session.
+            state.failed = true
+            reportError(state, "Moonshine inference stalled; reload required")
+            reject(new Error("Moonshine inference timeout; reload required"))
+          }, state.timeoutMilliseconds)
+        }),
+      ]).finally(() => clearTimeout(timer))
       return isCurrentSession(state, owner, epoch) && typeof text === "string"
         ? text
         : ""
@@ -99,7 +116,7 @@ function enqueueInference(
   audio: Float32Array,
 ): Promise<string> {
   const owner = state.activeOwner
-  if (!owner) {
+  if (!owner || state.failed) {
     return Promise.resolve("")
   }
   if (state.pending >= state.maxPending) {
@@ -156,6 +173,7 @@ export function guardMoonshineInference(
     const requestedMaxPending = Math.trunc(
       options.maxPending ?? DEFAULT_MAX_PENDING_INFERENCES,
     )
+    const timeout = options.timeoutMilliseconds ?? DEFAULT_INFERENCE_TIMEOUT_MS
     const newState: InferenceGuardState = {
       activeOwner: undefined,
       epoch: 0,
@@ -167,6 +185,8 @@ export function guardMoonshineInference(
       originalGenerate: model.generate.bind(model),
       pending: 0,
       tail: Promise.resolve(),
+      timeoutMilliseconds: Number.isFinite(timeout) && timeout > 0 ? timeout : DEFAULT_INFERENCE_TIMEOUT_MS,
+      failed: false,
     }
     state = newState
     guardedModels.set(model, newState)
@@ -176,6 +196,7 @@ export function guardMoonshineInference(
   const owner = {}
   let sessionActive = false
   return {
+    isHealthy: () => !state.failed,
     beginSession: () => {
       if (sessionActive && state.activeOwner === owner) {
         return

@@ -15,6 +15,7 @@ import type { MoonshineDiagnosticEvent } from "./moonshine-diagnostic-event"
 import {
   createMoonshineInferenceLifecycle,
   disposeMoonshineTranscriber,
+  loadMoonshineTranscriber,
   transcriberAudioContext,
   type MoonshineInferenceLifecycle,
 } from "./moonshine-runtime"
@@ -64,7 +65,6 @@ export class MoonshineShadowTranscriber {
   private running = false
   private speechActive = false
   private voiceReplyArmed = false
-  private disabled = false
   private disposed = false
   private runGeneration = 0
   private nextRunID = 0
@@ -93,15 +93,32 @@ export class MoonshineShadowTranscriber {
   }
 
   isReady(): boolean {
-    return !this.disabled && !this.disposed && this.prepared !== undefined
+    return !this.disposed && this.prepared !== undefined && this.prepared.inference.isHealthy()
+  }
+
+  snapshot() {
+    const prepared = this.prepared
+    return {
+      running: this.running,
+      ready: this.isReady(),
+      adapterContext: prepared?.audio.contextState() ?? "unavailable",
+      moonshineContext: prepared ? transcriberAudioContext(prepared.transcriber)?.state ?? "unavailable" : "unavailable",
+      track: prepared?.audio.trackState() ?? "unavailable",
+      inferenceHealthy: prepared?.inference.isHealthy() ?? true,
+      pcmFrames: this.runDiagnostics?.pcmFrames ?? 0,
+      vadFrames: this.runDiagnostics?.vadFrames ?? 0,
+      speechStarts: this.runDiagnostics?.speechStarts ?? 0,
+      commits: this.runDiagnostics?.commits ?? 0,
+    }
   }
 
   prepare(): Promise<void> {
-    if (this.disabled || this.disposed) {
+    if (this.disposed || this.prepared) {
       return Promise.resolve()
     }
     this.preparation ??= this.initialize().catch((error: unknown) => {
-      this.disabled = true
+      this.preparation = undefined
+      this.logLifecycle(`initialization failed: ${describeError(error)}; retry available`)
       console.warn(
         `[Moonshine shadow] unavailable: ${describeError(error)}`,
       )
@@ -110,7 +127,7 @@ export class MoonshineShadowTranscriber {
   }
 
   async start(): Promise<boolean> {
-    if (this.disabled || this.disposed) {
+    if (this.disposed) {
       return false
     }
     if (this.stopTimer !== undefined) {
@@ -121,7 +138,6 @@ export class MoonshineShadowTranscriber {
     this.shouldRun = true
     await this.prepare()
     if (
-      this.disabled ||
       this.disposed ||
       !this.shouldRun ||
       !this.prepared
@@ -129,7 +145,13 @@ export class MoonshineShadowTranscriber {
       return false
     }
     if (this.running) {
-      return this.activation ?? true
+      if (this.activation) return this.activation
+      const state = this.snapshot()
+      if (!state.inferenceHealthy) return false
+      if (state.adapterContext === "running" && state.moonshineContext === "running" && this.prepared.transcriber.isActive) return true
+      this.logLifecycle("audio context interrupted; restarting")
+      this.cancel()
+      this.shouldRun = true
     }
     return this.activate()
   }
@@ -228,7 +250,6 @@ export class MoonshineShadowTranscriber {
       armed &&
       this.shouldRun &&
       this.running &&
-      !this.disabled &&
       !this.disposed
     return this.voiceReplyArmed
   }
@@ -287,6 +308,7 @@ export class MoonshineShadowTranscriber {
         {
           onPermissionsRequested: () => undefined,
           onError: (error) => {
+            this.logLifecycle(`transcriber error: ${describeError(error)}`)
             console.warn(
               `[Moonshine shadow] transcriber error: ${describeError(error)}`,
             )
@@ -371,7 +393,7 @@ export class MoonshineShadowTranscriber {
       )
       const inference = createMoonshineInferenceLifecycle(transcriber)
       transcriber.attachStream(audio.stream)
-      await transcriber.load()
+      await loadMoonshineTranscriber(transcriber)
 
       if (this.disposed) {
         await Promise.all([

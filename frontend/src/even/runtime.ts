@@ -185,7 +185,7 @@ export async function initializeEvenExperience(
     candidateAudioEnabled,
     debugTranscripts: env.moonshineDebugTranscripts,
     forwardDiagnostics:
-      import.meta.env.DEV && env.moonshineDebugTranscripts,
+      env.moonshineDebugTranscripts,
     device: {
       start: () => bridge.audioControl(true, AudioInputSource.Glasses),
       stop: () => bridge.audioControl(false),
@@ -427,7 +427,7 @@ export async function initializeEvenExperience(
 
   async function startAudioCapture(): Promise<boolean> {
     return candidateAudio.startCapture(
-      () => active && !sleeping && socketIsOpen(),
+      () => active && !sleeping && (continuousListeningEnabled || socketIsOpen()),
     )
   }
 
@@ -436,7 +436,6 @@ export async function initializeEvenExperience(
       !continuousListeningEnabled ||
       !active ||
       sleeping ||
-      !socketIsOpen() ||
       !candidateAudio.isReady()
     ) {
       return false
@@ -863,7 +862,7 @@ export async function initializeEvenExperience(
     listeningState = "idle"
     focusedCandidate.clear()
     candidateAudio.resetTransport()
-    if (wasListening || candidateAudio.captureState !== "idle") {
+    if (!continuousListeningEnabled && (wasListening || candidateAudio.captureState !== "idle")) {
       await stopAudioCapture(false)
     }
     await stopLocationUpdates()
@@ -1308,9 +1307,11 @@ export async function initializeEvenExperience(
     }
 
     if (candidateAudioEnabled && !candidateAudio.isReady()) {
-      reportStatus("Local speech model loading")
-      await showIdlePrompt("LOCAL MODEL LOADING  ·  TAP TO RETRY")
-      return
+      reportStatus("Loading local speech model")
+      if (!await candidateAudio.prepare()) {
+        await showIdlePrompt("MODEL UNAVAILABLE  ·  RETRY OR REOPEN APP")
+        return
+      }
     }
     latestTranscript = ""
     idlePrompt = undefined

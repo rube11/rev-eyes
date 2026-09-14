@@ -3,6 +3,37 @@ import test from "node:test"
 
 import { AudioCaptureController } from "../src/even/audio.js"
 
+test("health recovery does not reopen hardware after an unconfirmed stop", async () => {
+  let healthy = true
+  let starts = 0
+  const device = {
+    start: async () => { starts += 1; return true },
+    stop: async () => false,
+    isHealthy: () => healthy,
+  }
+  const capture = new AudioCaptureController(device)
+  await capture.start()
+  healthy = false
+  assert.equal(await capture.start(), false)
+  assert.equal(starts, 1)
+})
+
+test("restarts when the device health probe detects lost audio", async () => {
+  let live = false
+  let starts = 0
+  const device = {
+    start: async () => { live = true; starts += 1; return true },
+    stop: async () => { live = false; return true },
+    isHealthy: () => live,
+  }
+  const capture = new AudioCaptureController(device)
+  await capture.start()
+  live = false
+  assert.equal(await capture.start(), true)
+  assert.equal(live, true)
+  assert.equal(starts, 2)
+})
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((complete) => {

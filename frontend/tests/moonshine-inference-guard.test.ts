@@ -3,6 +3,27 @@ import test from "node:test"
 
 import { guardMoonshineInference } from "../src/even/moonshine-inference-guard.js"
 
+test("times out stalled inference without running overlapping work on the same model", async () => {
+  let calls = 0
+  const errors: string[] = []
+  const model = {
+    generate: async (audio: Float32Array) => { assert.ok(audio.length); calls += 1; return new Promise<string>(() => {}) },
+  }
+  const options = { timeoutMilliseconds: 10, onError: (message: string) => errors.push(message) }
+  const lifecycle = guardMoonshineInference(model, options)!
+  lifecycle.beginSession()
+  const result = await Promise.race([
+    model.generate(new Float32Array([1])),
+    new Promise<string>(resolve => setTimeout(() => resolve("STALLED"), 100)),
+  ])
+  assert.equal(result, "")
+  lifecycle.endSession()
+  lifecycle.beginSession()
+  assert.equal(await model.generate(new Float32Array([2])), "")
+  assert.equal(calls, 1)
+  assert.ok(errors.some(message => /reload/i.test(message)))
+})
+
 type InferenceModelStub = {
   generate: (audio: Float32Array) => Promise<string>
 }

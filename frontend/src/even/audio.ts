@@ -3,6 +3,7 @@ export type AudioCaptureState = "idle" | "starting" | "running"
 export type AudioDeviceControls = {
   start: () => Promise<boolean>
   stop: () => Promise<boolean>
+  isHealthy?: () => boolean
 }
 
 // AudioCaptureController serializes the device's asynchronous start/stop edge.
@@ -32,7 +33,12 @@ export class AudioCaptureController {
       return Promise.resolve(false)
     }
     if (this.currentState === "running") {
-      return Promise.resolve(true)
+      if (this.device.isHealthy?.() !== false) {
+        return Promise.resolve(true)
+      }
+      // A missing PCM heartbeat can invalidate our cached hardware state.
+      // Queue stop first; the normal start path waits for it below.
+      void this.stop()
     }
     if (this.currentState === "starting" && this.startPromise) {
       return this.startPromise
@@ -121,11 +127,16 @@ export class AudioCaptureController {
     priorStart: Promise<boolean> | undefined,
     priorStop: Promise<boolean> | undefined,
   ): Promise<boolean> {
-    await Promise.allSettled([
+    const results = await Promise.allSettled([
       priorStart ?? Promise.resolve(false),
       priorStop ?? Promise.resolve(),
     ])
     if (this.disposed || generation !== this.generation) {
+      return false
+    }
+    const stopped = results[1]
+    if (priorStop && (stopped.status === "rejected" || stopped.value === false)) {
+      this.currentState = "idle"
       return false
     }
     return this.startAttempt(generation, isStillAllowed)
