@@ -289,90 +289,30 @@ function MemoriesView({ data, onAdd }: {
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search memories" />
         </label>
-        <div className="filter-set" aria-label="Filter memories">
-          {filters.map((item) => (
-            <button
-              className={filter === item ? 'is-active' : ''}
-              type="button"
-              key={item}
-              onClick={() => setFilter(item)}
-            >
-              {item}
-            </button>
-          ))}
-        </div>
+        <select className="topic-filter" aria-label="Filter memories by topic"
+          value={filter} onChange={(event) => setFilter(event.target.value)}>
+          <option value="all">All topics</option>
+          {filters.map((topic) => <option key={topic} value={topic}>{topic}</option>)}
+        </select>
       </div>
-
-      <div className="browser-layout memory-browser">
-        <section className="memory-list" aria-label="Memory list">
-          <p className="result-count">
-            {filtered.length} active{' '}
-            {filtered.length === 1 ? 'memory' : 'memories'}
-          </p>
-          {filtered.map((memory) => (
-            <button
-              className={`memory-row${
-                selected?.id === memory.id ? ' is-selected' : ''
-              }`}
-              type="button"
-              key={memory.id}
-              onClick={() => setSelectedId(memory.id)}
-            >
-              <span className="memory-row__kind">{memory.kind}</span>
-              <span className="memory-row__content">
-                <strong>{memory.title}</strong>
-                <span>{memory.summary}</span>
-              </span>
-              <time dateTime={memory.updatedAt}>
-                {relativeTime(memory.updatedAt)}
-              </time>
-            </button>
-          ))}
-          {filtered.length === 0 ? (
-            <EmptyState
-              title="No matching memory"
-              body="Try another search or add a new memory."
-            />
-          ) : null}
-        </section>
-
-        <aside className="memory-inspector" aria-label="Selected memory">
-          {selected ? (
-            <>
-              <p className="section-label">Selected memory</p>
-              <span className="memory-kind">{selected.kind}</span>
-              <h2>{selected.title}</h2>
-              <p className="memory-inspector__summary">{selected.summary}</p>
-              <dl>
-                <div>
-                  <dt>Topics</dt>
-                  <dd>{selected.topics.join(' / ')}</dd>
-                </div>
-                <div>
-                  <dt>Created</dt>
-                  <dd>{formatDate(selected.createdAt)}</dd>
-                </div>
-                <div>
-                  <dt>Updated</dt>
-                  <dd>{relativeTime(selected.updatedAt)}</dd>
-                </div>
-                <div>
-                  <dt>Status</dt>
-                  <dd>
-                    <StatusMark active />
-                    {selected.status}
-                  </dd>
-                </div>
-              </dl>
-            </>
-          ) : (
-            <EmptyState
-              title="No memories yet"
-              body="Add something you want your assistant to remember."
-            />
-          )}
-        </aside>
+      <p className="result-count">{filtered.length} {filtered.length === 1 ? 'memory' : 'memories'}</p>
+      <div className="compact-list">
+        {filtered.map((memory) => (
+          <ItemDetails key={memory.id} title={memory.title} group="memories">
+            <p className="item-copy">{memory.summary}</p>
+            <dl className="item-facts">
+              <div><dt>Kind</dt><dd>{memory.kind}</dd></div>
+              <div><dt>Topics</dt><dd>{memory.topics.join(', ') || 'None'}</dd></div>
+              <div><dt>Created</dt><dd>{formatDate(memory.createdAt)}</dd></div>
+              <div><dt>Updated</dt><dd>{formatDateTime(memory.updatedAt)}</dd></div>
+              <div><dt>Status</dt><dd>{memory.status}</dd></div>
+              {memory.expiresAt ? <div><dt>Expires</dt><dd>{formatDateTime(memory.expiresAt)}</dd></div> : null}
+            </dl>
+          </ItemDetails>
+        ))}
       </div>
+      {!filtered.length ? <EmptyState title={query || filter !== 'all' ? 'No matches' : 'No memories yet'}
+        body={query || filter !== 'all' ? 'Try another search or topic.' : 'Add a memory to get started.'} /> : null}
     </>
   )
 }
@@ -494,338 +434,124 @@ function AutomationActions({
   )
 }
 
-function WatchRow({
-  watch,
-  currentTime,
-  onDelete,
-  onResolve,
-}: {
+function WatchRow({ watch, currentTime, onDelete, onResolve }: {
   watch: WatchItem
   currentTime: Date
   onDelete: (resourceId: string) => Promise<void>
-  onResolve: (
-    resourceId: string,
-    decision: ProposalDecision,
-  ) => Promise<void>
+  onResolve: (resourceId: string, decision: ProposalDecision) => Promise<void>
 }) {
   const proposed = watch.status === 'proposed'
   const approveDisabledReason =
-    proposed && new Date(watch.expiresAt).getTime() <= currentTime.getTime()
-      ? 'This watch has expired.'
-      : undefined
+    proposed && Date.parse(watch.expiresAt) <= currentTime.getTime()
+      ? 'This watch has expired.' : undefined
 
   return (
-    <article className="watch-row">
-      <div className="watch-row__index">
-        <NavIcon view="watches" />
-        <StatusMark active={watch.status === 'active'} />
-      </div>
-      <div className="watch-row__main">
-        <div className="watch-row__heading">
-          <div>
-            <span className={`state-label state-label--${watch.status}`}>
-              {watch.status}
-            </span>
-            <h2>{watch.query}</h2>
-          </div>
-          {watch.nextCheckAt ? (
-            <span className="next-check">
-              Next check
-              <strong>{relativeTime(watch.nextCheckAt)}</strong>
-            </span>
-          ) : null}
-        </div>
-        <p className="watch-condition">
-          <span>If</span> {watch.condition}
-        </p>
-        <dl className="watch-stats">
-          <div>
-            <dt>Cadence</dt>
-            <dd>Every {formatInterval(watch.intervalMinutes)}</dd>
-          </div>
-          <div>
-            <dt>Last checked</dt>
-            <dd>
-              {watch.lastCheckedAt ? relativeTime(watch.lastCheckedAt) : '—'}
-            </dd>
-          </div>
-          <div>
-            <dt>Sources seen</dt>
-            <dd>{watch.seenCount}</dd>
-          </div>
-          <div>
-            <dt>Ends</dt>
-            <dd>{formatDate(watch.expiresAt)}</dd>
-          </div>
-        </dl>
-        <div className="watch-row__actions">
-          <AutomationActions
-            itemLabel={watch.query}
-            approveDisabledReason={approveDisabledReason}
-            deletePrompt={
-              watch.status === 'active'
-                ? 'Stop and delete this watch?'
-                : 'Delete this watch?'
-            }
-            onApprove={
-              proposed
-                ? () => onResolve(watch.id, 'accepted')
-                : undefined
-            }
-            onDecline={
-              proposed
-                ? () => onResolve(watch.id, 'rejected')
-                : undefined
-            }
-            onDelete={() => onDelete(watch.id)}
-          />
-        </div>
-      </div>
-    </article>
+    <ItemDetails title={watch.query} group="watches"
+      meta={proposed ? 'Needs review' : watch.status}>
+      <p className="item-copy">{watch.condition}</p>
+      <dl className="item-facts">
+        <div><dt>Checks</dt><dd>Every {formatInterval(watch.intervalMinutes)}</dd></div>
+        <div><dt>Last checked</dt><dd>{watch.lastCheckedAt ? formatDateTime(watch.lastCheckedAt) : 'Not yet'}</dd></div>
+        {watch.nextCheckAt ? <div><dt>Next check</dt><dd>{formatDateTime(watch.nextCheckAt)}</dd></div> : null}
+        <div><dt>Sources seen</dt><dd>{watch.seenCount}</dd></div>
+        <div><dt>Ends</dt><dd>{formatDateTime(watch.expiresAt)}</dd></div>
+      </dl>
+      <AutomationActions itemLabel={watch.query}
+        approveDisabledReason={approveDisabledReason}
+        deletePrompt={watch.status === 'active' ? 'Stop and delete this watch?' : 'Delete this watch?'}
+        onApprove={proposed ? () => onResolve(watch.id, 'accepted') : undefined}
+        onDecline={proposed ? () => onResolve(watch.id, 'rejected') : undefined}
+        onDelete={() => onDelete(watch.id)} />
+    </ItemDetails>
   )
 }
 
-function WatchesView({
-  data,
-  currentTime,
-  onDelete,
-  onResolve,
-}: {
+function WatchesView({ data, currentTime, onDelete, onResolve }: {
   data: WorkspaceData
   currentTime: Date
   onDelete: (resourceId: string) => Promise<void>
-  onResolve: (
-    resourceId: string,
-    decision: ProposalDecision,
-  ) => Promise<void>
+  onResolve: (resourceId: string, decision: ProposalDecision) => Promise<void>
 }) {
-  const watches = [...data.watches].sort((left, right) => {
-    if (left.status === right.status) {
-      return (
-        new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
-      )
-    }
-    if (left.status === 'active') return -1
-    if (right.status === 'active') return 1
-    if (left.status === 'proposed') return -1
-    return 1
-  })
+  const rank = { proposed: 0, active: 1, expired: 2, rejected: 3 }
+  const watches = [...data.watches].sort((a, b) =>
+    rank[a.status] - rank[b.status] || Date.parse(b.createdAt) - Date.parse(a.createdAt),
+  )
   const activeCount = watches.filter((watch) => watch.status === 'active').length
-
   return (
     <>
-      <PageIntro
-        eyebrow="Ongoing checks"
-        title="Watches"
-        description="Updates your assistant is keeping an eye on in the background."
-        action={
-          <div className="count-callout">
-            <strong>{activeCount}</strong>
-            <span>of 5 active</span>
-          </div>
-        }
-      />
-      <div className="watch-list">
-        {watches.length > 0 ? (
-          watches.map((watch) => (
-            <WatchRow
-              key={watch.id}
-              watch={watch}
-              currentTime={currentTime}
-              onDelete={onDelete}
-              onResolve={onResolve}
-            />
-          ))
-        ) : (
-          <EmptyState
-            title="Nothing is being watched"
-            body="Items you ask your assistant to monitor will appear here."
-          />
-        )}
+      <PageIntro title="Watches" action={<span className="item-meta">{activeCount} / 5 active</span>} />
+      <div className="compact-list">
+        {watches.map((watch) => <WatchRow key={watch.id} watch={watch}
+          currentTime={currentTime} onDelete={onDelete} onResolve={onResolve} />)}
       </div>
+      {!watches.length ? <EmptyState title="No watches yet" body="Ask Eyes to watch something for you." /> : null}
     </>
   )
 }
 
-function ProposedTask({
-  task,
-  currentTime,
-  onDelete,
-  onResolve,
-}: {
+function TaskRow({ task, currentTime, onDelete, onResolve }: {
   task: TaskItem
   currentTime: Date
   onDelete: (resourceId: string) => Promise<void>
-  onResolve: (
-    resourceId: string,
-    decision: ProposalDecision,
-  ) => Promise<void>
+  onResolve: (resourceId: string, decision: ProposalDecision) => Promise<void>
 }) {
-  const approveDisabledReason =
-    new Date(task.dueAt).getTime() <= currentTime.getTime()
-      ? 'This reminder time has passed.'
-      : undefined
-
+  const proposed = task.status === 'proposed'
+  const pastDue = Date.parse(task.dueAt) <= currentTime.getTime()
   return (
-    <article className="proposed-task">
-      <div>
-        <p className="section-label">
-          Needs review
-        </p>
-        <h3>{task.title}</h3>
-        <p>{task.schedule}</p>
-      </div>
-      <div className="proposed-task__side">
-        <div className="proposed-task__time">
-          <span>Proposed</span>
-          <strong>{relativeTime(task.createdAt)}</strong>
-        </div>
-        <AutomationActions
-          itemLabel={task.title}
-          approveDisabledReason={approveDisabledReason}
-          deletePrompt="Delete this reminder suggestion?"
-          onApprove={() => onResolve(task.id, 'accepted')}
-          onDecline={() => onResolve(task.id, 'rejected')}
-          onDelete={() => onDelete(task.id)}
-        />
-      </div>
-    </article>
+    <ItemDetails title={task.title} meta={formatDateTime(task.dueAt)} group="task-items">
+      <p className="item-copy">{task.schedule}</p>
+      <p className="item-meta">
+        {proposed ? 'Needs approval' : pastDue ? 'Reminder time has passed' : 'Scheduled'}
+        {' · '}{relativeTime(task.dueAt)}
+      </p>
+      <AutomationActions itemLabel={task.title}
+        approveDisabledReason={proposed && pastDue ? 'This reminder time has passed.' : undefined}
+        deletePrompt={proposed ? 'Delete this reminder suggestion?' : 'Cancel and delete this reminder?'}
+        onApprove={proposed ? () => onResolve(task.id, 'accepted') : undefined}
+        onDecline={proposed ? () => onResolve(task.id, 'rejected') : undefined}
+        onDelete={() => onDelete(task.id)} />
+    </ItemDetails>
   )
 }
 
-function TasksView({
-  data,
-  currentTime,
-  onDelete,
-  onResolve,
-}: {
+function TasksView({ data, currentTime, onDelete, onResolve }: {
   data: WorkspaceData
   currentTime: Date
   onDelete: (resourceId: string) => Promise<void>
-  onResolve: (
-    resourceId: string,
-    decision: ProposalDecision,
-  ) => Promise<void>
+  onResolve: (resourceId: string, decision: ProposalDecision) => Promise<void>
 }) {
-  const proposed = data.tasks
-    .filter((task) => task.status === 'proposed')
-    .sort(
-      (left, right) =>
-        new Date(right.createdAt).getTime() -
-        new Date(left.createdAt).getTime(),
-    )
-  const confirmed = data.tasks
-    .filter((task) => task.status === 'accepted')
-    .sort(
-      (left, right) =>
-        new Date(left.dueAt).getTime() - new Date(right.dueAt).getTime(),
-    )
-  const pastDueCount = confirmed.filter(
-    (task) => new Date(task.dueAt).getTime() <= currentTime.getTime(),
-  ).length
+  const proposed = data.tasks.filter((task) => task.status === 'proposed')
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+  const confirmed = data.tasks.filter((task) => task.status === 'accepted')
+    .sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt))
+  const upcoming = confirmed.filter((task) => Date.parse(task.dueAt) > currentTime.getTime())
+  const pastDue = confirmed.filter((task) => Date.parse(task.dueAt) <= currentTime.getTime())
+  const row = (task: TaskItem) => <TaskRow key={task.id} task={task}
+    currentTime={currentTime} onDelete={onDelete} onResolve={onResolve} />
 
   return (
-    <div className="tasks-page">
-      <header className="tasks-head">
-        <span className="task-section-index" aria-hidden="true">
-          01
-        </span>
-        <div className="tasks-head__title">
-          <p className="section-label">Plans & reminders</p>
-          <h1>Tasks</h1>
-        </div>
-        <dl className="task-summary" aria-label="Task totals">
-          <div>
-            <dt>Confirmed</dt>
-            <dd>{String(confirmed.length).padStart(2, '0')}</dd>
-          </div>
-          <div>
-            <dt>Needs review</dt>
-            <dd>{String(proposed.length).padStart(2, '0')}</dd>
-          </div>
-          <div>
-            <dt>Past due</dt>
-            <dd>{String(pastDueCount).padStart(2, '0')}</dd>
-          </div>
-        </dl>
-      </header>
-
-      {proposed.length > 0 ? (
-        <section className="task-review" aria-labelledby="task-review-title">
-          <div className="task-subhead">
-            <div>
-              <p className="section-label">Needs a decision</p>
-              <h2 id="task-review-title">Review queue</h2>
-            </div>
-            <span>{proposed.length}</span>
-          </div>
-          <div className="proposed-list">
-            {proposed.map((task) => (
-              <ProposedTask
-                key={task.id}
-                task={task}
-                currentTime={currentTime}
-                onDelete={onDelete}
-                onResolve={onResolve}
-              />
-            ))}
-          </div>
+    <>
+      <PageIntro title="Tasks" />
+      <div className="compact-groups">
+        {proposed.length ? (
+          <section aria-labelledby="task-review-title">
+            <h2 className="compact-group-title" id="task-review-title">Needs review <span>{proposed.length}</span></h2>
+            <div className="compact-list">{proposed.map(row)}</div>
+          </section>
+        ) : null}
+        <section aria-labelledby="task-upcoming-title">
+          <h2 className="compact-group-title" id="task-upcoming-title">Upcoming <span>{upcoming.length}</span></h2>
+          <div className="compact-list">{upcoming.map(row)}</div>
+          {!upcoming.length ? <p className="item-meta compact-empty">No upcoming reminders.</p> : null}
         </section>
-      ) : null}
-
-      <section className="task-schedule" aria-labelledby="task-schedule-title">
-        <header className="task-subhead task-subhead--schedule">
-          <div className="task-subhead__title">
-            <span className="task-section-index" aria-hidden="true">
-              02
-            </span>
-            <div>
-              <p className="section-label">Confirmed schedule</p>
-              <h2 id="task-schedule-title">Reminders</h2>
-            </div>
-          </div>
-          <span>{confirmed.length} total</span>
-        </header>
-        {confirmed.length > 0 ? (
-          <div className="task-ledger">
-            {confirmed.map((task, index) => {
-              const pastDue =
-                new Date(task.dueAt).getTime() <= currentTime.getTime()
-
-              return (
-                <article
-                  className={`task-ledger-row${pastDue ? ' is-past-due' : ''}`}
-                  key={task.id}
-                >
-                  <span className="task-ledger-row__index" aria-hidden="true">
-                    {String(index + 1).padStart(2, '0')}
-                  </span>
-                  <time dateTime={task.dueAt}>
-                    <strong>{formatDateTime(task.dueAt)}</strong>
-                    <span>{relativeTime(task.dueAt)}</span>
-                  </time>
-                  <div className="task-ledger-row__content">
-                    <p className="section-label">
-                      {pastDue ? 'Past due' : 'Scheduled'}
-                    </p>
-                    <h3>{task.title}</h3>
-                  </div>
-                  <div className="task-ledger-row__actions">
-                    <AutomationActions
-                      itemLabel={task.title}
-                      deletePrompt="Cancel and delete this reminder?"
-                      onDelete={() => onDelete(task.id)}
-                    />
-                  </div>
-                </article>
-              )
-            })}
-          </div>
-        ) : (
-          <p className="task-empty-line">No confirmed reminders.</p>
-        )}
-      </section>
-    </div>
+        {pastDue.length ? (
+          <details className="past-reminders">
+            <summary>Past due <span>{pastDue.length}</span></summary>
+            <div className="compact-list">{pastDue.map(row)}</div>
+          </details>
+        ) : null}
+      </div>
+    </>
   )
 }
 
@@ -898,7 +624,6 @@ function MemoryComposer({
       >
         <header>
           <div>
-            <p className="section-label">New memory</p>
             <h2 id="memory-composer-title">Add a memory</h2>
           </div>
           <button
@@ -923,54 +648,56 @@ function MemoryComposer({
             />
           </label>
           <label className="field">
-            <span>What should the glasses remember?</span>
+            <span>Details</span>
             <textarea
               value={summary}
               onChange={(event) => setSummary(event.target.value)}
               maxLength={500}
               rows={6}
-              placeholder="Write the detail in a way that will be useful later."
+              placeholder="What should Eyes remember?"
               required
             />
             <small>{summary.length} / 500</small>
           </label>
-          <div className="field-pair">
-            <label className="field">
-              <span>Kind</span>
-              <select
-                value={kind}
-                onChange={(event) =>
-                  setKind(event.target.value as MemoryKind)
-                }
-              >
-                {memoryKinds.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Topic</span>
-              <select
-                value={topic}
-                onChange={(event) => setTopic(event.target.value)}
-              >
-                {memoryTopics.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+          <details className="composer-options">
+            <summary>More options</summary>
+            <div className="field-pair">
+              <label className="field">
+                <span>Kind</span>
+                <select
+                  value={kind}
+                  onChange={(event) =>
+                    setKind(event.target.value as MemoryKind)
+                  }
+                >
+                  {memoryKinds.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Topic</span>
+                <select
+                  value={topic}
+                  onChange={(event) => setTopic(event.target.value)}
+                >
+                  {memoryTopics.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </details>
           {error ? (
             <p className="form-error" role="alert">
               {error}
             </p>
           ) : null}
           <footer>
-            <p>Your assistant can use this in future conversations.</p>
             <button className="primary-action" type="submit" disabled={saving}>
               {saving ? 'Saving…' : 'Save memory'}
             </button>
@@ -982,10 +709,17 @@ function MemoryComposer({
 }
 
 export function Workspace({
+  onSendChat,
+  userId,
   data,
   email,
   glassesStatus,
-  dataError,
+  reconnecting = false,
+  onReconnectGlasses,
+  resourceErrors = {},
+  lastSyncedAt,
+  syncing = false,
+  onRetry,
   isDemo,
   onCreateMemory,
   onDeleteAutomation,
@@ -1024,6 +758,8 @@ export function Workspace({
 
   const navCount = (item: WorkspaceView): number | undefined => {
     switch (item) {
+      case 'watches':
+        return data.watches.filter((watch) => watch.status === 'proposed').length || undefined
       case 'tasks':
         return (
           data.tasks.filter((task) => task.status === 'proposed').length ||
@@ -1034,15 +770,15 @@ export function Workspace({
     }
   }
 
-  const connected = connectedFromStatus(glassesStatus)
-  const deviceStatus = friendlyDeviceStatus(glassesStatus)
+  const assistant = getAssistantStatus(glassesStatus, isDemo)
+  const connected = assistant.active
+  const deviceStatus = assistant.label
+  const failedResources = workspaceResources.filter((resource) => resourceErrors[resource])
+  const unavailable = view !== 'now' && resourceErrors[view] === 'unavailable'
   const accountLabel = isDemo ? 'Preview mode' : shorten(email, 24)
   const accountInitial = isDemo
     ? 'P'
     : (email.trim().charAt(0).toUpperCase() || 'A')
-  const viewNumber = String(
-    navItems.findIndex((item) => item.id === view) + 1,
-  ).padStart(2, '0')
 
   return (
     <div className="workspace">
@@ -1056,10 +792,8 @@ export function Workspace({
           >
             rev/eyes
           </button>
-          <span>wearable assistant</span>
         </div>
         <nav aria-label="Main navigation">
-          <p className="nav-heading">Menu</p>
           {navItems.map((item) => {
             const count = navCount(item.id)
             return (
@@ -1105,9 +839,6 @@ export function Workspace({
         <header className="topbar">
           <div className="topbar__location">
             <span className="topbar__wordmark">rev/eyes</span>
-            <span className="topbar__folio-index" aria-hidden="true">
-              {viewNumber}
-            </span>
             <strong>{viewTitles[view]}</strong>
           </div>
           <div className="topbar__right">
