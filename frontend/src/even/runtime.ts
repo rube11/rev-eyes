@@ -1126,29 +1126,27 @@ export async function initializeEvenExperience(
     const started = await startAudioCapture(followUp)
     if (!active || listeningState !== "starting") {
       if (started) {
-        await stopAudioCapture(false)
+        await stopAudioCapture()
       }
       return
     }
     if (!started) {
+      if (serverListeningEnabled) sendControl("ambient_stop")
       listeningState = "idle"
+      if (followUp && !responseLifecycle.active) {
+        reportStatus("Connected")
+        if (visibleAssistant) await refreshAnswerStatus()
+        else await showReady()
+        return
+      }
       reportStatus("Microphone unavailable")
       await showIdlePrompt("MIC UNAVAILABLE  ·  TAP TO RETRY")
       return
     }
-    if (
-      candidateAudioEnabled &&
-      !candidateAudio.armForcedCandidate()
-    ) {
+    const startCommand = serverListeningEnabled && followUp ? "ambient_reply_arm" : "listening_start"
+    if (!sendControl(startCommand)) {
       listeningState = "idle"
-      await stopAudioCapture(false)
-      reportStatus("Local speech model unavailable")
-      await showIdlePrompt("LOCAL MODEL UNAVAILABLE")
-      return
-    }
-    if (!candidateAudioEnabled && !sendControl("listening_start")) {
-      listeningState = "idle"
-      await stopAudioCapture(false)
+      await stopAudioCapture()
       reportStatus("Reconnecting")
       closeSocketQuietly(socket)
       forceReconnect()
@@ -1157,7 +1155,11 @@ export async function initializeEvenExperience(
     }
     listeningState = "listening"
     reportStatus("Listening")
-    await showListening()
+    if (followUp && visibleAssistant) {
+      await refreshAnswerStatus()
+    } else {
+      await showListening()
+    }
   }
 
   const stopEvents = bridge.onEvenHubEvent((event) => {
@@ -1172,14 +1174,11 @@ export async function initializeEvenExperience(
 
     const pcm = event.audioEvent?.audioPcm
     if (pcm) {
-      if (candidateAudio.captureRunning) {
+      if (audioCapture.running) {
         let ownedPcm: Uint8Array<ArrayBuffer> | undefined
         try {
           ownedPcm = Uint8Array.from(pcm)
-          candidateAudio.push(ownedPcm)
-          if (!candidateAudioEnabled) {
-            safeSend(socket, ownedPcm.buffer)
-          }
+          safeSend(socket, ownedPcm.buffer)
         } catch {
           // Ignore malformed or late audio frames.
         } finally {
@@ -1188,11 +1187,19 @@ export async function initializeEvenExperience(
       }
       return
     }
-    if (isLongPressEvent(event)) {
+    if (eventType === OsEventTypeList.SCROLL_TOP_EVENT) {
+      void enqueueTransition(() => turnMessagePage(-1))
+    } else if (eventType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
+      void enqueueTransition(() => turnMessagePage(1))
+    } else if (isLongPressEvent(event)) {
       suppressClicksUntil = Date.now() + RELEASE_CLICK_SUPPRESSION_MS
       void enqueueTransition(enterSleep)
     } else if (isClickEvent(event) && Date.now() >= suppressClicksUntil) {
-      void enqueueTransition(handleClick)
+      const pending = takePendingTranscript()
+      void enqueueTransition(async () => {
+        if (pending) await handleServerMessage(pending)
+        await handleClick()
+      })
     }
   })
 
@@ -1202,11 +1209,13 @@ export async function initializeEvenExperience(
 
   scheduleReconnect(true)
 
-  function teardown() {
+  let teardownPromise: Promise<void> | undefined
+  function teardown(): Promise<void> {
     if (!active) {
-      return
+      return teardownPromise ?? Promise.resolve()
     }
     active = false
+    takePendingTranscript()
     connectGeneration += 1
     connectionAbort?.abort()
     connectionAbort = undefined
@@ -1215,19 +1224,21 @@ export async function initializeEvenExperience(
     clearThinkingAnimation()
     resetAssistantInteraction()
     listeningState = "idle"
-    focusedCandidate.clear()
     stopEvents()
     stopLocationEvents()
     unbindSocket()
     const closingSocket = socket
     socket = undefined
-      closeSocketQuietly(closingSocket)
-    candidateAudio.resetTransport()
-    candidateAudio.dispose()
+    closeSocketQuietly(closingSocket)
+    const stoppingAudio = audioCapture.dispose()
+    let stoppingLocation: Promise<unknown> | undefined
     if (locationStarted) {
       locationStarted = false
-      void bridge.stopAppLocationUpdates().catch(() => undefined)
+      stoppingLocation = bridge.stopAppLocationUpdates()
     }
+    teardownPromise = Promise.allSettled([transitionTail, stoppingAudio, stoppingLocation])
+      .then(() => undefined)
+    return teardownPromise
   }
 
   return teardown
