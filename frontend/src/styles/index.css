@@ -1406,3 +1406,5 @@ button:focus-visible, summary:focus-visible, input:focus-visible, textarea:focus
   .brief-text-button { gap: 6px; }
   .topbar .connection-label > span:last-child { max-width: 80px; }
 }
+
+.auth-wordmark { color: inherit; text-decoration: none; }

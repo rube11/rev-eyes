@@ -1,5 +1,15 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "pnpm build:beta",
-  "outputDirectory": "dist"
+  "buildCommand": "pnpm build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/join",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/join/",
+      "destination": "/index.html"
+    }
+  ]
 }
