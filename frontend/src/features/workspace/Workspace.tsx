@@ -842,49 +842,66 @@ export function Workspace({
             <strong>{viewTitles[view]}</strong>
           </div>
           <div className="topbar__right">
-            {isDemo ? <span className="demo-label">Preview</span> : null}
-            <time className="topbar__clock" dateTime={now.toISOString()}>
-              <span className="topbar__date">{formatDay(now)}</span>
-              <strong className="topbar__time">{formatClock(now)}</strong>
-            </time>
-            <span
-              className={`connection-label${
-                connected ? ' connection-label--online' : ''
-              }`}
-              aria-label={`Even G2 ${deviceStatus}`}
-            >
-              <span className="connection-label__mark" aria-hidden="true" />
-              <span>{deviceStatus}</span>
-            </span>
+            {onRetry ? <button className="refresh-action" type="button" disabled={syncing} onClick={onRetry} title={lastSyncedAt ? `Last updated ${formatDateTime(lastSyncedAt)}` : 'Reload saved items'}>{syncing ? 'Refreshing…' : 'Refresh'}</button> : null}
+            <details className="connection-menu">
+              <summary
+                className={`connection-label${connected ? ' connection-label--online' : ''}`}
+                aria-label={`Even G2 ${deviceStatus}. Connection details`}
+              >
+                <span className="connection-label__mark" aria-hidden="true" />
+                <span>{deviceStatus}</span>
+              </summary>
+              <div>
+                <strong>{isDemo ? 'Preview' : 'Even G2'}</strong>
+                <p>{assistant.detail}</p>
+                {!isDemo && onReconnectGlasses ? <button className="connection-reconnect" type="button"
+                  disabled={reconnecting} onClick={onReconnectGlasses}>
+                  {reconnecting ? 'Reconnecting…' : 'Reconnect glasses'}
+                </button> : null}
+              </div>
+            </details>
+            {!isDemo && !connected && onReconnectGlasses ? <button className="connection-retry" type="button"
+              aria-label="Reconnect glasses" disabled={reconnecting} onClick={onReconnectGlasses}>
+              {reconnecting ? 'Reconnecting…' : 'Reconnect'}
+            </button> : null}
+            <details className="account-menu">
+              <summary aria-label="Account menu">{accountInitial}</summary>
+              <div><p>{isDemo ? 'Sample data · changes are not saved' : email}</p><button type="button" onClick={onSignOut}>{isDemo ? 'Exit preview' : 'Sign out'}</button></div>
+            </details>
           </div>
         </header>
 
-        {dataError ? (
+        {failedResources.length > 0 ? (
           <div className="data-notice" role="status">
-            <span aria-hidden="true">i</span>
-            <p>Some information may be out of date. We’ll keep trying.</p>
+            <div>
+              <strong>Some sections couldn’t refresh.</strong>
+              <p>{failedResources.map((resource) => `${viewTitles[resource]}: ${resourceErrors[resource] === 'stale' ? 'showing last loaded data' : 'unavailable'}`).join(' · ')}. We’ll keep retrying; other sections remain available.</p>
+            </div>
+            <button type="button" className="refresh-action" disabled={syncing} onClick={onRetry}>{syncing ? 'Retrying…' : 'Try again'}</button>
           </div>
         ) : null}
 
         <div className={`page${view === 'now' ? ' page--home' : ''}`} key={view}>
+          {unavailable ? <EmptyState title={`${viewTitles[view]} couldn’t load`} body="This section is unavailable right now. Use Try again above to reload it. Other sections remain available." /> : null}
           {view === 'now' ? (
-            <NowView
+            <HomeView
               data={data}
+              resourceErrors={resourceErrors}
               onNavigate={navigate}
               onAddMemory={() => setComposerOpen(true)}
               currentTime={now}
             />
           ) : null}
-          {view === 'conversations' ? (
-            <ConversationsView data={data} />
+          {!unavailable && view === 'conversations' ? (
+            <ConversationLog conversations={data.conversations} userId={userId} onSend={onSendChat} />
           ) : null}
-          {view === 'memories' ? (
+          {!unavailable && view === 'memories' ? (
             <MemoriesView
               data={data}
               onAdd={() => setComposerOpen(true)}
             />
           ) : null}
-          {view === 'watches' ? (
+          {!unavailable && view === 'watches' ? (
             <WatchesView
               data={data}
               currentTime={now}
@@ -896,7 +913,7 @@ export function Workspace({
               }
             />
           ) : null}
-          {view === 'tasks' ? (
+          {!unavailable && view === 'tasks' ? (
             <TasksView
               data={data}
               currentTime={now}
