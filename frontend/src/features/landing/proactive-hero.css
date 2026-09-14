@@ -112,3 +112,8 @@
 @media (max-height: 620px) and (max-width: 760px) { .re-mockup-caption { display: none; } }
 
 .re-hud-heading { font-size: 15px; font-weight: 400; letter-spacing: .4px; }
+
+@media (max-width: 1050px) {
+  .re-hud-heading { font-size: 18px; }
+  .re-hud-message, .re-hud-prompt { font-size: 24px; }
+}
