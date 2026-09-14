@@ -2,19 +2,17 @@
   "package_id": "com.reveyes.app",
   "edition": "202601",
   "name": "Rev Eyes",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "min_app_version": "2.0.0",
   "min_sdk_version": "0.0.12",
   "entrypoint": "index.html",
   "permissions": [
     {
       "name": "network",
-      "desc": "Connects to Rev Eyes services and downloads local speech-recognition model assets.",
+      "desc": "Connects to Rev Eyes services.",
       "whitelist": [
         "https://api.rev-eyes.com",
-        "https://ikqdeosysrsynkxbijgn.supabase.co",
-        "https://download.moonshine.ai",
-        "https://cdn.jsdelivr.net"
+        "https://ikqdeosysrsynkxbijgn.supabase.co"
       ]
     },
     {
