@@ -1,3 +1,4 @@
+import { BetaWaitlist } from '../features/landing/BetaWaitlist'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
@@ -29,7 +30,7 @@ import { Homepage } from '../features/landing/Homepage'
 import { SignIn } from '../features/auth/SignIn'
 import { sessionStorage, supabase } from '../shared/api/supabase'
 
-const isDemoMode = new URLSearchParams(window.location.search).has('demo')
+const isDemoMode = false
 const workspaceRefreshDebounceMs = 100
 const workspaceRetryDelaysMs = [2_000, 5_000, 15_000, 30_000]
 
@@ -76,7 +77,7 @@ function mergeWorkspaceData(
     : next
 }
 
-function LoadingScreen({ label = 'Opening your assistant' }: { label?: string }) {
+function LoadingScreen({ label = 'Loading…' }: { label?: string }) {
   return (
     <main className="boot-screen">
       <span className="boot-screen__brand">rev/eyes</span>
@@ -447,7 +448,7 @@ function App() {
     try {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) {
-        setAuthError('We could not sign you in. Check your email and password and try again.')
+        setAuthError('Couldn’t sign in. Check your email and password.')
         return
       }
       setSessionError('')
@@ -490,7 +491,7 @@ function App() {
     }
 
     if (!session?.user.id) {
-      throw new Error('Please sign in again to save this memory.')
+      throw new Error('Sign in again to save this memory.')
     }
     const memory = await saveMemory(session.user.id, input)
     locallyAddedMemoryIds.current.add(memory.id)
@@ -514,7 +515,7 @@ function App() {
   ) => {
     if (!isDemoMode) {
       if (!session?.access_token) {
-        throw new Error('Please sign in again to update this item.')
+        throw new Error('Sign in again to update this item.')
       }
       await resolveWorkspaceProposal(
         session.access_token,
@@ -566,7 +567,7 @@ function App() {
   ) => {
     if (!isDemoMode) {
       if (!session?.access_token) {
-        throw new Error('Please sign in again to delete this item.')
+        throw new Error('Sign in again to delete this item.')
       }
       await deleteWorkspaceAutomation(session.access_token, kind, resourceId)
     }
@@ -624,6 +625,8 @@ function App() {
       <LoadingScreen />
     )
   }
+
+  if (window.location.pathname.replace(/\/$/, '') === '/join') return <BetaWaitlist />
 
   // Storage failure must never expose a workspace or block the public homepage.
   if (!storageError && !sessionError && session === undefined) {
