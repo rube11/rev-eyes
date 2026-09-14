@@ -498,3 +498,503 @@ MOONSHINE_EXPORT int32_t moonshine_load_transcriber_from_files(
    All of the other parameters are the same as for
    moonshine_load_transcriber_from_files.                                    */
 MOONSHINE_EXPORT int32_t moonshine_load_transcriber_from_memory(
+    const uint8_t *encoder_model_data, size_t encoder_model_data_size,
+    const uint8_t *decoder_model_data, size_t decoder_model_data_size,
+    const uint8_t *tokenizer_data, size_t tokenizer_data_size,
+    const uint8_t *spelling_model_data, size_t spelling_model_data_size,
+    uint32_t model_arch, const struct moonshine_option_t *options,
+    uint64_t options_count, int32_t moonshine_version);
+
+/* Loads a transcriber from a set of in-memory model assets keyed by their
+   canonical filename. This is the in-memory counterpart that reaches full
+   parity with moonshine_load_transcriber_from_files: unlike
+   moonshine_load_transcriber_from_memory (which only accepts a fixed
+   encoder/decoder/tokenizer/spelling set and rejects streaming models), this
+   entry point accepts whatever files the chosen architecture needs, resolved
+   by name.
+
+   ``filenames[i]`` is the canonical filename as it would appear on disk under
+   a model directory. Recognized keys depend on ``model_arch``:
+     - Non-streaming (TINY, BASE): ``encoder_model.ort``,
+       ``decoder_model_merged.ort``, ``tokenizer.bin`` (all required), plus the
+       optional word-timestamp decoder ``decoder_with_attention.ort`` (or the
+       two-pass ``alignment_model.ort``) when the ``word_timestamps`` option is
+       set.
+     - Streaming (``*_STREAMING``): ``frontend.ort`` (or the split pair
+       ``frontend.model.ort`` + ``frontend.weights.ort``), ``encoder.ort``,
+       ``adapter.ort``, ``cross_kv.ort``, ``decoder_kv.ort``,
+       ``streaming_config.json``, ``tokenizer.bin`` (all required), plus the
+       optional ``decoder_kv_with_attention.ort`` when ``word_timestamps`` is
+       set.
+     - Either kind also accepts ``spelling_cnn.ort``, and the two diarization
+       models ``segmentation.ort`` and ``embedding.ort``, which are required
+       when the ``identify_speakers`` option is set. Fetch those two with
+       moonshine_get_diarization_dependencies.
+   Unrecognized keys are rejected with MOONSHINE_ERROR_INVALID_ARGUMENT, and
+   missing required keys cause the load to fail. The recognized set is the
+   union of the names above across every architecture, so passing an asset
+   this architecture or option set has no use for is fine - handing over a
+   whole downloaded model directory works - but a misspelled name is reported
+   against the key you passed instead of surfacing later as a missing-asset
+   failure.
+
+   When ``memory[i]`` is non-NULL and ``memory_sizes[i]`` > 0, that buffer is
+   used as the asset bytes. The library does not copy the model buffers (the
+   ONNX Runtime sessions read them directly), so the buffers must outlive the
+   transcriber, exactly as for moonshine_load_transcriber_from_memory. When
+   ``memory[i]`` is NULL or ``memory_sizes[i]`` is zero, ``filenames[i]`` is
+   also used as a filesystem path (relative to the current working directory
+   unless absolute), so callers can mix in-memory and on-disk assets.
+
+   All other parameters behave as in the other transcriber loaders. Returns a
+   non-negative handle on success, or a negative error code on failure. */
+MOONSHINE_EXPORT int32_t moonshine_load_transcriber_from_memory_files(
+    const char **filenames, const uint8_t **memory,
+    const uint64_t *memory_sizes, uint64_t file_count, uint32_t model_arch,
+    const struct moonshine_option_t *options, uint64_t options_count,
+    int32_t moonshine_version);
+
+/* Releases all resources used by the transcriber. Subsequent transcriber
+   creation calls may reuse this transcriber's ID, so ensure you remove
+   all references to it in your client code after freeing it.*/
+MOONSHINE_EXPORT void moonshine_free_transcriber(int32_t transcriber_handle);
+
+/* Given an array of PCM audio data, identifies sections of speech and
+   transcribes them into text. This is the call to use if you're analyzing audio
+   from a file or other static source where you have all the audio data at once.
+   If you are transcribing audio from a live microphone or other real-time
+   source, you should use the streaming API instead, since it offers lower
+   latency for those use cases.
+
+   `transcriber_handle` should be a handle to a transcriber returned by
+    moonshine_load_transcriber_from_files or
+    moonshine_load_transcriber_from_memory.
+
+   `audio_data` should be a pointer to an array of PCM audio data, between -1.0
+    and 1.0, at a sample rate of `sample_rate` Hz. Internally the library uses
+    16,000 Hz, so to avoid resampling you should capture audio at this rate if
+    possible.
+
+   `audio_length` should be the number of samples in the audio data array.
+
+   `sample_rate` should be the sample rate of the audio data, in Hz.
+   `flags` should be a bitwise OR of flags. Currently the only supported flag
+   is MOONSHINE_FLAG_SPELLING_MODE, which applies alphanumeric-spelling fusion
+   to completed lines (requires the transcriber to have been loaded with a
+   spelling model; otherwise the flag is a no-op). Pass zero for the default
+   behavior.
+
+   `out_transcript` should be a pointer to a pointer to a transcript_t struct.
+   The transcript_t struct will be populated with the transcript data, which
+   consists of a list of lines, each with text, audio data, and timestamps.
+   This data is owned by the transcriber and is valid until the next call to
+   that transcriber, or until the transcriber is freed.
+
+   The return value is zero on success, or a non-zero error code on failure.
+   The error code can be converted to a human-readable string using
+   moonshine_error_to_string.
+*/
+MOONSHINE_EXPORT int32_t moonshine_transcribe_without_streaming(
+    int32_t transcriber_handle, float *audio_data, uint64_t audio_length,
+    int32_t sample_rate, uint32_t flags, struct transcript_t **out_transcript);
+
+/* Streaming allows the library to incrementally return updated results as
+   new audio data becomes available in real-time. This approach allows us to
+   produce results with lower latency than non-streaming approaches, by
+   reusing calculations done on earlier audio data.
+
+   The `transcriber_handle` should be a handle to a transcriber returned by
+   moonshine_load_transcriber_from_files or
+   moonshine_load_transcriber_from_memory. A single transcriber can have
+   multiple streams associated with it, and each stream can be used to
+   transcribe a separate audio stream.
+
+   The `flags` should be a bitwise OR of flags. None are currently supported so
+   this should always be zero.
+
+   The return value is a handle to a stream, which can be used to identify the
+   stream in subsequent calls. If there was an error, a negative value is
+   returned. The error code can be converted to a human-readable string using
+   moonshine_error_to_string.
+
+   Below is some pseudocode showing an example of how to use streaming. In a
+   real application you'll want to check the return value of the functions and
+   handle errors appropriately. `get_audio_from_microphone` stands in for your
+   capture loop: feed each chunk to
+   moonshine_transcribe_add_audio_to_stream (safe from an audio callback),
+   then call moonshine_transcribe_stream on another thread when you want an
+   updated transcript. A more complete example is the streaming test in
+   core/moonshine-c-api-test.cpp.
+
+   ```c
+    int32_t transcriber_handle = moonshine_load_transcriber_from_files(
+        "path/to/models", MOONSHINE_MODEL_ARCH_BASE, NULL, 0,
+        MOONSHINE_HEADER_VERSION);
+    int32_t stream_handle = moonshine_create_stream(transcriber_handle, 0);
+    moonshine_start_stream(transcriber_handle, stream_handle);
+
+    float* latest_audio_data;
+    size_t latest_audio_data_length;
+    while (get_audio_from_microphone(&latest_audio_data,
+      &latest_audio_data_length)) {
+      moonshine_transcribe_add_audio_to_stream(transcriber_handle,
+        stream_handle, latest_audio_data, latest_audio_data_length,
+       microphone_sample_rate, 0);
+      if (time_since_last_transcription < min_time_between_transcriptions) {
+        continue;
+      }
+      transcript_t *partial_transcript = NULL;
+      moonshine_transcribe_stream(transcriber_handle,
+        stream_handle, 0, &partial_transcript);
+      printf("%s\n", moonshine_transcript_to_string(partial_transcript));
+    }
+    moonshine_stop_stream(transcriber_handle, stream_handle);
+
+    transcript_t *final_transcript = NULL;
+    moonshine_transcribe_stream(transcriber_handle, stream_handle, 0,
+      &final_transcript);
+    printf("%s\n", moonshine_transcript_to_string(final_transcript));
+
+    moonshine_free_stream(transcriber_handle, stream_handle);
+    moonshine_free_transcriber(transcriber_handle);
+    ```
+
+   The transcripts that are returned consist of a list of lines, each with
+   text, audio data, timestamp, duration, and other metadata. This metadata
+   includes an `is_updated` flag, which is set to 1 if the line has been updated
+   since the last call to moonshine_transcribe_stream. You can use this as a
+   "dirty flag" to determine how to update your UI in a minimal way, touching
+   only the elements that have changed. Updated lines only appear at the end of
+   the list of lines, and once the `is_complete` flag is set to 1 for a line,
+   its text and timing will never change again.
+
+   The one exception is speaker information: when the `identify_speakers`
+   option is enabled, speaker spans for recent audio can be revised on any call
+   to moonshine_transcribe_stream, since diarization re-clusters a sliding
+   window of recent speech. Older assignments are frozen. Watch the
+   `have_speakers_changed` flag to detect these revisions.
+*/
+
+/* Creates a stream. This function returns a handle to the stream, which can be
+   used to identify the stream in subsequent calls. If there was an error, a
+   negative value is returned. The error code can be converted to a
+   human-readable string using moonshine_error_to_string.
+*/
+MOONSHINE_EXPORT int32_t moonshine_create_stream(int32_t transcriber_handle,
+                                                 uint32_t flags);
+
+/* Releases the resources used by a stream.
+   Subsequent stream creation calls may reuse this stream's ID, so ensure you
+   remove all references to it in your client code after freeing it.*/
+MOONSHINE_EXPORT int32_t moonshine_free_stream(int32_t transcriber_handle,
+                                               int32_t stream_handle);
+
+/* Starts a stream. This should be called before adding audio or calling
+   moonshine_transcribe_stream. Start/stop are supported because there may
+   sometimes be a discontinuity in the audio input, for example when the user
+   mutes their input, so we need a way to start fresh after a break like this.
+   This function returns zero on success, or a non-zero error code on failure.
+   The error code can be converted to a human-readable string using
+   moonshine_error_to_string.
+ */
+MOONSHINE_EXPORT int32_t moonshine_start_stream(int32_t transcriber_handle,
+                                                int32_t stream_handle);
+
+/* Stops a stream. Further moonshine_transcribe_add_audio_to_stream calls are
+   rejected, but audio that has not yet been analyzed is kept. Call
+   moonshine_transcribe_stream afterwards to drain that leftover audio and get
+   the final transcript, with all lines marked complete. This function returns
+   zero on success, or a non-zero error code on failure. The error code can be
+   converted to a human-readable string using moonshine_error_to_string.
+ */
+MOONSHINE_EXPORT int32_t moonshine_stop_stream(int32_t transcriber_handle,
+                                               int32_t stream_handle);
+
+/* Call this when new audio data becomes available from your microphone or other
+   audio source. This function will add the audio data to the stream's buffer,
+   but it will not transcribe it or do any other processing, so this should be
+   safe to call frequently even from time-critical threads. The size of the
+   input audio doesn't have any impact on performance, so you should call this
+   with whatever the natural chunk size is for your audio source. It is up to
+   you to call moonshine_transcribe_stream when you want an updated transcript,
+   the frequency of which should be determined by your application's latency and
+   compute budgets.
+
+   `transcriber_handle` should be a handle to a transcriber returned by
+   moonshine_load_transcriber_from_files or
+   moonshine_load_transcriber_from_memory.
+
+   `stream_handle` should be a handle to a stream returned by
+   moonshine_create_stream.
+
+   `new_audio_data` should be a pointer to an array of PCM audio data, between
+   -1.0 and 1.0, at a sample rate of `sample_rate` Hz. `audio_length` should be
+   the number of samples in the audio data array.
+
+   `sample_rate` should be the sample rate of the audio data, in Hz.
+
+   `flags` should be a bitwise OR of flags. None are currently supported so
+   this should always be zero.
+
+   The return value is zero on success, or a non-zero error code on failure.
+   The error code can be converted to a human-readable string using
+   moonshine_error_to_string.
+*/
+MOONSHINE_EXPORT int32_t moonshine_transcribe_add_audio_to_stream(
+    int32_t transcriber_handle, int32_t stream_handle,
+    const float *new_audio_data, uint64_t audio_length, int32_t sample_rate,
+    uint32_t flags);
+
+/* Analyzes all the audio data in the stream and returns an updated transcript
+   of all the speech segments found. By default this function will only perform
+   full analysis on the audio data if there has been more than 200ms of new
+   samples since the last complete analysis. This is to ensure that too-frequent
+   calls to this function don't result in poor performance. This can be
+   overridden by setting the MOONSHINE_FLAG_FORCE_UPDATE flag.
+
+   After moonshine_stop_stream, leftover audio is analyzed even if it is
+   shorter than that interval, so the stop-then-transcribe_stream sequence in
+   the example above produces a complete transcript. You do not need
+   MOONSHINE_FLAG_FORCE_UPDATE for that final call, and you do not need to
+   have pulled partial transcripts first.
+
+   `transcriber_handle` should be a handle to a transcriber returned by
+   moonshine_load_transcriber_from_files or
+   moonshine_load_transcriber_from_memory.
+
+   `stream_handle` should be a handle to a stream returned by
+   moonshine_create_stream.
+
+   `flags` should be a bitwise OR of flags. Currently the only supported flag is
+   MOONSHINE_FLAG_FORCE_UPDATE, which ignores the time-based caching logic to
+   ensure the stream is fully analyzed by the models.
+
+   `out_transcript` should be a pointer to a pointer to a transcript_t struct.
+   The transcript_t struct will be populated with the transcript data, which
+   consists of a list of lines, each with text, audio data, and timestamps.
+   This data is owned by the transcriber and is valid until the next call to
+   that transcriber, or until the transcriber is freed.
+
+   The return value is zero on success, or a non-zero error code on failure.
+   The error code can be converted to a human-readable string using
+   moonshine_error_to_string.
+*/
+MOONSHINE_EXPORT int32_t moonshine_transcribe_stream(
+    int32_t transcriber_handle, int32_t stream_handle, uint32_t flags,
+    struct transcript_t **out_transcript);
+
+/* ------------------------------ EMBEDDING MODEL --------------------------- */
+
+/* Supported embedding model architectures.                                  */
+#define MOONSHINE_EMBEDDING_MODEL_ARCH_GEMMA_300M (0)
+
+/* Creates an embedding model from files on disk.
+
+   `model_path` should be the path to the directory containing the embedding
+   model files (ONNX model and tokenizer.bin).
+
+   `model_arch` should be one of the MOONSHINE_EMBEDDING_MODEL_ARCH_* constants.
+   Currently only MOONSHINE_EMBEDDING_MODEL_ARCH_GEMMA_300M is supported.
+
+   `model_variant` specifies which model variant to load: "q4" or "q8".
+   Pass NULL to use the default "q4" variant. "fp32", "fp16", and "q4f16"
+   are no longer supported and return an error.
+
+   Returns a non-negative handle on success, or a negative error code on
+   failure. The error code can be converted to a human-readable string using
+   moonshine_error_to_string.
+*/
+MOONSHINE_EXPORT int32_t moonshine_create_embedding_model(
+    const char *model_path, uint32_t model_arch, const char *model_variant);
+
+/* Creates an embedding model from in-memory model buffers.
+
+   This mirrors moonshine_load_transcriber_from_memory_files and
+   moonshine_create_tts_synthesizer_from_memory: `filenames[i]` is the canonical
+   asset filename (as listed by moonshine_get_embedding_dependencies, e.g.
+   `model_q4.ort` and `tokenizer.bin`) and `memory[i]` / `memory_sizes[i]` are
+   the corresponding bytes. The embedding model must be a single self-contained
+   all-in-one `.ort` file (no external-data sidecar); the tokenizer is
+   `tokenizer.bin`. The library copies the bytes it needs, so the buffers only
+   need to remain valid for the duration of this call.
+
+   `model_arch` should be one of the MOONSHINE_EMBEDDING_MODEL_ARCH_* constants.
+   `model_variant` selects the variant ("q4", "q8";
+   NULL defaults to "q4") and is only used to pick the model file when the
+   filename keys do not make it unambiguous. "fp32", "fp16", and "q4f16" are
+   no longer supported.
+
+   Returns a non-negative handle on success, or a negative error code on
+   failure.
+*/
+MOONSHINE_EXPORT int32_t moonshine_create_embedding_model_from_memory(
+    uint32_t model_arch, const char *model_variant, const char **filenames,
+    uint64_t filenames_count, const uint8_t **memory,
+    const uint64_t *memory_sizes, const struct moonshine_option_t *options,
+    uint64_t options_count, int32_t moonshine_version);
+
+/* Frees an embedding model and all its resources. */
+MOONSHINE_EXPORT void moonshine_free_embedding_model(
+    int32_t embedding_model_handle);
+
+/* Calculates the embedding for a given sentence.
+
+   On success, ``*out_embedding`` is set to a heap-allocated array of floats and
+   ``*out_embedding_size`` is set to the number of elements. Release the array
+   with ``moonshine_free_embedding``.
+
+   Returns zero on success, or a non-zero error code on failure.
+*/
+MOONSHINE_EXPORT int32_t moonshine_calculate_embedding(
+    int32_t embedding_model_handle, const char *sentence, float **out_embedding,
+    uint64_t *out_embedding_size, const char *model_name);
+
+/* Frees an embedding returned by moonshine_calculate_embedding. */
+MOONSHINE_EXPORT void moonshine_free_embedding(float *embedding);
+
+/* Calculates the cosine similarity between two embedding vectors.
+
+   Both ``embedding_a`` and ``embedding_b`` must have ``embedding_size``
+   elements.  The result is written to ``*out_similarity`` and is in the
+   range [-1, 1] (1 = identical, 0 = orthogonal, -1 = opposite).
+
+   Returns zero on success, or a non-zero error code on failure.
+*/
+MOONSHINE_EXPORT int32_t moonshine_calculate_embedding_distance(
+    int32_t embedding_model_handle, const float *embedding_a,
+    const float *embedding_b, uint64_t embedding_size, float *out_similarity);
+
+/* ------------------------------ SPEECH CLIPS --------------------------- */
+
+/* A short window of mostly-speech audio pulled out of a longer recording,
+   returned by moonshine_extract_speech_clip. */
+struct moonshine_speech_clip_t {
+  /* 16 kHz mono PCM. NULL unless ``is_complete`` is non-zero. Allocated with
+     malloc; release with moonshine_free_buffer. */
+  float *audio_data;
+  uint64_t audio_length;
+  /* Where the window starts in the input recording, in seconds. */
+  float start_time;
+  /* How much of the window is speech, in seconds. Useful for showing progress
+     while the caller is still recording. */
+  float speech_duration;
+  /* Non-zero once a window with enough speech in it was found. */
+  int32_t is_complete;
+  /* UTF-8 transcript of the clip when the TTS synthesizer owns a clone ASR
+     and the window was complete enough to refine. NULL otherwise. Allocated
+     with malloc; release with moonshine_free_buffer. */
+  char *transcript;
+};
+
+/* Finds the best short window of speech in a recording, for use as the
+   reference clip in zero-shot voice cloning.
+
+   ``tts_synthesizer_handle`` must be a valid synthesizer from
+   ``moonshine_create_tts_synthesizer_*``. The call always runs the built-in
+   voice-activity detector (no download) over ``audio_data``, slides a window
+   of ``clip_duration_seconds`` across the result, and returns the window with
+   the most speech. If no window contains at least ``minimum_speech_seconds``
+   of speech, ``out_clip->is_complete`` is zero and no audio is returned; the
+   caller should record more and call again (streaming capture).
+
+   Extract is VAD-only and stays cheap enough for the capture loop. When
+   ZipVoice is later created without ``zipvoice_clone_transcript``, the owned
+   clone ASR (from ``g2p_root/clone_asr/`` or ``clone_asr/...`` memory keys)
+   refines the clip and fills the transcript once — see
+   ``moonshine_get_tts_dependencies``.
+
+   The returned clip is always 16 kHz mono regardless of ``sample_rate``.
+
+   Recognised ``options``:
+     ``clip_duration_seconds``  length of the window (default 4).
+     ``minimum_speech_seconds`` speech required in it (default 2).
+     ``vad_threshold``          speech probability threshold (default 0.5).
+     ``tail_pad_seconds``       extra audio after the VAD window (default 0).
+
+   Returns zero on success, or a non-zero error code on failure. The error code
+   can be converted to a human-readable string using moonshine_error_to_string.
+*/
+MOONSHINE_EXPORT int32_t moonshine_extract_speech_clip(
+    const float *audio_data, uint64_t audio_length, int32_t sample_rate,
+    int32_t tts_synthesizer_handle, const struct moonshine_option_t *options,
+    uint64_t options_count, struct moonshine_speech_clip_t *out_clip);
+
+/* ------------------------------ TEXT TO SPEECH ------------------------- */
+
+/* Creates a text to speech synthesizer from files on disk.
+   Returns a non-negative handle on success, or a non-zero error code on
+   failure. The error code can be converted to a human-readable string using
+   moonshine_error_to_string.
+   Pass option ``voice`` as ``kokoro_<id>`` or ``piper_<stem>`` to select the
+   vocoder, or as a bare Kokoro id / Piper stem when using the default auto
+   choice (and other TTS paths via ``moonshine_option_t`` as documented for
+   ``MoonshineTTSOptions``). ``engine`` / ``vocoder_engine`` options are
+   ignored.
+
+   ZipVoice (zero-shot voice cloning) is selected with ``voice`` =
+   ``zipvoice_<id>`` for a built-in VCTK reference voice (e.g.
+   ``zipvoice_american_female``, ``zipvoice_indian_male``), or a bare
+   ``zipvoice`` together with a caller-supplied reference clip via
+   ``moonshine_create_tts_synthesizer_from_memory`` (key
+   ``zipvoice/clone_audio``). ZipVoice model assets
+   (``zipvoice/text_encoder.ort``, ``zipvoice/fm_decoder.ort``,
+   ``zipvoice/vocoder.ort``, ``zipvoice/tokens.txt``,
+   ``zipvoice/model.json``) are resolved under ``g2p_root`` or supplied in
+   memory. English only for now.
+
+   For ZipVoice cloning, download TTS dependencies (including the
+   ``role":"clone_asr"`` group) under ``g2p_root`` so ``g2p_root/clone_asr/``
+   holds the catalog STT, or pass ``clone_asr/<stt-filename>`` memory keys to
+   ``moonshine_create_tts_synthesizer_from_memory``. The library owns that ASR
+   for the synthesizer lifetime and uses it inside
+   ``moonshine_extract_speech_clip``. When a caller-supplied
+   ``zipvoice/clone_audio`` clip has no ``zipvoice_clone_transcript``, the clip
+   is refined with that ASR at create time.
+*/
+MOONSHINE_EXPORT int32_t moonshine_create_tts_synthesizer_from_files(
+    const char *language, const char **filenames, uint64_t filenames_count,
+    const struct moonshine_option_t *options, uint64_t options_count,
+    int32_t moonshine_version);
+
+/* Creates a text to speech synthesizer from memory.
+   Returns a non-negative handle on success, or a non-zero error code on
+   failure. The error code can be converted to a human-readable string using
+   moonshine_error_to_string.
+
+   ``filenames[i]`` is the canonical ``MoonshineTTSOptions::files`` key (e.g.
+   ``kokoro/prosody.model.ort``, ``kokoro/prosody.weights.ort``,
+   ``kokoro/decoder.model.ort``, ``kokoro/decoder.weights.ort``,
+   ``kokoro/config.json``, ``kokoro/voices/af_heart.kokorovoice``,
+   ``piper/onnx``, ``piper/onnx.json``, ``zipvoice/text_encoder.ort``,
+   ``zipvoice/fm_decoder.ort``, ``zipvoice/vocoder.ort``,
+   ``zipvoice/tokens.txt``, ``zipvoice/model.json``). For ZipVoice a
+   caller-supplied reference clip is passed as key ``zipvoice/clone_audio``
+   (raw little-endian float32 mono PCM); set ``zipvoice_clone_sample_rate`` and,
+   optionally, ``zipvoice_clone_transcript``. When the transcript is omitted,
+   supply ``clone_asr/<stt-filename>`` keys (from the ZipVoice TTS dependency
+   ``clone_asr`` group) so the library can refine and auto-transcribe the clip
+   with its owned ASR. When ``memory[i]`` is non-NULL and
+   ``memory_sizes[i]`` > 0, that buffer is used as the asset bytes; the library
+   does not copy it—keep the buffers valid until
+   ``moonshine_free_tts_synthesizer``. When ``memory[i]`` is NULL or
+   ``memory_sizes[i]`` is zero, the key string is also used as a path relative
+   to ``g2p_options.g2p_root`` (from ``options``), same as path-only map
+   entries.
+
+   Other ``options`` are parsed like
+   ``moonshine_create_tts_synthesizer_from_files``.
+*/
+MOONSHINE_EXPORT int32_t moonshine_create_tts_synthesizer_from_memory(
+    const char *language, const char **filenames,
+    const uint64_t filenames_count, const uint8_t **memory,
+    const uint64_t *memory_sizes, const struct moonshine_option_t *options,
+    uint64_t options_count, int32_t moonshine_version);
+
+/* Releases the resources used by a text to speech synthesizer. */
+MOONSHINE_EXPORT void moonshine_free_tts_synthesizer(
+    int32_t tts_synthesizer_handle);
+
+/* Returns G2P-only canonical asset keys for one or more languages.
+   ``languages`` is comma-separated CLI tags (same as ``moonshine_create_*``
+   ``language``); an empty string (or NULL) means all known languages (union of
+   keys).
