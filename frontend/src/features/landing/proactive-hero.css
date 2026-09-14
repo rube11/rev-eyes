@@ -69,7 +69,7 @@
 @keyframes re-copy-in { from { opacity: 0; translate: 0 9px; } to { opacity: 1; translate: 0 0; } }
 @media (max-width: 1050px) and (min-width: 761px) {
   .re-cinema-layout { grid-template-columns: .46fr .54fr; padding-inline: 36px; }
-  .re-story-copy h1 { font-size: clamp(38px, 5.2vw, 52px); }
+  .re-story-copy h1 { font-size: clamp(44px, 5.8vw, 60px); }
   .re-story-description { font-size: 13px; max-width: 265px; }
   .re-device-scene { --re-hardware-width: 980px; }
   .re-chapter-buttons { gap: 18px; }
@@ -80,7 +80,7 @@
   .re-scroll-story { height: 155svh; }
   .re-cinema-layout { display: flex; flex-direction: column; align-items: stretch; padding: 94px 25px 82px; }
   .re-story-copy { flex: 0 0 auto; text-align: center; }
-  .re-story-copy h1 { font-size: clamp(35px, 9vw, 52px); line-height: 1.03; margin: 16px 0; }
+  .re-story-copy h1 { font-size: clamp(40px, 10.5vw, 64px); line-height: 1.03; margin: 16px 0; }
   .re-story-description { font-size: 12px; line-height: 1.7; max-width: 350px; }
   .re-story-actions { justify-content: center; margin-top: 20px; gap: 18px; }
   .re-story-actions .re-primary-link { font-size: 10px; padding: 13px 18px; gap: 18px; }
@@ -98,7 +98,7 @@
 }
 @media (max-height: 740px) and (max-width: 760px) {
   .re-cinema-layout { padding-top: 78px; padding-bottom: 70px; }
-  .re-story-copy h1 { font-size: 35px; margin-block: 12px; }
+  .re-story-copy h1 { font-size: clamp(40px, 10.5vw, 56px); margin-block: 12px; }
   .re-story-description { font-size: 11px; }
   .re-story-actions { margin-top: 13px; }
   .re-mockup-caption { bottom: 5px; }
@@ -113,7 +113,3 @@
 
 .re-hud-heading { font-size: 15px; font-weight: 400; letter-spacing: .4px; }
 
-@media (max-width: 1050px) {
-  .re-hud-heading { font-size: 18px; }
-  .re-hud-message, .re-hud-prompt { font-size: 24px; }
-}
