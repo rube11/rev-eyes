@@ -1,435 +1,187 @@
 import { AudioInputSource, OsEventTypeList } from "@evenrealities/even_hub_sdk"
-
 import { supabase } from "../shared/api/supabase"
 import { connectRealtimeSocket } from "../shared/api/client"
-import { CandidateAudioClient } from "../even/candidate-audio-client"
 import { getEvenBridge, renderGlassesPage, resumeGlassesPage } from "../even/glasses-page-host"
 import { buildCompactPage } from "../even/glasses-ui"
-import type { MoonshineDiagnosticEvent } from "../even/moonshine-diagnostic-event"
-import { parseRealtimeServerMessage } from "../even/realtime-protocol"
 import { withTimeout } from "../even/promise-timeout"
 import "./style.css"
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const button = (id: string) => element<HTMLButtonElement>(id)
-const checked = (id: string) => element<HTMLInputElement>(id).checked
-const websocketOpen = 1
-const maxServerTranscripts = 20
-const wakePhrasePattern = /(don['’]t let me forget|remind me|remember|glasses|i need|need to|need|i plan to|i want to|i should|i prefer)/giu
-
-let accessToken = ""
-let client: CandidateAudioClient | undefined
+const phrases = /\b(don['’]t let me forget|remind me|remember|glasses|i need|need to|need|i plan to|i want to|i should|i prefer|repeat that|show that again)\b/giu
+let token = ""
 let socket: WebSocket | undefined
 let unsubscribe: (() => void) | undefined
-let wanted = false
+let running = false
 let busy = false
 let stopping = false
-let generation = 0
-let startedAt = 0
 let frames = 0
-let lastAudioAt = 0
-let lastVadAt = 0
-let previousVad = 0
-let recoveryAttempts = 0
-let previousHealth = ""
+let sentBytes = 0
+let receivedBytes = 0
+let startedAt = 0
+let sequence = 0
 let status = "Checking account…"
-let liveTranscript = ""
-const serverTranscripts: string[] = []
+let stoppedResolve: (() => void) | undefined
+const moonshine = new Map<string, string>()
+const deepgram = new Map<string, string>()
 
-function appendHighlighted(container: HTMLElement, transcript: string) {
-  container.replaceChildren()
+function highlighted(target: HTMLElement, text: string) {
   let offset = 0
-  for (const match of transcript.matchAll(wakePhrasePattern)) {
-    const index = match.index ?? 0
-    if (index > offset) {
-      container.append(document.createTextNode(transcript.slice(offset, index)))
+  for (const match of text.matchAll(phrases)) {
+    target.append(document.createTextNode(text.slice(offset, match.index)))
+    const mark = document.createElement("mark")
+    mark.textContent = match[0]
+    target.append(mark)
+    offset = match.index + match[0].length
+  }
+  target.append(document.createTextNode(text.slice(offset)))
+}
+
+function renderTranscripts() {
+  for (const [id, entries] of [["moonshine-transcripts", moonshine], ["server-transcripts", deepgram]] as const) {
+    const list = element(id)
+    if (!entries.size) {
+      list.textContent = id === "moonshine-transcripts" ? "Waiting for speech…" : "Waiting for a keyword match…"
+      continue
     }
-    const highlight = document.createElement("mark")
-    highlight.textContent = match[0]
-    container.append(highlight)
-    offset = index + match[0].length
+    list.replaceChildren(...Array.from(entries.values(), text => {
+      const row = document.createElement("li")
+      const content = document.createElement("p")
+      highlighted(content, text)
+      row.append(content)
+      return row
+    }))
   }
-  if (offset < transcript.length) {
-    container.append(document.createTextNode(transcript.slice(offset)))
-  }
-}
-
-function renderLiveTranscript() {
-  const target = element("live-transcript")
-  target.classList.toggle("transcript-empty", liveTranscript.length === 0)
-  if (liveTranscript) {
-    appendHighlighted(target, liveTranscript)
-  } else {
-    target.textContent = "Waiting for speech…"
-  }
-}
-
-function renderServerTranscripts() {
-  const list = element<HTMLOListElement>("server-transcripts")
-  element("server-count").textContent = `${serverTranscripts.length} received`
-  if (serverTranscripts.length === 0) {
-    const row = document.createElement("li")
-    row.className = "transcript-empty"
-    row.textContent = "Waiting for an accepted wake phrase…"
-    list.replaceChildren(row)
-    return
-  }
-  const rows = serverTranscripts.map((transcript, index) => {
-    const row = document.createElement("li")
-    const label = document.createElement("small")
-    label.textContent = `SERVER TRANSCRIPT ${String(index + 1).padStart(2, "0")}`
-    const content = document.createElement("p")
-    appendHighlighted(content, transcript)
-    row.append(label, content)
-    return row
-  })
-  list.replaceChildren(...rows)
-  rows.at(-1)?.scrollIntoView({ behavior: "smooth", block: "nearest" })
-}
-
-function updateStatus(value: string) {
-  status = value
-  render()
+  element("server-count").textContent = `${deepgram.size} received`
 }
 
 function render() {
   element("status").textContent = status
-  button("start").disabled = !accessToken || wanted || busy || stopping
-  button("stop").disabled = !wanted || stopping
-  button("retry").disabled = !wanted || busy || stopping
-  button("clear-transcripts").disabled = wanted || busy || stopping
-  element("elapsed").textContent = wanted
-    ? `${Math.floor((Date.now() - startedAt) / 1_000)} seconds`
-    : "Not running"
-  const state = client?.snapshot()
-  const values = [
-    `${frames} frames${lastAudioAt ? ` · last ${Math.floor((Date.now() - lastAudioAt) / 1_000)}s ago` : ""}`,
-    state?.adapterContext ?? "—",
-    state?.inferenceHealthy === false
-      ? "Stalled · reload required"
-      : state?.moonshineContext ?? "—",
-    `${state?.speechStarts ?? 0} / ${state?.commits ?? 0} (this audio run)`,
-  ]
-  document.querySelectorAll("#metrics dd").forEach((node, index) => {
-    node.textContent = values[index]
-  })
+  button("start").disabled = !token || running || busy || stopping
+  button("stop").disabled = !running || stopping
+  button("clear-transcripts").disabled = running || busy || stopping
+  element("elapsed").textContent = running ? `${Math.floor((Date.now()-startedAt)/1000)} seconds` : "Not running"
+  const values = [`${frames} frames`, `${(sentBytes/32000).toFixed(1)}s`, `${(receivedBytes/32000).toFixed(1)}s`, "Server-side"]
+  document.querySelectorAll("#metrics dd").forEach((node, i) => { node.textContent = values[i] })
 }
+function update(value: string) { status = value; render() }
 
-function closeSocket() {
-  const current = socket
-  socket = undefined
-  try {
-    current?.close()
-  } catch {
-    // The browser may already have closed it.
-  }
-}
-
-function handleServerMessage(event: MessageEvent<unknown>) {
-  const message = parseRealtimeServerMessage(event.data)
-  if (!message) {
-    return
-  }
-  if (message.type === "user_transcript" && message.text) {
-    serverTranscripts.push(message.text)
-    serverTranscripts.splice(0, Math.max(0, serverTranscripts.length - maxServerTranscripts))
-    renderServerTranscripts()
-    updateStatus("Server transcript received · still listening")
-    return
-  }
-  if (
-    message.type === "assistant_done" ||
-    message.type === "assistant_response" ||
-    message.type === "assistant_repeat"
-  ) {
-    client?.complete(message.id)
-  }
-}
-
-async function connectServer() {
-  if (socket?.readyState === websocketOpen) {
-    return
-  }
-  if (!accessToken) {
-    throw new Error("Sign in before starting the server transcript test")
-  }
-  closeSocket()
-  updateStatus("Connecting to Go server…")
-  const connected = await connectRealtimeSocket(accessToken)
-  connected.addEventListener("message", handleServerMessage)
-  connected.addEventListener("close", () => {
-    if (socket !== connected) {
-      return
-    }
-    socket = undefined
-    if (wanted) {
-      updateStatus("Server disconnected · stop and retry")
-    }
-  })
-  socket = connected
-}
-
-async function stop(reason: string) {
-  wanted = false
-  generation += 1
-  if (stopping) {
-    return
-  }
+async function stop(reason = "Stopped · transcripts retained") {
+  if (stopping) return
   stopping = true
-  updateStatus("Stopping microphone")
+  running = false
+  sequence += 1
+  unsubscribe?.(); unsubscribe = undefined
+  render()
   try {
-    const confirmed = client
-      ? await withTimeout(client.stopCapture(false), 5_000, "Microphone stop timed out")
-      : true
-    updateStatus(
-      confirmed
-        ? reason.includes("inference")
-          ? "Inference timed out · reload required"
-          : "Stopped · transcripts retained"
-        : "Stop unconfirmed — close this app in Even",
-    )
-  } catch {
-    updateStatus("Stop unconfirmed — close this app in Even")
-  } finally {
-    closeSocket()
-    stopping = false
-    render()
+    const bridge = await withTimeout(getEvenBridge(), 3000, "Bridge unavailable")
+    await withTimeout(bridge.audioControl(false, AudioInputSource.Glasses), 5000, "Microphone stop unconfirmed")
+  } catch { reason += " · close the app if the microphone remains active" }
+  const current = socket
+  if (current?.readyState === WebSocket.OPEN) {
+    const drained = new Promise<void>(resolve => { stoppedResolve = resolve })
+    current.send(JSON.stringify({ type: "listening_stop" }))
+    await withTimeout(drained, 30000, "Server flush timed out").catch(() => { reason += " · final results may be incomplete" })
   }
-}
-
-async function setup() {
-  const bridge = await withTimeout(
-    getEvenBridge(),
-    10_000,
-    "Open this test inside the Even app with your glasses connected",
-  )
-  resumeGlassesPage()
-  await withTimeout(
-    renderGlassesPage(buildCompactPage("SERVER TRANSCRIPT TEST")),
-    10_000,
-    "Glasses page did not start",
-  )
-  if (client) {
-    return
-  }
-  client = new CandidateAudioClient({
-    candidateAudioEnabled: true,
-    moonshineEnabled: true,
-    debugTranscripts: true,
-    forwardDiagnostics: false,
-    getSocket: () => socket,
-    device: {
-      start: () => bridge.audioControl(true, AudioInputSource.Glasses),
-      stop: () => bridge.audioControl(false, AudioInputSource.Glasses),
-    },
-    onCandidateSent: () => updateStatus("Audio sent · waiting for server transcript…"),
-    onCandidateFinalized: (event) => {
-      if (!event.submitted) {
-        updateStatus("Speech heard · no wake phrase selected")
-      }
-    },
-    onDiagnostic: (event: MoonshineDiagnosticEvent) => {
-      if (event.event !== "transcript") {
-        return
-      }
-      liveTranscript = event.text
-      renderLiveTranscript()
-    },
-  })
-  unsubscribe = bridge.onEvenHubEvent((event) => {
-    const kind =
-      event.sysEvent?.eventType ??
-      event.listEvent?.eventType ??
-      event.textEvent?.eventType
-    if (kind === OsEventTypeList.DOUBLE_CLICK_EVENT) {
-      void stop("glasses app exit")
-      return
-    }
-    const pcm = event.audioEvent?.audioPcm
-    if (!pcm || !wanted) {
-      return
-    }
-    if (Date.now() - startedAt >= 7 * 60_000) {
-      void stop("7 minute limit")
-      return
-    }
-    frames += 1
-    lastAudioAt = Date.now()
-    if (client?.captureRunning) {
-      client.push(Uint8Array.from(pcm))
-    }
-  })
+  socket = undefined
+  current?.close()
+  stoppedResolve = undefined
+  stopping = false
+  update(reason)
 }
 
 button("start").onclick = async () => {
-  if (busy || wanted || stopping || !accessToken) {
-    return
-  }
-  wanted = true
+  if (busy || running || stopping) return
   busy = true
-  const attempt = ++generation
-  recoveryAttempts = 0
-  frames = 0
-  lastAudioAt = 0
-  liveTranscript = ""
-  renderLiveTranscript()
-  startedAt = Date.now()
-  updateStatus("Connecting glasses, server, and local model…")
+  const attempt = ++sequence
+  frames = sentBytes = receivedBytes = 0
+  moonshine.clear(); deepgram.clear(); renderTranscripts()
+  update("Connecting to server Moonshine…")
   try {
-    await connectServer()
-    await setup()
-    if (!wanted || generation !== attempt) {
-      return
-    }
-    if (!await withTimeout(client!.prepare(), 120_000, "Model loading timed out; reload before retrying")) {
-      throw new Error("Model unavailable — retry, or reload if inference stalled")
-    }
-    if (!wanted || generation !== attempt) {
-      return
-    }
-    const started = await withTimeout(
-      client!.startCapture(() => wanted && generation === attempt),
-      15_000,
-      "Audio start timed out; reload before retrying",
-    )
-    if (!wanted || generation !== attempt) {
-      return
-    }
-    if (!started) {
-      throw new Error("Audio could not start. Retry or reload the app.")
-    }
+    const session = await supabase.auth.getSession()
+    token = session.data.session?.access_token ?? ""
+    const connected = await connectRealtimeSocket(token, { path: "/ws/moonshine" })
+    socket = connected
+    let readyResolve: (() => void) | undefined
+    let readyReject: ((error: Error) => void) | undefined
+    const ready = new Promise<void>((resolve, reject) => { readyResolve = resolve; readyReject = reject })
+    connected.addEventListener("message", event => {
+      let message: {type?: string; id?: string; text?: string; error?: string; received_bytes?: number}
+      try { message = JSON.parse(String(event.data)) } catch { return }
+      if (message.type === "ready") readyResolve?.()
+      if (message.type === "audio_received") receivedBytes = message.received_bytes ?? receivedBytes
+      if (message.type === "moonshine_transcript" || message.type === "deepgram_transcript") {
+        if (message.text && message.id) {
+          const entries = message.type === "moonshine_transcript" ? moonshine : deepgram
+          entries.set(message.id, message.text)
+          renderTranscripts()
+        }
+      }
+      if (message.type === "keyword_detected") update("Keyword detected on server · sending clip to Deepgram")
+      if (message.type === "deepgram_transcript") update("Deepgram result received · still streaming")
+      if (message.error) { update(message.error); readyReject?.(new Error(message.error)) }
+      if (message.type === "stopped") stoppedResolve?.()
+      render()
+    })
+    connected.addEventListener("close", () => {
+      readyReject?.(new Error("Server connection closed"))
+      stoppedResolve?.()
+      if (socket === connected && running) void stop("Server disconnected · start a new test")
+    })
+    await withTimeout(ready, 60000, "Server Moonshine did not become ready")
+    const bridge = await withTimeout(getEvenBridge(), 10000, "Open inside Even with glasses connected")
+    resumeGlassesPage()
+    await withTimeout(renderGlassesPage(buildCompactPage("SERVER MOONSHINE TEST")), 10000, "Glasses page unavailable")
+    if (attempt !== sequence) return
     startedAt = Date.now()
-    lastVadAt = Date.now()
-    previousVad = 0
-    updateStatus("Listening · speak a highlighted wake phrase")
+    running = true
+    unsubscribe = bridge.onEvenHubEvent(event => {
+      const kind = event.sysEvent?.eventType ?? event.listEvent?.eventType ?? event.textEvent?.eventType
+      if (kind === OsEventTypeList.DOUBLE_CLICK_EVENT) { void stop(); return }
+      const pcm = event.audioEvent?.audioPcm
+      if (!running || !pcm?.length) return
+      if (Date.now()-startedAt >= 7*60000) { void stop("Seven-minute test finished"); return }
+      if (connected.readyState !== WebSocket.OPEN || connected.bufferedAmount > 2*32000) {
+        void stop("Audio upload interrupted · start a new test"); return
+      }
+      // Every frame goes directly to Go, even when hidden: no local model,
+      // AudioContext, VAD, keyword gate, or batching timer.
+      const bytes = Uint8Array.from(pcm)
+      if (bytes.byteLength % 2 !== 0) { void stop("Invalid glasses PCM frame"); return }
+      try { connected.send(bytes); frames += 1; sentBytes += bytes.byteLength }
+      catch { void stop("Audio upload failed") }
+    })
+    const started = await withTimeout(bridge.audioControl(true, AudioInputSource.Glasses), 15000, "Glasses microphone did not start")
+    if (started === false) throw new Error("Glasses microphone did not start")
+    if (attempt !== sequence) return
+    update("Streaming all audio · Moonshine runs on the server")
   } catch (error) {
-    await stop("start failed")
-    updateStatus(String(error))
-  } finally {
-    busy = false
-    render()
-  }
+    socket?.close()
+    await stop(String(error))
+  } finally { busy = false; render() }
 }
 
-async function recover(reason: string) {
-  if (busy || !wanted || !client) {
-    return
-  }
-  busy = true
-  const attempt = generation
-  updateStatus(`Recovering audio · ${reason}`)
-  try {
-    await connectServer()
-    const stopped = await withTimeout(client.stopCapture(false), 5_000, "Microphone stop timed out")
-    if (!stopped) {
-      throw new Error("Microphone stop unconfirmed; close this app in Even")
-    }
-    if (!wanted || generation !== attempt) {
-      return
-    }
-    if (!await withTimeout(client.startCapture(() => wanted && generation === attempt), 15_000, "Audio recovery timed out")) {
-      throw new Error("Recovery failed; reload if model is stalled")
-    }
-    previousVad = 0
-    lastVadAt = Date.now()
-    updateStatus("Listening · audio recovered")
-  } catch (error) {
-    await stop("recovery failed")
-    updateStatus(String(error))
-  } finally {
-    busy = false
-    render()
-  }
-}
-
-button("retry").onclick = () => void recover("manual retry")
-button("stop").onclick = () => void stop("user")
-button("clear-transcripts").onclick = () => {
-  liveTranscript = ""
-  serverTranscripts.splice(0)
-  renderLiveTranscript()
-  renderServerTranscripts()
-}
-button("reload").onclick = async () => {
-  await stop("reload")
-  location.reload()
-}
-
-element<HTMLFormElement>("auth").onsubmit = async (event) => {
+button("stop").onclick = () => void stop()
+button("clear-transcripts").onclick = () => { moonshine.clear(); deepgram.clear(); renderTranscripts() }
+button("reload").onclick = async () => { await stop(); location.reload() }
+element<HTMLFormElement>("auth").onsubmit = async event => {
   event.preventDefault()
   button("sign-in").disabled = true
-  element("auth-error").textContent = ""
-  const email = element<HTMLInputElement>("email").value
-  const password = element<HTMLInputElement>("password").value
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-  element<HTMLInputElement>("password").value = ""
-  button("sign-in").disabled = false
-  if (error || !data.session) {
-    element("auth-error").textContent = "Sign-in failed. Check your email and password."
-    return
-  }
-  accessToken = data.session.access_token
-  element("auth").hidden = true
-  updateStatus("Ready · start the server transcript test")
+  try {
+    const {data, error} = await supabase.auth.signInWithPassword({email:element<HTMLInputElement>("email").value,password:element<HTMLInputElement>("password").value})
+    if (error || !data.session) throw new Error("Sign-in failed. Check your email and password.")
+    token = data.session.access_token
+    element("auth").hidden = true
+    update("Ready · start the server Moonshine test")
+  } catch (error) { element("auth-error").textContent = String(error) }
+  finally { element<HTMLInputElement>("password").value = ""; button("sign-in").disabled = false }
 }
-
-window.addEventListener("pagehide", () => {
-  wanted = false
-  generation += 1
-  closeSocket()
-  client?.dispose()
-  client = undefined
-  unsubscribe?.()
-  unsubscribe = undefined
+// Backgrounding must not tear down capture. Repaint retained text on return.
+document.addEventListener("visibilitychange", () => { renderTranscripts(); render() })
+setInterval(render, 1000)
+void supabase.auth.getSession().then(({data}) => {
+  token = data.session?.access_token ?? ""
+  element("auth").hidden = Boolean(token)
+  update(token ? "Ready · start the server Moonshine test" : "Sign in to start")
 })
-
-setInterval(() => {
-  const now = Date.now()
-  if (!wanted || busy) {
-    render()
-    return
-  }
-  const state = client?.snapshot()
-  if ((state?.vadFrames ?? 0) !== previousVad) {
-    lastVadAt = now
-    previousVad = state?.vadFrames ?? 0
-  }
-  const health = state?.inferenceHealthy === false
-    ? "Inference stalled — reload required"
-    : now - (lastAudioAt || startedAt) > 5_000
-      ? "No recent glasses audio"
-      : state?.adapterContext !== "running" || state?.moonshineContext !== "running"
-        ? "Audio context interrupted"
-        : now - lastVadAt > 5_000
-          ? "Speech detector not advancing"
-          : socket?.readyState !== websocketOpen
-            ? "Server disconnected"
-            : ""
-  if (health !== previousHealth) {
-    updateStatus(health || "Listening · health restored")
-    previousHealth = health
-  }
-  if (now - startedAt >= 7 * 60_000) {
-    void stop("7 minute limit")
-  } else if (state?.inferenceHealthy === false) {
-    void stop("inference stalled; reload required")
-  } else if (health && checked("recover") && recoveryAttempts < 2) {
-    recoveryAttempts += 1
-    void recover(`automatic ${recoveryAttempts}/2: ${health}`)
-  }
-  render()
-}, 2_000)
-
-void supabase.auth.getSession().then(({ data }) => {
-  accessToken = data.session?.access_token ?? ""
-  element("auth").hidden = Boolean(accessToken)
-  updateStatus(
-    accessToken
-      ? "Ready · start the server transcript test"
-      : "Sign in to connect to the Go server",
-  )
-})
-
-renderLiveTranscript()
-renderServerTranscripts()
-render()
+renderTranscripts(); render()

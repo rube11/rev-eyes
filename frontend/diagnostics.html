@@ -2,9 +2,9 @@
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Eyes · Listening test</title></head>
 <body><main>
-  <header><span>EYES / LAB</span><small>Server transcript test · v0.1.4</small></header>
+  <header><span>EYES / LAB</span><small>Server Moonshine · v0.1.5</small></header>
   <h1>What did the<br>server hear?</h1>
-  <p>Speak through the glasses. Moonshine selects the clip locally; the complete transcript returned by the server appears below.</p>
+  <p>All glasses audio streams to our server. Moonshine transcribes it there and selects keyword-matched speech for Deepgram.</p>
   <form id="auth" class="auth" hidden>
     <label>Email<input id="email" type="email" autocomplete="username" required></label>
     <label>Password<input id="password" type="password" autocomplete="current-password" required></label>
@@ -12,21 +12,20 @@
     <p id="auth-error" role="alert"></p>
   </form>
   <section class="status" aria-live="polite"><span id="status">Checking account…</span><small>Full text shown · no raw audio stored</small></section>
-  <div class="actions"><button id="start">Start test</button><button id="stop" disabled>Stop</button><button id="retry" disabled>Retry audio</button></div>
-  <div class="options"><label><input id="recover" type="checkbox"> Attempt audio recovery automatically (up to twice)</label></div>
-  <p class="note">Start with “Glasses”, “Remember”, “Remind me”, “I need”, “I want to”, “I should”, or “I prefer”. Highlighted phrases are the local Moonshine wake signals. Model downloads require internet; accepted audio is transcribed by the Go backend through Deepgram.</p>
+  <div class="actions"><button id="start">Start test</button><button id="stop" disabled>Stop</button></div>
+  <p class="note">Speak normally to see Moonshine's server transcript. Say “Glasses”, “Remember”, “Remind me”, “I need”, or “I want to” to select speech for Deepgram. Keywords are highlighted. Pause between phrases.</p>
   <h2>Audio path <small id="elapsed">Not running</small></h2>
-  <dl id="metrics"><div><dt>Glasses audio</dt><dd>—</dd></div><div><dt>Audio adapter</dt><dd>—</dd></div><div><dt>Moonshine</dt><dd>—</dd></div><div><dt>Speech / transcripts</dt><dd>—</dd></div></dl>
-  <p class="note">A test stops after 7 minutes when JavaScript next runs. Timestamps show when callbacks execute, not when the glasses recorded audio. “Hidden” does not prove the phone was locked.</p>
+  <dl id="metrics"><div><dt>Glasses audio</dt><dd>—</dd></div><div><dt>Audio sent</dt><dd>—</dd></div><div><dt>Server received</dt><dd>—</dd></div><div><dt>Moonshine</dt><dd>—</dd></div></dl>
+  <p class="note">Tests last up to 7 minutes. Lock the phone, speak, then unlock and check whether “Server received” increased. Lock-screen streaming still needs verification on your phone.</p>
   <section class="transcript-section" aria-labelledby="live-heading">
-    <header><h2 id="live-heading">Live Moonshine transcript</h2><small>Local gate</small></header>
-    <p id="live-transcript" class="transcript-empty" aria-live="polite">Waiting for speech…</p>
+    <header><h2 id="live-heading">Moonshine transcript</h2><small>Our server</small></header>
+    <ol id="moonshine-transcripts" aria-live="polite"><li>Waiting for speech…</li></ol>
   </section>
   <section class="transcript-section transcript-section--server" aria-labelledby="server-heading">
-    <header><h2 id="server-heading">Complete server transcripts</h2><small id="server-count">0 received</small></header>
+    <header><h2 id="server-heading">Deepgram transcript</h2><small id="server-count">0 received</small></header>
     <ol id="server-transcripts" aria-live="polite"><li class="transcript-empty">Waiting for an accepted wake phrase…</li></ol>
   </section>
   <div class="actions"><button id="clear-transcripts" class="quiet">Clear transcripts</button><button id="reload" class="quiet">Reload app</button></div>
-  <p class="note">If inference stalls, reload is required. The server transcript is authoritative and may differ from Moonshine’s rough local text.</p>
+  <p class="note">Moonshine runs entirely on our server. Deepgram receives only speech selected by server-side keyword detection. This test displays transcripts without creating reminders or other actions.</p>
 </main><script type="module" src="/src/diagnostics/main.ts"></script></body>
 </html>

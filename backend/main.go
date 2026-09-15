@@ -324,6 +324,10 @@ func run() error {
 	})
 
 	mux := http.NewServeMux()
+	mux.Handle("/ws/moonshine", realtime.NewMoonshineServer(
+		os.Getenv("MOONSHINE_PYTHON"), os.Getenv("MOONSHINE_WORKER"),
+		tickets.Consume, origins.Allows, candidateAudioHandler,
+	))
 	mux.HandleFunc("GET /health", web.Health)
 	mux.Handle("/auth/ws-ticket", origins.Handler(ticketHandler))
 	workspaceAutomationAPI := origins.Handler(workspaceAutomationHandler)
