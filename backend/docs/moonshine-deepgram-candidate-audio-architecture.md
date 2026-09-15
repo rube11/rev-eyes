@@ -658,6 +658,7 @@ The current live path sends user_transcript and assistant_thinking before the ro
 For candidate mode:
 
 - Do not send partial user_transcript.
+- Send one final user_transcript after Deepgram accepts the candidate and the wake policy passes.
 - Do not send assistant_thinking before semantic classification.
 - For ignored candidates, send nothing or a candidate-specific non-visual acknowledgement.
 - For actionable results, reuse assistant_response.

@@ -207,6 +207,14 @@ func (s *Server) processCandidate(
 		"transcript_characters", len(transcript),
 		"wake_reason", wakeReason,
 	)
+	if err := writer.WriteJSON(serverMessage{
+		Type: userTranscriptMessageType,
+		ID:   job.header.ID,
+		Text: transcript,
+	}); err != nil {
+		slog.ErrorContext(ctx, "failed to send candidate transcript", "error", err)
+		return false
+	}
 	err = s.handleCompletedUtterance(
 		ctx,
 		scope,

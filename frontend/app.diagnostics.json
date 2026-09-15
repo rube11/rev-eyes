@@ -2,12 +2,12 @@
   "package_id": "com.reveyes.moonshinediagnostics",
   "edition": "202601",
   "name": "Eyes Listening Test",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "min_app_version": "2.0.0",
   "min_sdk_version": "0.0.12",
   "entrypoint": "index.html",
   "permissions": [
-    { "name": "network", "desc": "Downloads Moonshine model and runtime assets; no audio is uploaded.", "whitelist": ["https://download.moonshine.ai", "https://cdn.jsdelivr.net"] },
+    { "name": "network", "desc": "Downloads Moonshine assets and sends selected speech clips to the Rev Eyes transcription service.", "whitelist": ["https://api.rev-eyes.com", "https://ikqdeosysrsynkxbijgn.supabase.co", "https://download.moonshine.ai", "https://cdn.jsdelivr.net"] },
     { "name": "g2-microphone", "desc": "Tests local recognition of glasses audio while the phone is locked." }
   ],
   "supported_languages": ["en"]
