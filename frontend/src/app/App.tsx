@@ -1,15 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
-import type { FocusEvent, FormEvent } from 'react'
+import { BetaWaitlist } from '../features/landing/BetaWaitlist'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import type { FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 
-import {
-  initializeEvenExperience,
-  showEvenMessage,
-} from '../even/runtime'
+import { initializeEvenExperience } from '../even/runtime'
+import { showEvenMessage } from '../even/glasses-page-host'
 import {
   createDemoWorkspaceData,
   deleteWorkspaceAutomation,
   loadWorkspaceData,
+  sendChatMessage,
   refreshWorkspaceData,
   resolveWorkspaceProposal,
   saveMemory,
@@ -23,9 +23,14 @@ import type {
   WorkspaceResource,
 } from '../features/workspace/workspaceTypes'
 import { Workspace } from '../features/workspace/Workspace'
-import { supabase } from '../shared/api/supabase'
+import { ConnectionSession } from '../even/connection-session'
+import { updateWorkspaceErrors } from '../features/workspace/workspaceLoad'
+import type { WorkspaceErrors, WorkspaceLoadResult } from '../features/workspace/workspaceLoad'
+import { Homepage } from '../features/landing/Homepage'
+import { SignIn } from '../features/auth/SignIn'
+import { sessionStorage, supabase } from '../shared/api/supabase'
 
-const isDemoMode = new URLSearchParams(window.location.search).has('demo')
+const isDemoMode = false
 const workspaceRefreshDebounceMs = 100
 const workspaceRetryDelaysMs = [2_000, 5_000, 15_000, 30_000]
 
@@ -72,7 +77,7 @@ function mergeWorkspaceData(
     : next
 }
 
-function LoadingScreen({ label = 'Opening your assistant' }: { label?: string }) {
+function LoadingScreen({ label = 'Loading…' }: { label?: string }) {
   return (
     <main className="boot-screen">
       <span className="boot-screen__brand">rev/eyes</span>
@@ -84,143 +89,20 @@ function LoadingScreen({ label = 'Opening your assistant' }: { label?: string })
   )
 }
 
-function SignIn({
-  email,
-  password,
-  error,
-  submitting,
-  onEmailChange,
-  onPasswordChange,
-  onSubmit,
-}: {
-  email: string
-  password: string
-  error: string
-  submitting: boolean
-  onEmailChange: (value: string) => void
-  onPasswordChange: (value: string) => void
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void
-}) {
-  const authRef = useRef<HTMLElement>(null)
-  const focusRevealTimer = useRef<number | undefined>(undefined)
-
-  useEffect(() => {
-    const viewport = window.visualViewport
-    let animationFrame: number | undefined
-
-    const keepFocusedFieldVisible = () => {
-      if (animationFrame !== undefined) {
-        window.cancelAnimationFrame(animationFrame)
-      }
-      animationFrame = window.requestAnimationFrame(() => {
-        animationFrame = undefined
-        const focused = document.activeElement
-        if (
-          focused instanceof HTMLInputElement &&
-          authRef.current?.contains(focused)
-        ) {
-          focused.scrollIntoView({ block: 'center', inline: 'nearest' })
-        }
-      })
-    }
-
-    viewport?.addEventListener('resize', keepFocusedFieldVisible)
-    return () => {
-      viewport?.removeEventListener('resize', keepFocusedFieldVisible)
-      if (animationFrame !== undefined) {
-        window.cancelAnimationFrame(animationFrame)
-      }
-      if (focusRevealTimer.current !== undefined) {
-        window.clearTimeout(focusRevealTimer.current)
-      }
-    }
-  }, [])
-
-  const handleFieldFocus = (event: FocusEvent<HTMLInputElement>) => {
-    const field = event.currentTarget
-    if (focusRevealTimer.current !== undefined) {
-      window.clearTimeout(focusRevealTimer.current)
-    }
-    focusRevealTimer.current = window.setTimeout(() => {
-      focusRevealTimer.current = undefined
-      if (document.activeElement === field) {
-        field.scrollIntoView({ block: 'center', inline: 'nearest' })
-      }
-    }, 250)
-  }
-
-  return (
-    <main className="auth" ref={authRef}>
-      <section className="auth-brand">
-        <div className="auth-brand__top">
-          <span className="auth-wordmark">rev/eyes</span>
-          <span className="auth-edition">Wearable assistant</span>
-        </div>
-        <div className="auth-brand__statement">
-          <h1>Your assistant, in one place.</h1>
-          <p>
-            Revisit conversations, manage memories, and see what is coming up.
-          </p>
-        </div>
-        <div className="auth-brand__status">
-          <span>Designed for Even G2</span>
-        </div>
-      </section>
-
-      <section className="auth-access">
-        <form className="auth-form" onSubmit={onSubmit}>
-          <header>
-            <p className="section-label">Your account</p>
-            <h2>Welcome back</h2>
-            <p>Sign in to open your assistant.</p>
-          </header>
-          <label className="field">
-            <span>Email</span>
-            <input
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(event) => onEmailChange(event.target.value)}
-              onFocus={handleFieldFocus}
-              placeholder="you@example.com"
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Password</span>
-            <input
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => onPasswordChange(event.target.value)}
-              onFocus={handleFieldFocus}
-              placeholder="••••••••••••"
-              required
-            />
-          </label>
-          {error ? (
-            <p className="form-error" role="alert">
-              {error}
-            </p>
-          ) : null}
-          <button className="auth-submit" type="submit" disabled={submitting}>
-            <span>{submitting ? 'Signing in…' : 'Sign in'}</span>
-            <span aria-hidden="true">↗</span>
-          </button>
-          <footer>
-            <span>Private to your account</span>
-            <span>REV/EYES 2026</span>
-          </footer>
-        </form>
-      </section>
-    </main>
-  )
-}
-
 function App() {
+  const storageError = useSyncExternalStore(sessionStorage.subscribe, sessionStorage.getError)
+  const [sessionError, setSessionError] = useState('')
   const [session, setSession] = useState<Session | null | undefined>(
     isDemoMode ? null : undefined,
   )
+  const [showSignIn, setShowSignIn] = useState(window.location.hash === '#sign-in')
+
+  useEffect(() => {
+    const onHashChange = () => setShowSignIn(window.location.hash === '#sign-in')
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
+
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [authError, setAuthError] = useState('')
@@ -228,15 +110,19 @@ function App() {
   const [glassesStatus, setGlassesStatus] = useState(
     isDemoMode ? 'Connected' : 'Connecting',
   )
-  const [latestResponse, setLatestResponse] = useState('')
-  const [latestTranscript, setLatestTranscript] = useState('')
+  const [connectionSession] = useState(() => new ConnectionSession())
+  const [connectionRevision, setConnectionRevision] = useState(0)
+  const [reconnecting, setReconnecting] = useState(false)
+  const reconnectPending = useRef(false)
   const [workspaceData, setWorkspaceData] = useState<WorkspaceData | undefined>(
     () => (isDemoMode ? createDemoWorkspaceData() : undefined),
   )
   const [workspaceOwnerId, setWorkspaceOwnerId] = useState<string | undefined>(
     undefined,
   )
-  const [dataError, setDataError] = useState('')
+  const [resourceErrors, setResourceErrors] = useState<WorkspaceErrors>({})
+  const [lastSyncedAt, setLastSyncedAt] = useState<string>()
+  const [syncing, setSyncing] = useState(false)
   const locallyAddedMemoryIds = useRef(new Set<string>())
   const workspaceDataRef = useRef(workspaceData)
   const workspaceOwnerIdRef = useRef<string | undefined>(undefined)
@@ -255,12 +141,51 @@ function App() {
   }, [workspaceData])
 
   useEffect(() => {
+    if (!workspaceData) {
+      return
+    }
+
+    const nextExpiry = Math.min(
+      ...workspaceData.memories
+        .flatMap((memory) =>
+          memory.expiresAt ? [Date.parse(memory.expiresAt)] : [],
+        )
+        .filter(Number.isFinite),
+    )
+    if (!Number.isFinite(nextExpiry)) {
+      return
+    }
+
+    const timer = window.setTimeout(
+      () =>
+        setWorkspaceData((current) => {
+          if (!current) {
+            return current
+          }
+          const memories = current.memories.filter(
+            (memory) =>
+              !memory.expiresAt || Date.parse(memory.expiresAt) > Date.now(),
+          )
+          return memories.length === current.memories.length
+            ? current
+            : { ...current, memories }
+        }),
+      Math.max(0, nextExpiry - Date.now() + 50),
+    )
+    return () => window.clearTimeout(timer)
+  }, [workspaceData])
+
+  useEffect(() => {
     if (isDemoMode) {
       return
     }
 
     let active = true
     const updateSession = (nextSession: Session | null) => {
+      if (nextSession && window.location.hash === '#sign-in') {
+        window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
+        setShowSignIn(false)
+      }
       const nextUserId = nextSession?.user.id
       if (sessionUserIdRef.current !== nextUserId) {
         sessionUserIdRef.current = nextUserId
@@ -269,24 +194,36 @@ function App() {
         locallyAddedMemoryIds.current.clear()
         setWorkspaceOwnerId(undefined)
         setWorkspaceData(undefined)
-        setDataError('')
-        setLatestTranscript('')
+        setResourceErrors({})
+        setLastSyncedAt(undefined)
+        setSyncing(false)
       }
       setSession(nextSession)
     }
-    void supabase.auth.getSession().then(({ data }) => {
-      if (active) {
-        updateSession(data.session)
+    // Ignore Supabase's initial event; getSession owns restoration. Later
+    // explicit sign-ins must still work if restoration returned an error.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (active && event !== 'INITIAL_SESSION') {
+        setSessionError('')
+        updateSession(nextSession)
       }
     })
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    void supabase.auth.getSession().then(({ data, error }) => {
       if (active) {
-        updateSession(nextSession)
+        if (error) {
+          setSessionError('Could not restore your sign-in. Check your connection and retry.')
+        }
+        updateSession(error ? null : data.session)
+      }
+    }).catch(() => {
+      if (active) {
+        updateSession(null)
+        setSessionError('Could not restore your sign-in. Reopen the app to retry.')
       }
     })
     return () => {
       active = false
-      data.subscription.unsubscribe()
+      subscription.unsubscribe()
     }
   }, [])
 
@@ -315,6 +252,7 @@ function App() {
     let timer: number | undefined
     let requestController: AbortController | undefined
     const pendingResources = new Set<WorkspaceResource>()
+    const loadedResources = new Set<WorkspaceResource>()
 
     const clearTimer = () => {
       if (timer !== undefined) {
@@ -349,67 +287,62 @@ function App() {
       }
 
       inFlight = true
+      setSyncing(true)
       const controller = new AbortController()
       requestController = controller
       let retryDelay: number | undefined
 
       try {
         const current = workspaceDataRef.current
-        const data =
-          fullRefresh || !current
+        let result: WorkspaceLoadResult
+        try {
+          result = fullRefresh || !current
             ? await loadWorkspaceData(userId, controller.signal)
-            : await refreshWorkspaceData(
-                userId,
-                current,
-                resources,
-                controller.signal,
-              )
+            : await refreshWorkspaceData(userId, current, resources, controller.signal)
+        } catch {
+          result = {
+            data: {},
+            failedResources: fullRefresh ? [...workspaceResources] : resources,
+          }
+        }
         if (!active || controller.signal.aborted) {
           return
         }
-        retryAttempt = 0
-        setDataError('')
+
+        const succeeded = Object.keys(result.data) as WorkspaceResource[]
+        for (const resource of succeeded) loadedResources.add(resource)
+        const loadedSnapshot = new Set(loadedResources)
+        setResourceErrors((errors) => updateWorkspaceErrors(errors, result, loadedSnapshot))
+        if (succeeded.length > 0) setLastSyncedAt(new Date().toISOString())
+
         const ownsCurrentData = workspaceOwnerIdRef.current === userId
         workspaceOwnerIdRef.current = userId
         setWorkspaceOwnerId(userId)
         setWorkspaceData((current) => {
-          const currentForUser = ownsCurrentData ? current : undefined
           const next = mergeWorkspaceData(
-            data,
-            currentForUser,
+            result.data,
+            ownsCurrentData ? current : undefined,
             locallyAddedMemoryIds.current,
           )
           workspaceDataRef.current = next
           return next
         })
-      } catch {
-        if (!active || controller.signal.aborted) {
-          return
-        }
-        pendingFullRefresh ||= fullRefresh
-        for (const resource of resources) {
-          pendingResources.add(resource)
-        }
-        setDataError('refresh-unavailable')
-        const ownsCurrentData = workspaceOwnerIdRef.current === userId
-        workspaceOwnerIdRef.current = userId
-        setWorkspaceOwnerId(userId)
-        setWorkspaceData((current) => {
-          const next =
-            ownsCurrentData && current ? current : emptyWorkspaceData()
-          workspaceDataRef.current = next
-          return next
-        })
-        retryDelay =
-          workspaceRetryDelaysMs[
+
+        if (result.failedResources.length > 0) {
+          for (const resource of result.failedResources) pendingResources.add(resource)
+          retryDelay = workspaceRetryDelaysMs[
             Math.min(retryAttempt, workspaceRetryDelaysMs.length - 1)
           ]
-        retryAttempt += 1
+          retryAttempt += 1
+        } else {
+          retryAttempt = 0
+        }
       } finally {
         if (requestController === controller) {
           requestController = undefined
         }
         inFlight = false
+        if (active) setSyncing(false)
         if (
           active &&
           (retryDelay !== undefined ||
@@ -464,14 +397,8 @@ function App() {
     }
 
     let disposed = false
-    let stop: (() => void) | undefined
-    initializeEvenExperience(
+    void connectionSession.start(() => initializeEvenExperience(
       accessToken,
-      (text) => {
-        if (!disposed) {
-          setLatestResponse(text)
-        }
-      },
       (nextStatus) => {
         if (!disposed) {
           setGlassesStatus(nextStatus)
@@ -487,48 +414,53 @@ function App() {
           requestWorkspaceRefreshRef.current(workspaceResources)
         }
       },
-      (text) => {
-        if (!disposed) {
-          setLatestTranscript(text)
-        }
-      },
-    )
-      .then((cleanup) => {
-        if (disposed) {
-          cleanup()
-          return
-        }
-        stop = cleanup
-      })
+    ))
       .catch(() => {
         if (!disposed) {
           setGlassesStatus('Offline')
         }
       })
+      .finally(() => {
+        if (!disposed) {
+          reconnectPending.current = false
+          setReconnecting(false)
+        }
+      })
 
     return () => {
       disposed = true
-      stop?.()
+      void connectionSession.stop().catch(() => undefined)
     }
-  }, [accessToken])
+  }, [accessToken, connectionRevision, connectionSession])
+
+  const reconnectGlasses = () => {
+    if (isDemoMode || !accessToken || reconnectPending.current) return
+    reconnectPending.current = true
+    setReconnecting(true)
+    setGlassesStatus('Reconnecting')
+    setConnectionRevision((revision) => revision + 1)
+  }
 
   const signIn = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setAuthError('')
     setSubmitting(true)
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    })
-    setSubmitting(false)
-    if (error) {
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) {
+        setAuthError('Couldn’t sign in. Check your email and password.')
+        return
+      }
+      setSessionError('')
+      setPassword('')
+      setGlassesStatus('Connecting')
+    } catch {
       setAuthError(
-        'We could not sign you in. Check your email and password and try again.',
+        'Could not finish saving your sign-in. Reopen the app and try again.',
       )
-      return
+    } finally {
+      setSubmitting(false)
     }
-    setPassword('')
-    setGlassesStatus('Connecting')
   }
 
   const createMemory = async (input: NewMemoryInput) => {
@@ -559,7 +491,7 @@ function App() {
     }
 
     if (!session?.user.id) {
-      throw new Error('Please sign in again to save this memory.')
+      throw new Error('Sign in again to save this memory.')
     }
     const memory = await saveMemory(session.user.id, input)
     locallyAddedMemoryIds.current.add(memory.id)
@@ -583,7 +515,7 @@ function App() {
   ) => {
     if (!isDemoMode) {
       if (!session?.access_token) {
-        throw new Error('Please sign in again to update this item.')
+        throw new Error('Sign in again to update this item.')
       }
       await resolveWorkspaceProposal(
         session.access_token,
@@ -635,7 +567,7 @@ function App() {
   ) => {
     if (!isDemoMode) {
       if (!session?.access_token) {
-        throw new Error('Please sign in again to delete this item.')
+        throw new Error('Sign in again to delete this item.')
       }
       await deleteWorkspaceAutomation(session.access_token, kind, resourceId)
     }
@@ -670,7 +602,11 @@ function App() {
       window.location.assign(url.toString())
       return
     }
-    void supabase.auth.signOut()
+    void supabase.auth.signOut().then(({ error }) => {
+      if (error) setSessionError('Could not sign out. Check your connection and retry.')
+    }).catch(() => {
+      setSessionError('Could not clear your saved sign-in. Reopen the app to retry.')
+    })
   }
 
   if (isDemoMode) {
@@ -679,8 +615,6 @@ function App() {
         data={visibleWorkspaceData}
         email="demo@rev-eyes.com"
         glassesStatus={glassesStatus}
-        latestResponse={latestResponse}
-        latestTranscript={latestTranscript}
         isDemo
         onCreateMemory={createMemory}
         onDeleteAutomation={deleteAutomation}
@@ -692,21 +626,36 @@ function App() {
     )
   }
 
-  if (session === undefined) {
+  if (window.location.pathname.replace(/\/$/, '') === '/join') return <BetaWaitlist />
+
+  // Storage failure must never expose a workspace or block the public homepage.
+  if (!storageError && !sessionError && session === undefined) {
     return <LoadingScreen label="Checking your account" />
   }
 
-  if (!session) {
+  if (storageError || !session) {
+    if (!showSignIn) return <Homepage />
     return (
       <SignIn
         email={email}
         password={password}
-        error={authError}
+        error={storageError || authError || sessionError}
         submitting={submitting}
+        storageUnavailable={Boolean(storageError)}
         onEmailChange={setEmail}
         onPasswordChange={setPassword}
         onSubmit={signIn}
       />
+    )
+  }
+
+  if (sessionError) {
+    return (
+      <main className="boot-screen">
+        <span className="boot-screen__brand">rev/eyes</span>
+        <p role="alert">{sessionError}</p>
+        <button className="auth-submit" onClick={() => window.location.reload()}>Reload app</button>
+      </main>
     )
   }
 
@@ -718,10 +667,18 @@ function App() {
     <Workspace
       data={visibleWorkspaceData}
       email={session.user.email ?? 'Account'}
+      userId={session.user.id}
+      onSendChat={async (sessionId, text) => {
+        try { return await sendChatMessage(session.access_token, sessionId, text) }
+        finally { requestWorkspaceRefreshRef.current(workspaceResources) }
+      }}
       glassesStatus={glassesStatus}
-      latestResponse={latestResponse}
-      latestTranscript={latestTranscript}
-      dataError={dataError}
+      resourceErrors={resourceErrors}
+      reconnecting={reconnecting}
+      onReconnectGlasses={reconnectGlasses}
+      lastSyncedAt={lastSyncedAt}
+      syncing={syncing}
+      onRetry={() => requestWorkspaceRefreshRef.current([], true)}
       isDemo={false}
       onCreateMemory={createMemory}
       onDeleteAutomation={deleteAutomation}

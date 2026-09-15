@@ -2,6 +2,18 @@
 
 React, TypeScript, and Vite client for the Even G2 glasses.
 
+## Source layout
+
+- `src/app`: application startup and coordination.
+- `src/features/auth`: sign-in UI and mobile keyboard handling.
+- `src/features/workspace`: conversations, memories, tasks, and watches.
+- `src/even`: glasses gestures, rendering, microphone, and realtime transport.
+- `src/shared/api`: backend requests and Supabase session persistence.
+- `tests`: offline checks for audio lifecycle, realtime messages, and storage.
+
+The active audio path is tap-to-talk with Deepgram speech endpointing. Retired
+Moonshine components and unused conversation/tip scaffolds are not part of it.
+
 ## Scripts
 
 - `pnpm dev`

@@ -42,6 +42,7 @@ const (
 	audioModeUnset connectionAudioMode = iota
 	audioModeLegacy
 	audioModeCandidate
+	audioModeAmbient
 )
 
 // candidateIDWindow bounds duplicate detection without eventually exhausting a

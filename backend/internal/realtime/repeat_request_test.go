@@ -41,7 +41,6 @@ func TestRepeatRequestBypassesUtteranceHandler(t *testing.T) {
 		tool.Scope{},
 		writer,
 		"Show that again.",
-		utteranceDelivery{messageID: "candidate-repeat", announceThinking: true},
 	)
 	if err != nil {
 		t.Fatalf("handleCompletedUtterance() error = %v", err)
@@ -51,7 +50,7 @@ func TestRepeatRequestBypassesUtteranceHandler(t *testing.T) {
 		t.Fatalf("message count = %d, want 1", len(writer.messages))
 	}
 	message := writer.messages[0]
-	if message.Type != assistantRepeatMessageType || message.ID != "candidate-repeat" {
+	if message.Type != assistantRepeatMessageType {
 		t.Fatalf("repeat message = %+v", message)
 	}
 	if handlerCalled {

@@ -40,7 +40,7 @@ func TestTurnCoordinatorSerializesOneSession(t *testing.T) {
 	}
 }
 
-func TestTurnCoordinatorAllowsDifferentSessions(t *testing.T) {
+func TestTurnCoordinatorAllowsDifferentAccounts(t *testing.T) {
 	coordinator := newTurnCoordinator()
 	firstRelease, err := coordinator.acquire(
 		context.Background(),
@@ -53,7 +53,7 @@ func TestTurnCoordinatorAllowsDifferentSessions(t *testing.T) {
 
 	secondRelease, err := coordinator.acquire(
 		context.Background(),
-		tool.Scope{UserID: "user", SessionID: "session-b"},
+		tool.Scope{UserID: "other-user", SessionID: "session-b"},
 	)
 	if err != nil {
 		t.Fatalf("second acquire error = %v", err)
@@ -77,5 +77,23 @@ func TestTurnCoordinatorCancelsWaitAndReleasesItsReference(t *testing.T) {
 	firstRelease()
 	if len(coordinator.gates) != 0 {
 		t.Fatalf("retained gates = %d, want 0", len(coordinator.gates))
+	}
+}
+
+func TestTurnCoordinatorSerializesDifferentChatsForSameAccount(t *testing.T) {
+	coordinator := newTurnCoordinator()
+	release, err := coordinator.acquire(context.Background(), tool.Scope{UserID: "owner", SessionID: "voice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	second, err := coordinator.acquire(ctx, tool.Scope{UserID: "owner", SessionID: "text"})
+	if second != nil {
+		second()
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("text session switched during voice turn")
 	}
 }

@@ -4,6 +4,7 @@ import { resolve } from "node:path"
 
 export default defineConfig({
   base: "./",
+  publicDir: false,
   plugins: [{
     name: "diagnostics-default-entry",
     writeBundle(options) {

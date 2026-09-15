@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rube11/rev-eyes/backend/internal/ambient"
 	"github.com/rube11/rev-eyes/backend/internal/assistant"
 	"github.com/rube11/rev-eyes/backend/internal/assistant/openai"
 	"github.com/rube11/rev-eyes/backend/internal/auth"
@@ -28,6 +29,7 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/realtime"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
+	"github.com/rube11/rev-eyes/backend/internal/stt/moonshine"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 	"github.com/rube11/rev-eyes/backend/internal/tool/location"
 	"github.com/rube11/rev-eyes/backend/internal/tool/websearch"
@@ -154,14 +156,55 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	memoryModel := strings.TrimSpace(os.Getenv("OPENAI_MEMORY_MODEL"))
+	if memoryModel == "" {
+		memoryModel = os.Getenv("OPENAI_ROUTER_MODEL")
+	}
+	memoryExtractor, err := openai.NewMemoryExtractor(
+		os.Getenv("OPENAI_API_KEY"),
+		memoryModel,
+	)
+	if err != nil {
+		return err
+	}
+	memoryRecorder, err := memory.NewRecorder(
+		memoryExtractor,
+		memoryStore,
+	)
+	if err != nil {
+		return err
+	}
+	memoryRecorder.SetOnStored(func(userID string) {
+		realtimeHub.WorkspaceChanged(userID, realtime.WorkspaceMemories)
+	})
 
 	transcriber, err := stt.NewDeepgramTranscriber(os.Getenv("DEEPGRAM_API_KEY"))
 	if err != nil {
 		return err
 	}
+	var ambientHandler realtime.AmbientListener
+	var observedAmbient func(context.Context, <-chan ambient.Input, func(ambient.Clip), ambient.Observer) error
+	if serverMoonshineEnabled(os.Getenv("SERVER_MOONSHINE_ENABLED")) {
+		concurrencyValue := strings.TrimSpace(os.Getenv("SERVER_MOONSHINE_MAX_CONCURRENCY"))
+		if concurrencyValue == "" {
+			concurrencyValue = "1"
+		}
+		concurrency, parseErr := parseCandidateAudioConcurrency(concurrencyValue)
+		if parseErr != nil {
+			return fmt.Errorf("SERVER_MOONSHINE_MAX_CONCURRENCY: %w", parseErr)
+		}
+		factory, factoryErr := moonshine.New(os.Getenv("MOONSHINE_MODEL_DIR"), concurrency)
+		if factoryErr != nil {
+			return factoryErr
+		}
+		defer factory.Close()
+		listener := &ambient.Listener{Factory: factory}
+		ambientHandler = listener.Run
+		observedAmbient = listener.RunObserved
+	}
 	var candidateAudioHandler realtime.CandidateAudioHandler
 	candidateMaxConcurrent := 0
-	if environmentEnabled(os.Getenv("CANDIDATE_AUDIO_ENABLED")) {
+	if environmentEnabled(os.Getenv("CANDIDATE_AUDIO_ENABLED")) || ambientHandler != nil {
 		candidateMaxConcurrent, err = parseCandidateAudioConcurrency(
 			os.Getenv("CANDIDATE_AUDIO_MAX_CONCURRENCY"),
 		)
@@ -283,11 +326,14 @@ func run() error {
 	}
 	go registrationDispatcher.Run(ctx)
 	go scheduledEventDispatcher.Run(ctx)
+	go memoryRecorder.Run(ctx)
 	realtimeServer := realtime.NewServerWithHub(transcriber, realtimeHub, realtime.Handlers{
-		Authenticate:           tickets.Consume,
+		Ambient:                ambientHandler,
 		CandidateAudio:         candidateAudioHandler,
 		CandidateMaxConcurrent: candidateMaxConcurrent,
 		ClientDiagnostic:       clientDiagnosticHandler,
+		Authenticate:           tickets.Consume,
+		PrepareSession:         sessionStore.Reopen,
 		CheckOrigin:            origins.Allows,
 		Connect: func(ctx context.Context, scope tool.Scope) error {
 			return notificationService.Flush(ctx, scope.UserID)
@@ -310,7 +356,7 @@ func run() error {
 				utterance,
 				assistantService,
 				sessionStore,
-				memoryStore,
+				memoryRecorder,
 			)
 		},
 		Location: func(_ context.Context, scope tool.Scope, update realtime.LocationUpdate) error {
@@ -324,12 +370,17 @@ func run() error {
 	})
 
 	mux := http.NewServeMux()
-	mux.Handle("/ws/moonshine", realtime.NewMoonshineServer(
-		os.Getenv("MOONSHINE_PYTHON"), os.Getenv("MOONSHINE_WORKER"),
-		tickets.Consume, origins.Allows, candidateAudioHandler,
-	))
+	diagnosticsServer := realtime.NewServer(transcriber, realtime.Handlers{
+		Diagnostics: true, Ambient: ambientHandler, AmbientObserved: observedAmbient,
+		CandidateAudio: candidateAudioHandler, CandidateMaxConcurrent: candidateMaxConcurrent,
+		Authenticate: tickets.Consume, CheckOrigin: origins.Allows,
+	})
+	mux.Handle("/ws/moonshine", diagnosticsServer)
 	mux.HandleFunc("GET /health", web.Health)
 	mux.Handle("/auth/ws-ticket", origins.Handler(ticketHandler))
+	textChatAPI := origins.Handler(realtimeServer.TextHandler(tokenVerifier.Verify, sessionStore.Reopen))
+	mux.Handle("POST /workspace/conversations/{session_id}/messages", textChatAPI)
+	mux.Handle("OPTIONS /workspace/conversations/{session_id}/messages", textChatAPI)
 	workspaceAutomationAPI := origins.Handler(workspaceAutomationHandler)
 	mux.Handle(
 		"POST /workspace/automations/{kind}/{resource_id}/decision",
@@ -374,7 +425,8 @@ func run() error {
 
 		serverErr := server.Shutdown(shutdownCtx)
 		realtimeErr := realtimeServer.Shutdown(shutdownCtx)
-		return errors.Join(serverErr, realtimeErr)
+		diagnosticsErr := diagnosticsServer.Shutdown(shutdownCtx)
+		return errors.Join(serverErr, realtimeErr, diagnosticsErr)
 	}
 }
 
@@ -391,6 +443,10 @@ func listenAddress() string {
 
 func environmentEnabled(value string) bool {
 	return strings.EqualFold(strings.TrimSpace(value), "true")
+}
+
+func serverMoonshineEnabled(value string) bool {
+	return !strings.EqualFold(strings.TrimSpace(value), "false")
 }
 
 const maxCandidateAudioConcurrency = 32

@@ -15,10 +15,13 @@ import (
 const defaultCandidateProcessingTimeout = 60 * time.Second
 
 type candidateJob struct {
-	header        candidateAudioHeader
-	audio         []byte
-	acceptedAt    time.Time
-	admissionHeld bool
+	// Ambient jobs share the listener's lifetime; legacy uploaded clips use the
+	// connection context passed to the worker instead.
+	sessionContext context.Context
+	header         candidateAudioHeader
+	audio          []byte
+	acceptedAt     time.Time
+	admissionHeld  bool
 }
 
 func candidateDoneMessage(id string) serverMessage {
@@ -78,7 +81,11 @@ func (s *Server) processCandidateBeforeDeadline(
 	if acceptedAt.IsZero() {
 		acceptedAt = time.Now()
 	}
-	jobCtx, cancel := context.WithDeadline(ctx, acceptedAt.Add(timeout))
+	processingContext := ctx
+	if job.sessionContext != nil {
+		processingContext = job.sessionContext
+	}
+	jobCtx, cancel := context.WithDeadline(processingContext, acceptedAt.Add(timeout))
 	terminalSent := s.processCandidate(jobCtx, scope, writer, job)
 	timedOut := errors.Is(jobCtx.Err(), context.DeadlineExceeded)
 	cancel()
@@ -169,6 +176,9 @@ func (s *Server) processCandidate(
 	releaseAdmission()
 	if err != nil {
 		if ctx.Err() == nil {
+			if s.handlers.Diagnostics {
+				_ = writer.WriteJSON(serverMessage{Type: "error", ID: job.header.ID, Error: "Deepgram transcription failed"})
+			}
 			slog.ErrorContext(
 				ctx,
 				"failed to transcribe candidate audio",
@@ -181,6 +191,16 @@ func (s *Server) processCandidate(
 		return false
 	}
 	transcript = strings.TrimSpace(transcript)
+	if s.handlers.Diagnostics {
+		// Display the complete accurate result even if its wording differs from
+		// the rough wake phrase. Never route a test utterance to tools/history.
+		if transcript != "" {
+			if err := writer.WriteJSON(serverMessage{Type: "deepgram_transcript", ID: job.header.ID, Text: transcript, Final: true}); err != nil {
+				return false
+			}
+		}
+		return writer.WriteJSON(candidateDoneMessage(job.header.ID)) == nil
+	}
 	if transcript == "" {
 		slog.InfoContext(ctx, "candidate audio produced no transcript", "candidate_id", job.header.ID)
 		_ = writer.WriteJSON(candidateDoneMessage(job.header.ID))
@@ -207,14 +227,6 @@ func (s *Server) processCandidate(
 		"transcript_characters", len(transcript),
 		"wake_reason", wakeReason,
 	)
-	if err := writer.WriteJSON(serverMessage{
-		Type: userTranscriptMessageType,
-		ID:   job.header.ID,
-		Text: transcript,
-	}); err != nil {
-		slog.ErrorContext(ctx, "failed to send candidate transcript", "error", err)
-		return false
-	}
 	err = s.handleCompletedUtterance(
 		ctx,
 		scope,

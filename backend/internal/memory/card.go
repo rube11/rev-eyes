@@ -65,7 +65,7 @@ type Entity struct {
 	Name string     `json:"name"`
 }
 
-// Card is one durable, categorized memory extracted from an utterance.
+// Card is one categorized, atomic memory extracted from an utterance.
 type Card struct {
 	Topics   []Topic  `json:"topics"`
 	Kind     Kind     `json:"kind"`

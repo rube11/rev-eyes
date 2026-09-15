@@ -1,0 +1,115 @@
+.re-scroll-story { height: 160svh; position: relative; }
+.re-cinema-stage {
+  position: sticky; top: 0; height: 100svh;
+  overflow: clip; isolation: isolate; background: #06080a;
+}
+.re-atmosphere { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
+.re-atmosphere > div:first-child {
+  position: absolute; width: 1000px; height: 850px; top: 50%; right: -350px;
+  background: radial-gradient(ellipse, #748c8830, #35484d12 40%, transparent 70%);
+  transform: translateY(-50%);
+}
+.re-atmosphere > div:last-child {
+  position: absolute; width: 900px; height: 500px; top: 20%; left: 40%;
+  background: radial-gradient(ellipse, #c4d6cb08, transparent 70%);
+}
+.re-cinema-layout {
+  max-width: 1640px; margin: auto; height: 100%; padding: 95px clamp(28px, 5vw, 88px) 90px;
+  display: grid; grid-template-columns: .43fr .57fr; align-items: center;
+}
+.re-story-copy { position: relative; z-index: 3; animation: re-copy-in .65s both; }
+.re-story-copy h1 { font-size: clamp(48px, 5.2vw, 78px); line-height: 1.04; font-weight: 500; letter-spacing: -.065em; margin: 28px 0 28px; white-space: nowrap; }
+.re-story-copy h1 span { color: #859196; background: linear-gradient(110deg, #ccd5d2, #78868c 86%); background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.re-story-description { max-width: 335px; color: #939fa3; font-size: 15px; line-height: 1.85; margin: 0; }
+.re-story-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 20px; margin-top: 32px; }
+.re-device-scene {
+  --re-hardware-width: clamp(1000px, 95vw, 1520px);
+  --re-hardware-top: 50%;
+  position: relative; height: min(640px, 82svh); min-width: 0; margin: 0;
+}
+.re-device-crop {
+  --re-frame-fade: clamp(72px, 10vw, 140px);
+  position: absolute; inset: 0; overflow: clip;
+  /* Dissolve the bridge into the scene; the right lens stays fully opaque. */
+  mask-image: linear-gradient(to right, transparent, #0002 calc(var(--re-frame-fade) * .25), #000a calc(var(--re-frame-fade) * .65), #000 var(--re-frame-fade));
+  -webkit-mask-image: linear-gradient(to right, transparent, #0002 calc(var(--re-frame-fade) * .25), #000a calc(var(--re-frame-fade) * .65), #000 var(--re-frame-fade));
+}
+.re-hardware {
+  position: absolute; top: var(--re-hardware-top); left: 50%; width: var(--re-hardware-width);
+  transform: translate(-72%, -50%);
+}
+.re-hardware > img { width: 100%; height: auto; display: block; filter: drop-shadow(0 38px 30px #0009); }
+.re-display-layer { position: absolute; inset: 0; overflow: clip; pointer-events: none; }
+.re-hud {
+  /* Match the 2:1 render without transforming or masking the text's CSS layer. */
+  position: absolute;
+  left: calc(50% - var(--re-hardware-width) * .72);
+  top: calc(var(--re-hardware-top) - var(--re-hardware-width) * .25);
+  width: var(--re-hardware-width); height: calc(var(--re-hardware-width) * .5);
+  /* A single restrained display green, not a pale UI accent or a bloom effect. */
+  color: #5cb747; fill: currentColor;
+  font-family: Arial, 'Helvetica Neue', sans-serif; font-weight: 400;
+}
+.re-hud-message { font-size: 20px; letter-spacing: .1px; }
+.re-hud-prompt { font-size: 20px; font-weight: 600; letter-spacing: .1px; }
+.re-mockup-caption {
+  position: absolute; left: 12%; right: 0; bottom: 42px;
+  color: #69787b; font-size: 10px; line-height: 1.5;
+}
+.re-screen-reader { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.re-story-navigation { position: absolute; bottom: 27px; left: clamp(28px, 5vw, 88px); right: clamp(28px, 5vw, 88px); display: flex; align-items: center; justify-content: space-between; gap: 25px; border-top: 1px solid #adc8d112; padding-top: 20px; }
+.re-scroll-cue { display: flex; align-items: center; gap: 13px; color: #71858e; font: 7px/1.5 'SFMono-Regular', Consolas, monospace; letter-spacing: 1.5px; white-space: nowrap; }
+.re-scroll-cue > span { font-size: 16px; color: #a6b9bf; }
+.re-chapter-buttons { display: flex; gap: 26px; }
+.re-chapter-buttons button { display: flex; align-items: center; gap: 9px; min-height: 44px; padding: 8px 0; color: #7f9199; border: 0; background: transparent; font-size: 9px; }
+.re-chapter-buttons button > span:first-child { font: 7px 'SFMono-Regular', Consolas, monospace; }
+.re-chapter-buttons i { width: 21px; height: 1px; background: #41535b; transition: width .5s, background .5s; }
+.re-chapter-buttons button[aria-pressed=true] { color: #d3e6df; }
+.re-chapter-buttons button[aria-pressed=true] i { width: 45px; background: #c6ebd7; box-shadow: 0 0 9px #adf4b530; }
+@keyframes re-copy-in { from { opacity: 0; translate: 0 9px; } to { opacity: 1; translate: 0 0; } }
+@media (max-width: 1050px) and (min-width: 761px) {
+  .re-cinema-layout { grid-template-columns: .46fr .54fr; padding-inline: 36px; }
+  .re-story-copy h1 { font-size: clamp(44px, 5.8vw, 60px); }
+  .re-story-description { font-size: 13px; max-width: 265px; }
+  .re-device-scene { --re-hardware-width: 980px; }
+  .re-chapter-buttons { gap: 18px; }
+  .re-chapter-buttons button > span:last-child { display: none; }
+  .re-mockup-caption { bottom: 70px; }
+}
+@media (max-width: 760px) {
+  .re-scroll-story { height: 155svh; }
+  .re-cinema-layout { display: flex; flex-direction: column; align-items: stretch; padding: 94px 25px 82px; }
+  .re-story-copy { flex: 0 0 auto; text-align: center; }
+  .re-story-copy h1 { font-size: clamp(40px, 10.5vw, 64px); line-height: 1.03; margin: 16px 0; }
+  .re-story-description { font-size: 12px; line-height: 1.7; max-width: 350px; }
+  .re-story-actions { justify-content: center; margin-top: 20px; gap: 18px; }
+  .re-story-actions .re-primary-link { font-size: 10px; padding: 13px 18px; gap: 18px; }
+  .re-device-scene { flex: 1 1 auto; min-height: 0; height: auto; }
+  .re-device-crop { --re-frame-fade: clamp(24px, 8vw, 56px); }
+  .re-device-scene { --re-hardware-top: 44%; --re-hardware-width: clamp(780px, 230vw, 1020px); }
+  .re-mockup-caption { bottom: 15px; left: 0; right: 0; text-align: center; font-size: 8px; }
+  .re-story-navigation { bottom: 17px; left: 25px; right: 25px; padding-top: 8px; gap: 15px; }
+  .re-scroll-cue { font-size: 6px; letter-spacing: .8px; gap: 7px; }
+  .re-chapter-buttons { gap: 14px; }
+  .re-chapter-buttons button { gap: 5px; }
+  .re-chapter-buttons button > span:last-child { display: none; }
+  .re-chapter-buttons i { width: 10px; }
+  .re-chapter-buttons button[aria-pressed=true] i { width: 23px; }
+}
+@media (max-height: 740px) and (max-width: 760px) {
+  .re-cinema-layout { padding-top: 78px; padding-bottom: 70px; }
+  .re-story-copy h1 { font-size: clamp(40px, 10.5vw, 56px); margin-block: 12px; }
+  .re-story-description { font-size: 11px; }
+  .re-story-actions { margin-top: 13px; }
+  .re-mockup-caption { bottom: 5px; }
+  .re-story-navigation { bottom: 10px; padding-top: 6px; }
+}
+@media (max-height: 650px) and (min-width: 761px) {
+  .re-story-copy h1 { font-size: 48px; margin-block: 20px; }
+  .re-story-description { font-size: 13px; }
+  .re-mockup-caption { bottom: 30px; }
+}
+@media (max-height: 620px) and (max-width: 760px) { .re-mockup-caption { display: none; } }
+
+.re-hud-heading { font-size: 15px; font-weight: 400; letter-spacing: .4px; }
+

@@ -3,7 +3,7 @@ import { supabase } from "../shared/api/supabase"
 import { connectRealtimeSocket } from "../shared/api/client"
 import { getEvenBridge, renderGlassesPage, resumeGlassesPage } from "../even/glasses-page-host"
 import { buildCompactPage } from "../even/glasses-ui"
-import { withTimeout } from "../even/promise-timeout"
+import { withTimeout } from "./promise-timeout"
 import "./style.css"
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
@@ -80,7 +80,7 @@ async function stop(reason = "Stopped · transcripts retained") {
   const current = socket
   if (current?.readyState === WebSocket.OPEN) {
     const drained = new Promise<void>(resolve => { stoppedResolve = resolve })
-    current.send(JSON.stringify({ type: "listening_stop" }))
+    current.send(JSON.stringify({ type: "ambient_stop" }))
     await withTimeout(drained, 30000, "Server flush timed out").catch(() => { reason += " · final results may be incomplete" })
   }
   socket = undefined
@@ -120,7 +120,10 @@ button("start").onclick = async () => {
       if (message.type === "keyword_detected") update("Keyword detected on server · sending clip to Deepgram")
       if (message.type === "deepgram_transcript") update("Deepgram result received · still streaming")
       if (message.error) { update(message.error); readyReject?.(new Error(message.error)) }
-      if (message.type === "stopped") stoppedResolve?.()
+      if (message.type === "listening_stopped") {
+        stoppedResolve?.()
+        if (running && !stopping) void stop(message.error ?? "Server listening stopped")
+      }
       render()
     })
     connected.addEventListener("close", () => {
@@ -128,6 +131,7 @@ button("start").onclick = async () => {
       stoppedResolve?.()
       if (socket === connected && running) void stop("Server disconnected · start a new test")
     })
+    connected.send(JSON.stringify({ type: "ambient_start" }))
     await withTimeout(ready, 60000, "Server Moonshine did not become ready")
     const bridge = await withTimeout(getEvenBridge(), 10000, "Open inside Even with glasses connected")
     resumeGlassesPage()

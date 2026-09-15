@@ -87,7 +87,7 @@ func TestCandidateIDWindowEvictsOldestID(t *testing.T) {
 	}
 }
 
-func TestServerPublishesAcceptedCandidateTranscript(t *testing.T) {
+func TestServerProcessesCandidateWithoutPublishingRoughTranscript(t *testing.T) {
 	expectedScope := tool.Scope{UserID: "user", SessionID: "session"}
 	accurateTranscript := "I need to go to the gym tomorrow after class."
 	utterances := make(chan string, 1)
@@ -138,14 +138,6 @@ func TestServerPublishesAcceptedCandidateTranscript(t *testing.T) {
 	var response serverMessage
 	if err := conn.ReadJSON(&response); err != nil {
 		t.Fatalf("ReadJSON() error = %v", err)
-	}
-	if response.Type != userTranscriptMessageType ||
-		response.ID != "candidate-1" ||
-		response.Text != accurateTranscript {
-		t.Fatalf("transcript response = %+v", response)
-	}
-	if err := conn.ReadJSON(&response); err != nil {
-		t.Fatalf("ReadJSON() assistant response error = %v", err)
 	}
 	if response.Type != assistantResponseMessageType ||
 		response.ID != "candidate-1" ||
@@ -238,7 +230,6 @@ func TestServerAllowsManualCandidateWithoutWakePhrase(t *testing.T) {
 	}
 
 	writeCandidateWithCategory(t, conn, "candidate-1", []byte{1, 2, 3, 4}, "manual")
-	assertServerMessage(t, conn, userTranscriptMessageType, "Yes.")
 	assertServerMessageType(t, conn, assistantDoneMessageType)
 	if utterance := receive(t, utterances); utterance != "Yes." {
 		t.Fatalf("utterance = %q, want manual transcript", utterance)
@@ -319,6 +310,7 @@ func TestServerRejectsDuplicateCandidateID(t *testing.T) {
 
 func TestCandidateModeRejectsLegacyListeningStart(t *testing.T) {
 	server := NewServer(echoTranscriber{}, Handlers{
+		CandidateAudio: func(context.Context, []byte, stt.AudioFormat) (string, error) { return "", nil },
 		Authenticate: func(string) (tool.Scope, error) {
 			return tool.Scope{UserID: "user", SessionID: "session"}, nil
 		},
@@ -352,6 +344,7 @@ func TestCandidateModeRejectsLegacyListeningStart(t *testing.T) {
 
 func TestServerClosesConnectionOnOverlappingCandidateHeaders(t *testing.T) {
 	server := NewServer(echoTranscriber{}, Handlers{
+		CandidateAudio: func(context.Context, []byte, stt.AudioFormat) (string, error) { return "", nil },
 		Authenticate: func(string) (tool.Scope, error) {
 			return tool.Scope{UserID: "user", SessionID: "session"}, nil
 		},

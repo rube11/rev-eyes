@@ -11,122 +11,16 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/rube11/rev-eyes/backend/internal/ambient"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
 const (
-	completedUtteranceBuffer    = 10
 	maxMessageSize              = 1 << 20
 	defaultCandidateConcurrency = 1
 	candidateAdmissionFactor    = 2
 )
-
-const (
-	locationMessageType       = "location"
-	listeningStartMessageType = "listening_start"
-	listeningStopMessageType  = "listening_stop"
-
-	assistantDoneMessageType     = "assistant_done"
-	assistantRepeatMessageType   = "assistant_repeat"
-	assistantResponseMessageType = "assistant_response"
-	assistantThinkingMessageType = "assistant_thinking"
-	listeningStoppedMessageType  = "listening_stopped"
-	notificationMessageType      = "notification"
-	notificationAckMessageType   = "notification_ack"
-	userTranscriptMessageType    = "user_transcript"
-	workspaceChangedMessageType  = "workspace_changed"
-)
-
-type WorkspaceResource string
-
-const (
-	WorkspaceConversations WorkspaceResource = "conversations"
-	WorkspaceMemories      WorkspaceResource = "memories"
-	WorkspaceWatches       WorkspaceResource = "watches"
-	WorkspaceTasks         WorkspaceResource = "tasks"
-)
-
-type Authenticator func(ticket string) (tool.Scope, error)
-type UtteranceResult struct {
-	Text                 string
-	AwaitingConfirmation bool
-	WorkspaceResources   []WorkspaceResource
-}
-
-type UtteranceHandler func(
-	ctx context.Context,
-	scope tool.Scope,
-	utterance string,
-) (UtteranceResult, error)
-type LocationHandler func(ctx context.Context, scope tool.Scope, update LocationUpdate) error
-type NotificationAckHandler func(ctx context.Context, scope tool.Scope, notificationID string) error
-type CandidateAudioHandler func(
-	ctx context.Context,
-	audio []byte,
-	format stt.AudioFormat,
-) (string, error)
-
-type Handlers struct {
-	Authenticate           Authenticator
-	CandidateAudio         CandidateAudioHandler
-	CandidateMaxConcurrent int
-	ClientDiagnostic       ClientDiagnosticHandler
-	CheckOrigin            func(r *http.Request) bool
-	Connect                func(ctx context.Context, scope tool.Scope) error
-	Utterance              UtteranceHandler
-	Location               LocationHandler
-	NotificationAck        NotificationAckHandler
-	Disconnect             func(scope tool.Scope)
-}
-
-type LocationUpdate struct {
-	Latitude       float64 `json:"latitude"`
-	Longitude      float64 `json:"longitude"`
-	AccuracyMeters float64 `json:"accuracy_meters,omitempty"`
-}
-
-type clientMessage struct {
-	Type              string           `json:"type"`
-	ID                string           `json:"id,omitempty"`
-	Encoding          string           `json:"encoding,omitempty"`
-	SampleRate        int              `json:"sample_rate,omitempty"`
-	Channels          int              `json:"channels,omitempty"`
-	ByteLength        int              `json:"byte_length,omitempty"`
-	StartSampleOffset int64            `json:"start_sample_offset,omitempty"`
-	EndSampleOffset   int64            `json:"end_sample_offset,omitempty"`
-	GateCategory      string           `json:"gate_category,omitempty"`
-	GateConfidence    float64          `json:"gate_confidence,omitempty"`
-	Diagnostic        ClientDiagnostic `json:"diagnostic,omitempty"`
-	LocationUpdate
-}
-
-func (message clientMessage) candidateHeader() candidateAudioHeader {
-	return candidateAudioHeader{
-		ID:                message.ID,
-		Encoding:          message.Encoding,
-		SampleRate:        message.SampleRate,
-		Channels:          message.Channels,
-		ByteLength:        message.ByteLength,
-		StartSampleOffset: message.StartSampleOffset,
-		EndSampleOffset:   message.EndSampleOffset,
-		GateCategory:      message.GateCategory,
-		GateConfidence:    message.GateConfidence,
-	}
-}
-
-type serverMessage struct {
-	Type                 string              `json:"type"`
-	ID                   string              `json:"id,omitempty"`
-	Text                 string              `json:"text,omitempty"`
-	Error                string              `json:"error,omitempty"`
-	AwaitingConfirmation bool                `json:"awaiting_confirmation,omitempty"`
-	Resources            []WorkspaceResource `json:"resources,omitempty"`
-}
-
-type jsonWriter interface {
-	WriteJSON(value any) error
-}
 
 type incomingMessage struct {
 	messageType int
@@ -222,16 +116,26 @@ func (s *Server) serveConnection(
 	scope tool.Scope,
 ) error {
 	ctx, cancel := context.WithCancel(parent)
+	if s.handlers.Diagnostics {
+		cancel()
+		ctx, cancel = context.WithTimeout(parent, 7*time.Minute)
+	}
 	messages := make(chan incomingMessage)
 	go s.readMessages(ctx, conn, messages)
 	candidateJobs := make(chan candidateJob, 1)
 	candidateWorkerDone := make(chan struct{})
 	go s.runCandidateWorker(ctx, scope, conn, candidateJobs, candidateWorkerDone)
 
+	var ambientActive bool
+	var ambientCancel context.CancelFunc
+	var ambientInputs chan ambient.Input
 	var audio chan []byte
 	var transcription <-chan error
 	var pendingCandidate *candidateAudioHeader
 	audioMode := audioModeUnset
+	if s.handlers.Diagnostics {
+		audioMode = audioModeAmbient
+	}
 	usedCandidateIDs := newCandidateIDWindow()
 	var diagnosticLimiter clientDiagnosticLimiter
 	defer func() {
@@ -244,8 +148,19 @@ func (s *Server) serveConnection(
 	}()
 
 	finishTranscription := func(transcriptionErr error) error {
+		if ambientCancel != nil {
+			ambientCancel()
+			ambientCancel = nil
+		}
 		audio = nil
 		transcription = nil
+		ambientActive = false
+		// The reader may have queued a frame concurrently with worker exit.
+		for len(ambientInputs) > 0 {
+			event := <-ambientInputs
+			clearCandidateAudio(event.PCM)
+		}
+		ambientInputs = nil
 
 		message := serverMessage{Type: listeningStoppedMessageType}
 		if transcriptionErr != nil && !errors.Is(transcriptionErr, context.Canceled) {
@@ -329,10 +244,24 @@ func (s *Server) serveConnection(
 					}
 					continue
 				}
+				if ambientActive {
+					if len(incoming.data) > 32000 {
+						clearCandidateAudio(incoming.data)
+						return errors.New("ambient audio frame exceeds one second")
+					}
+					select {
+					case ambientInputs <- ambient.Input{PCM: incoming.data}:
+					default:
+						clearCandidateAudio(incoming.data)
+						return errors.New("ambient audio queue full")
+					}
+					continue
+				}
 				if audio == nil {
 					clearCandidateAudio(incoming.data)
 					continue
 				}
+
 				select {
 				case audio <- incoming.data:
 				case transcriptionErr := <-transcription:
@@ -367,8 +296,11 @@ func (s *Server) serveConnection(
 				s.handlers.ClientDiagnostic(ctx, diagnostic)
 
 			case candidateAudioMessageType:
+				if s.handlers.CandidateAudio == nil {
+					continue
+				}
 				header := message.candidateHeader()
-				if audioMode == audioModeLegacy || transcription != nil {
+				if audioMode == audioModeLegacy || audioMode == audioModeAmbient || transcription != nil {
 					slog.WarnContext(ctx, "rejected candidate audio during legacy transcription")
 					if err := conn.WriteJSON(candidateDoneMessage(message.ID)); err != nil {
 						return fmt.Errorf("write candidate mode rejection: %w", err)
@@ -418,7 +350,57 @@ func (s *Server) serveConnection(
 					)
 				}
 
+			case "ambient_start":
+				if transcription != nil {
+					continue
+				}
+				if audioMode == audioModeUnset {
+					audioMode = audioModeAmbient
+				}
+				if s.handlers.Ambient == nil || s.handlers.CandidateAudio == nil || audioMode != audioModeAmbient {
+					if err := conn.WriteJSON(serverMessage{Type: listeningStoppedMessageType, Error: "Server listening unavailable"}); err != nil {
+						return err
+					}
+					continue
+				}
+				audioMode = audioModeAmbient
+				ambientActive = true
+				ambientInputs = make(chan ambient.Input, 16)
+				ambientCtx, stopAmbient := context.WithCancel(ctx)
+				ambientCancel = stopAmbient
+				done := make(chan error, 1)
+				transcription = done
+				go func(input <-chan ambient.Input) {
+					done <- s.listenAmbient(ambientCtx, conn, input, candidateJobs)
+				}(ambientInputs)
+
+			case "ambient_stop":
+				if ambientActive {
+					ambientCancel()
+					if err := finishTranscription(<-transcription); err != nil {
+						return err
+					}
+				}
+			case "ambient_reply_arm", "ambient_reply_disarm":
+				if ambientActive {
+					select {
+					case ambientInputs <- ambient.Input{Control: message.Type}:
+					default:
+						return errors.New("ambient control queue full")
+					}
+				}
 			case listeningStartMessageType:
+				if ambientActive {
+					select {
+					case ambientInputs <- ambient.Input{Control: message.Type}:
+					default:
+						return errors.New("ambient control queue full")
+					}
+					continue
+				}
+				if audioMode == audioModeAmbient {
+					continue
+				} // Never fall back to paid streaming.
 				if audioMode == audioModeCandidate {
 					if err := conn.WriteJSON(serverMessage{
 						Type:  listeningStoppedMessageType,
@@ -440,6 +422,14 @@ func (s *Server) serveConnection(
 				}(audio)
 
 			case listeningStopMessageType:
+				if ambientActive {
+					select {
+					case ambientInputs <- ambient.Input{Control: message.Type}:
+					default:
+						return errors.New("ambient control queue full")
+					}
+					continue
+				}
 				if transcription == nil {
 					if err := conn.WriteJSON(serverMessage{Type: listeningStoppedMessageType}); err != nil {
 						return fmt.Errorf("write listening state: %w", err)

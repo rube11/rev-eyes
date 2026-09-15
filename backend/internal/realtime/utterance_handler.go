@@ -9,6 +9,8 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
+const completedUtteranceBuffer = 10
+
 type utteranceDelivery struct {
 	messageID        string
 	announceThinking bool
@@ -54,7 +56,6 @@ func (s *Server) transcribeConnection(
 			scope,
 			writer,
 			utterance,
-			utteranceDelivery{announceThinking: true},
 		); err != nil {
 			return err
 		}
@@ -68,8 +69,12 @@ func (s *Server) handleCompletedUtterance(
 	scope tool.Scope,
 	writer jsonWriter,
 	utterance string,
-	delivery utteranceDelivery,
+	deliveries ...utteranceDelivery,
 ) error {
+	delivery := utteranceDelivery{announceThinking: true}
+	if len(deliveries) > 0 {
+		delivery = deliveries[0]
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -90,14 +95,17 @@ func (s *Server) handleCompletedUtterance(
 		return err
 	}
 	defer releaseTurn()
+	// A text turn may have selected a different chat since this socket connected.
+	if s.handlers.PrepareSession != nil {
+		if err := s.handlers.PrepareSession(ctx, scope); err != nil {
+			return fmt.Errorf("prepare voice session: %w", err)
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if delivery.announceThinking {
-		if err := writer.WriteJSON(serverMessage{
-			Type: assistantThinkingMessageType,
-			ID:   delivery.messageID,
-		}); err != nil {
+		if err := writer.WriteJSON(serverMessage{Type: assistantThinkingMessageType, ID: delivery.messageID}); err != nil {
 			return fmt.Errorf("write assistant thinking state: %w", err)
 		}
 	}

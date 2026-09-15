@@ -100,9 +100,15 @@ export async function renderGlassesPage(
       return
     }
     const bridge = await ensurePage()
-    const rebuilt = await bridge.rebuildPageContainer(page)
-    if (!rebuilt) {
-      throw new Error("Glasses display update failed")
+    try {
+      const rebuilt = await bridge.rebuildPageContainer(page)
+      if (!rebuilt) {
+        throw new Error("Glasses display update failed")
+      }
+    } catch (error) {
+      // A disconnect can drop the native page. Let the next attempt create it again.
+      startup = undefined
+      throw error
     }
   })
 }
@@ -127,4 +133,15 @@ export async function upgradeTranscriptText(content: string): Promise<boolean> {
 export async function showEvenMessage(text: string): Promise<void> {
   resumeGlassesPage()
   await renderGlassesPage(buildCompactPage(text))
+}
+
+export async function upgradeMessageStatus(content: string): Promise<boolean> {
+  if (pageSuspended) return false
+  return serializePageMutation(async () => {
+    if (pageSuspended) return false
+    const bridge = await ensurePage()
+    return bridge.textContainerUpgrade(new TextContainerUpgrade({
+      containerID: 2, containerName: "message-status", content,
+    }))
+  })
 }
