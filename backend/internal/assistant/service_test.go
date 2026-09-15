@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/session"
@@ -72,6 +73,71 @@ func (f memoryReaderFunc) Find(
 	lookup memory.Lookup,
 ) ([]memory.Card, error) {
 	return f(ctx, scope, lookup)
+}
+
+func (f memoryReaderFunc) Review(
+	ctx context.Context,
+	scope tool.Scope,
+	lookup memory.Lookup,
+) ([]memory.Card, error) {
+	return f(ctx, scope, lookup)
+}
+
+func (f memoryReaderFunc) Forget(
+	context.Context,
+	tool.Scope,
+	memory.Lookup,
+) (int, error) {
+	return 0, nil
+}
+
+type managedMemoryStub struct {
+	find   func(context.Context, tool.Scope, memory.Lookup) ([]memory.Card, error)
+	review func(context.Context, tool.Scope, memory.Lookup) ([]memory.Card, error)
+	forget func(context.Context, tool.Scope, memory.Lookup) (int, error)
+}
+
+func (f memoryReaderFunc) Profile(context.Context, tool.Scope) (string, error) {
+	return "", nil
+}
+
+func (f memoryReaderFunc) SetProfileOverride(context.Context, tool.Scope, memory.Lookup, memory.ProfileLayer) (int, error) {
+	return 0, nil
+}
+
+func (m managedMemoryStub) Profile(context.Context, tool.Scope) (string, error) {
+	return "", nil
+}
+
+func (m managedMemoryStub) SetProfileOverride(context.Context, tool.Scope, memory.Lookup, memory.ProfileLayer) (int, error) {
+	return 0, nil
+}
+
+func (m managedMemoryStub) Find(
+	ctx context.Context,
+	scope tool.Scope,
+	lookup memory.Lookup,
+) ([]memory.Card, error) {
+	if m.find == nil {
+		return nil, nil
+	}
+	return m.find(ctx, scope, lookup)
+}
+
+func (m managedMemoryStub) Review(
+	ctx context.Context,
+	scope tool.Scope,
+	lookup memory.Lookup,
+) ([]memory.Card, error) {
+	return m.review(ctx, scope, lookup)
+}
+
+func (m managedMemoryStub) Forget(
+	ctx context.Context,
+	scope tool.Scope,
+	lookup memory.Lookup,
+) (int, error) {
+	return m.forget(ctx, scope, lookup)
 }
 
 var noMemories = memoryReaderFunc(func(
@@ -164,6 +230,71 @@ func TestHandleUtteranceUsesActualProposalResult(t *testing.T) {
 	}
 }
 
+func TestHandleUtteranceRespondsToMeaningfulStateTransition(t *testing.T) {
+	wantLookup := memory.Lookup{
+		Query:  "The user just left the gym; suggest one timely next step.",
+		Terms:  []string{"protein target"},
+		Topics: []memory.Topic{memory.TopicHealth},
+		Kinds:  []memory.Kind{memory.KindGoal},
+	}
+	wantCards := []memory.Card{{
+		Topics:  []memory.Topic{memory.TopicHealth},
+		Kind:    memory.KindGoal,
+		Title:   "Daily protein target",
+		Summary: "The user targets 150 grams of protein per day.",
+	}}
+	service, err := NewService(
+		routerFunc(func(context.Context, string) (Decision, error) {
+			return Decision{
+				Action:       ActionStateTransition,
+				Query:        "The user just left the gym; suggest one timely next step.",
+				MemoryLookup: wantLookup,
+			}, nil
+		}),
+		agentFunc(func(
+			_ context.Context,
+			_ tool.Scope,
+			query string,
+			_ session.Conversation,
+			cards []memory.Card,
+		) (string, error) {
+			if query != "The user just left the gym; suggest one timely next step." ||
+				!reflect.DeepEqual(cards, wantCards) {
+				t.Fatalf("Respond(%q, %#v)", query, cards)
+			}
+			return "Nice work. Grab a protein-forward meal next.", nil
+		}),
+		memoryReaderFunc(func(
+			_ context.Context,
+			_ tool.Scope,
+			lookup memory.Lookup,
+		) ([]memory.Card, error) {
+			if !reflect.DeepEqual(lookup, wantLookup) {
+				t.Fatalf("Find() lookup = %#v", lookup)
+			}
+			return wantCards, nil
+		}),
+		noConversation,
+		noProposalConfirmation,
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	outcome, err := service.HandleUtterance(
+		context.Background(),
+		tool.Scope{UserID: "user-1", SessionID: "session-1"},
+		"utterance-1",
+		"I just left the gym.",
+	)
+	if err != nil {
+		t.Fatalf("HandleUtterance() error = %v", err)
+	}
+	if outcome.Decision.Action != ActionStateTransition ||
+		outcome.Response != "Nice work. Grab a protein-forward meal next." {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+}
+
 func TestHandleUtteranceFallsBackAfterProposalResponseFailure(t *testing.T) {
 	service, err := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
@@ -207,6 +338,7 @@ func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
 	wantAgentScope := wantScope
 	wantAgentScope.UtteranceID = "utterance-789"
 	wantLookup := memory.Lookup{
+		Query:  "What is nearby?",
 		Terms:  []string{"cafe"},
 		Topics: []memory.Topic{memory.TopicPlaces},
 	}
@@ -299,6 +431,81 @@ func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
 	}
 	if outcome.Response != "There is a cafe nearby." {
 		t.Fatalf("outcome response = %q", outcome.Response)
+	}
+}
+
+func TestHandleUtteranceLoadsMemoryAndConversationInParallel(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	service, err := NewService(
+		routerFunc(func(context.Context, string) (Decision, error) {
+			return Decision{Action: ActionRespond, Query: "dinner ideas"}, nil
+		}),
+		agentFunc(func(
+			context.Context,
+			tool.Scope,
+			string,
+			session.Conversation,
+			[]memory.Card,
+		) (string, error) {
+			return "Dinner.", nil
+		}),
+		memoryReaderFunc(func(
+			context.Context,
+			tool.Scope,
+			memory.Lookup,
+		) ([]memory.Card, error) {
+			started <- "memory"
+			<-release
+			return nil, nil
+		}),
+		conversationReaderFunc(func(
+			context.Context,
+			tool.Scope,
+			string,
+			string,
+		) (session.Conversation, error) {
+			started <- "conversation"
+			<-release
+			return session.Conversation{}, nil
+		}),
+		noProposalConfirmation,
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, handleErr := service.HandleUtterance(
+			context.Background(),
+			tool.Scope{},
+			"utterance-1",
+			"What should I make?",
+		)
+		done <- handleErr
+	}()
+
+	seen := map[string]bool{}
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	for range 2 {
+		select {
+		case dependency := <-started:
+			seen[dependency] = true
+		case <-timer.C:
+			close(release)
+			t.Fatal("memory and conversation context did not start in parallel")
+		}
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("HandleUtterance() error = %v", err)
+	}
+	if !seen["memory"] || !seen["conversation"] {
+		t.Fatalf("started = %#v", seen)
 	}
 }
 

@@ -156,6 +156,27 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	memoryModel := strings.TrimSpace(os.Getenv("OPENAI_MEMORY_MODEL"))
+	if memoryModel == "" {
+		memoryModel = os.Getenv("OPENAI_ROUTER_MODEL")
+	}
+	memoryExtractor, err := openai.NewMemoryExtractor(
+		os.Getenv("OPENAI_API_KEY"),
+		memoryModel,
+	)
+	if err != nil {
+		return err
+	}
+	memoryRecorder, err := memory.NewRecorder(
+		memoryExtractor,
+		memoryStore,
+	)
+	if err != nil {
+		return err
+	}
+	memoryRecorder.SetOnStored(func(userID string) {
+		realtimeHub.WorkspaceChanged(userID, realtime.WorkspaceMemories)
+	})
 
 	transcriber, err := stt.NewDeepgramTranscriber(os.Getenv("DEEPGRAM_API_KEY"))
 	if err != nil {
@@ -303,12 +324,14 @@ func run() error {
 	}
 	go registrationDispatcher.Run(ctx)
 	go scheduledEventDispatcher.Run(ctx)
+	go memoryRecorder.Run(ctx)
 	realtimeServer := realtime.NewServerWithHub(transcriber, realtimeHub, realtime.Handlers{
 		Ambient:                ambientHandler,
-		Authenticate:           tickets.Consume,
 		CandidateAudio:         candidateAudioHandler,
 		CandidateMaxConcurrent: candidateMaxConcurrent,
 		ClientDiagnostic:       clientDiagnosticHandler,
+		Authenticate:           tickets.Consume,
+		PrepareSession:         sessionStore.Reopen,
 		CheckOrigin:            origins.Allows,
 		Connect: func(ctx context.Context, scope tool.Scope) error {
 			return notificationService.Flush(ctx, scope.UserID)
@@ -331,7 +354,7 @@ func run() error {
 				utterance,
 				assistantService,
 				sessionStore,
-				memoryStore,
+				memoryRecorder,
 			)
 		},
 		Location: func(_ context.Context, scope tool.Scope, update realtime.LocationUpdate) error {
@@ -347,6 +370,9 @@ func run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", web.Health)
 	mux.Handle("/auth/ws-ticket", origins.Handler(ticketHandler))
+	textChatAPI := origins.Handler(realtimeServer.TextHandler(tokenVerifier.Verify, sessionStore.Reopen))
+	mux.Handle("POST /workspace/conversations/{session_id}/messages", textChatAPI)
+	mux.Handle("OPTIONS /workspace/conversations/{session_id}/messages", textChatAPI)
 	workspaceAutomationAPI := origins.Handler(workspaceAutomationHandler)
 	mux.Handle(
 		"POST /workspace/automations/{kind}/{resource_id}/decision",

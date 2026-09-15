@@ -310,6 +310,7 @@ func TestServerRejectsDuplicateCandidateID(t *testing.T) {
 
 func TestCandidateModeRejectsLegacyListeningStart(t *testing.T) {
 	server := NewServer(echoTranscriber{}, Handlers{
+		CandidateAudio: func(context.Context, []byte, stt.AudioFormat) (string, error) { return "", nil },
 		Authenticate: func(string) (tool.Scope, error) {
 			return tool.Scope{UserID: "user", SessionID: "session"}, nil
 		},
@@ -343,6 +344,7 @@ func TestCandidateModeRejectsLegacyListeningStart(t *testing.T) {
 
 func TestServerClosesConnectionOnOverlappingCandidateHeaders(t *testing.T) {
 	server := NewServer(echoTranscriber{}, Handlers{
+		CandidateAudio: func(context.Context, []byte, stt.AudioFormat) (string, error) { return "", nil },
 		Authenticate: func(string) (tool.Scope, error) {
 			return tool.Scope{UserID: "user", SessionID: "session"}, nil
 		},

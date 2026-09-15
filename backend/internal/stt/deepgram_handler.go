@@ -19,6 +19,8 @@ type deepgramHandler struct {
 	ctx        context.Context
 	completed  chan<- string
 	observe    TranscriptObserver
+	endpointed chan struct{}
+	endpoint   sync.Once
 	finalized  chan struct{}
 	finalize   sync.Once
 }
@@ -33,6 +35,7 @@ func newDeepgramHandler(
 		ctx:                    ctx,
 		completed:              completed,
 		observe:                observe,
+		endpointed:             make(chan struct{}),
 		finalized:              make(chan struct{}),
 	}
 }
@@ -62,10 +65,9 @@ func (h *deepgramHandler) Message(message *msginterfaces.MessageResponse) error 
 		update = strings.TrimSpace(h.transcript + " " + text)
 	}
 
-	// SpeechFinal marks a natural pause in Deepgram's endpointing. The user may
-	// continue speaking after it, so only the explicit stream finalization that
-	// follows tap-to-finish may publish and clear the complete utterance.
-	if message.FromFinalize && h.transcript != "" {
+	// SpeechFinal is Deepgram's endpoint after the configured silence window.
+	// Explicit finalization remains as the manual-stop and disconnect fallback.
+	if (message.SpeechFinal || message.FromFinalize) && h.transcript != "" {
 		utterance = h.transcript
 		h.transcript = ""
 	}
@@ -90,12 +92,19 @@ func (h *deepgramHandler) Message(message *msginterfaces.MessageResponse) error 
 		case <-h.ctx.Done():
 		}
 	}
+	if message.SpeechFinal && utterance != "" {
+		h.endpoint.Do(func() { close(h.endpointed) })
+	}
 
 	if message.FromFinalize {
 		h.finalize.Do(func() { close(h.finalized) })
 	}
 
 	return nil
+}
+
+func (h *deepgramHandler) Endpointed() <-chan struct{} {
+	return h.endpointed
 }
 
 func (h *deepgramHandler) Finalized() <-chan struct{} {

@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+port="${SIM_PORT:-5173}"
+if [[ ! "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+  printf 'SIM_PORT must be between 1 and 65535.\n' >&2
+  exit 1
+fi
+if [[ $# -gt 1 || ( $# -eq 1 && "$1" != --check ) ]]; then
+  printf 'Usage: ./runSim [--check]\nOptional: SIM_PORT=5174 ./runSim\n' >&2
+  exit 1
+fi
+
+for required in node curl rg; do
+  command -v "$required" >/dev/null || { printf 'Missing command: %s\n' "$required" >&2; exit 1; }
+done
+if [[ ! -f "$project_dir/frontend/node_modules/vite/bin/vite.js" ]]; then
+  printf 'Install frontend dependencies first: cd frontend && pnpm install\n' >&2
+  exit 1
+fi
+simulator="$project_dir/frontend/node_modules/@evenrealities/evenhub-simulator/bin/index.js"
+if [[ ! -f "$simulator" ]]; then
+  printf 'Install frontend dependencies first: cd frontend && pnpm install\n' >&2
+  exit 1
+fi
+if [[ "${1:-}" == --check ]]; then
+  simulator_package="$project_dir/frontend/node_modules/@evenrealities/evenhub-simulator/package.json"
+  node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).version)' "$simulator_package"
+  exit 0
+fi
+if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+  printf 'No graphical display found. Run this in a WSLg desktop-enabled WSL session.\n' >&2
+  exit 1
+fi
+
+frontend_pid=''
+cleanup() {
+  if [[ -n "$frontend_pid" ]]; then
+    kill "$frontend_pid" 2>/dev/null || true
+    wait "$frontend_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+url="http://localhost:$port"
+probe="http://127.0.0.1:$port"
+if curl --silent --fail --max-time 2 "$probe/@vite/client" | rg 'vite' >/dev/null; then
+  printf 'Reusing Vite on %s (it will be left running).\n' "$url"
+else
+  printf 'Starting frontend on %s\n' "$url"
+  (
+    cd "$project_dir/frontend"
+    exec node node_modules/vite/bin/vite.js --host 0.0.0.0 --port "$port" --strictPort
+  ) &
+  frontend_pid=$!
+  ready=false
+  for (( attempt=0; attempt<60; attempt++ )); do
+    if ! kill -0 "$frontend_pid" 2>/dev/null; then
+      printf 'Frontend failed to start. Check the output above (or choose another SIM_PORT).\n' >&2
+      exit 1
+    fi
+    if curl --silent --fail --max-time 1 "$probe/@vite/client" | rg 'vite' >/dev/null; then
+      ready=true
+      break
+    fi
+    sleep 0.5
+  done
+  if [[ "$ready" != true ]]; then
+    printf 'Frontend did not become ready in time.\n' >&2
+    exit 1
+  fi
+fi
+
+printf 'Opening the phone-app and glasses simulator windows.\n'
+printf 'Backend: using frontend environment configuration; no backend is started here.\n'
+printf 'Close the simulator to finish. Ctrl+C also stops the frontend started here.\n'
+cd "$project_dir/frontend"
+# WSL graphics drivers may not support WebKit's accelerated buffer path.
+if [[ -d /mnt/wslg ]]; then
+  export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
+  export WEBKIT_DISABLE_DMABUF_RENDERER="${WEBKIT_DISABLE_DMABUF_RENDERER:-1}"
+fi
+node "$simulator" "$url"

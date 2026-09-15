@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+project_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+backend_dir="$project_dir/backend"
+frontend_dir="$project_dir/frontend"
+backend_env="${BACKEND_ENV_FILE:-$backend_dir/.local.env}"
+
+if [[ ! -f "$backend_env" ]]; then
+  printf 'Backend environment file not found: %s\n' "$backend_env" >&2
+  printf 'Create it from backend/.env.example, or set BACKEND_ENV_FILE.\n' >&2
+  exit 1
+fi
+
+for command_name in go pnpm bash; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    printf 'Required command not found: %s\n' "$command_name" >&2
+    exit 1
+  fi
+done
+
+printf -v backend_command \
+  'cd %q && set -a && source %q && set +a && go run .; status=$?; printf "\\nBackend exited with status %%s. Press Enter to close.\\n" "$status"; read -r' \
+  "$backend_dir" "$backend_env"
+printf -v frontend_command \
+  'cd %q && pnpm run dev; status=$?; printf "\\nFrontend exited with status %%s. Press Enter to close.\\n" "$status"; read -r' \
+  "$frontend_dir"
+
+open_terminal() {
+  local title="$1"
+  local command_to_run="$2"
+
+  if command -v gnome-terminal >/dev/null 2>&1; then
+    gnome-terminal --window --title="$title" -- bash -lc "$command_to_run"
+  elif command -v konsole >/dev/null 2>&1; then
+    konsole --new-window -p "tabtitle=$title" -e bash -lc "$command_to_run"
+  elif command -v xfce4-terminal >/dev/null 2>&1; then
+    xfce4-terminal --title="$title" --command="bash -lc $(printf '%q' "$command_to_run")"
+  elif command -v kitty >/dev/null 2>&1; then
+    kitty --title "$title" bash -lc "$command_to_run" &
+  elif command -v ghostty >/dev/null 2>&1; then
+    ghostty --title="$title" -e bash -lc "$command_to_run" &
+  elif command -v wezterm >/dev/null 2>&1; then
+    wezterm start --always-new-process -- bash -lc "$command_to_run" &
+  elif command -v alacritty >/dev/null 2>&1; then
+    alacritty --title "$title" -e bash -lc "$command_to_run" &
+  elif command -v foot >/dev/null 2>&1; then
+    foot --title="$title" bash -lc "$command_to_run" &
+  elif command -v xterm >/dev/null 2>&1; then
+    xterm -T "$title" -e bash -lc "$command_to_run" &
+  elif command -v x-terminal-emulator >/dev/null 2>&1; then
+    x-terminal-emulator -T "$title" -e bash -lc "$command_to_run" &
+  else
+    printf 'No supported terminal emulator was found.\n' >&2
+    printf 'Supported terminals: GNOME Terminal, Konsole, Xfce Terminal, Kitty, Ghostty, WezTerm, Alacritty, foot, and xterm.\n' >&2
+    exit 1
+  fi
+}
+
+open_tmux_session() {
+  local session_name="rev-eyes"
+
+  if tmux has-session -t "=$session_name" 2>/dev/null; then
+    printf 'Attaching to existing tmux session: %s\n' "$session_name"
+  else
+    tmux new-session -d -s "$session_name" -n services "$backend_command"
+    tmux split-window -h -t "=$session_name:services" "$frontend_command"
+    tmux select-layout -t "=$session_name:services" even-horizontal >/dev/null
+  fi
+
+  if [[ -n "${TMUX:-}" ]]; then
+    tmux switch-client -t "=$session_name"
+  else
+    tmux attach-session -t "=$session_name"
+  fi
+}
+
+if ! command -v gnome-terminal >/dev/null 2>&1 \
+  && ! command -v konsole >/dev/null 2>&1 \
+  && ! command -v xfce4-terminal >/dev/null 2>&1 \
+  && ! command -v kitty >/dev/null 2>&1 \
+  && ! command -v ghostty >/dev/null 2>&1 \
+  && ! command -v wezterm >/dev/null 2>&1 \
+  && ! command -v alacritty >/dev/null 2>&1 \
+  && ! command -v foot >/dev/null 2>&1 \
+  && ! command -v xterm >/dev/null 2>&1 \
+  && ! command -v x-terminal-emulator >/dev/null 2>&1 \
+  && command -v tmux >/dev/null 2>&1; then
+  open_tmux_session
+  exit 0
+fi
+
+open_terminal 'rev-eyes backend' "$backend_command"
+open_terminal 'rev-eyes frontend' "$frontend_command"

@@ -1,6 +1,8 @@
 # Moonshine to Deepgram Candidate-Audio Architecture
 
-Status: Candidate pipeline and lifecycle hardening implemented behind feature flags; real-device soak and performance validation remain.
+Status: Historical design. The `noMoonshine` branch has retired this pipeline.
+See [the current package guide](../../internal/README.md#tap-to-talk-flow) for
+the active tap-to-talk flow. The remaining content records the earlier design.
 
 Last reviewed: 2026-08-05
 
@@ -33,8 +35,8 @@ The implemented candidate path is now:
 
 Implemented lifecycle guarantees as of 2026-08-05:
 
-- [audio-capture-session.ts](../../frontend/src/even/audio-capture-session.ts) coordinates the G2 microphone and local transcription without putting that state machine in runtime.ts. Candidate mode does not report startup success until Moonshine and both relevant audio contexts are active. Shadow-only mode remains non-blocking so it cannot delay the legacy Deepgram path.
-- [glasses-page-host.ts](../../frontend/src/even/glasses-page-host.ts) now owns startup-page creation, serialized SDK page mutations, transcript upgrades, and page suspension. A failed bridge lookup is no longer cached permanently, so a later initialization can retry it.
+- [audio-capture-session.ts](../../../frontend/src/even/audio-capture-session.ts) coordinates the G2 microphone and local transcription without putting that state machine in runtime.ts. Candidate mode does not report startup success until Moonshine and both relevant audio contexts are active. Shadow-only mode remains non-blocking so it cannot delay the legacy Deepgram path.
+- [glasses-page-host.ts](../../../frontend/src/even/glasses-page-host.ts) now owns startup-page creation, serialized SDK page mutations, transcript upgrades, and page suspension. A failed bridge lookup is no longer cached permanently, so a later initialization can retry it.
 - A local activation step has a five-second deadline. A failed required activation cancels Moonshine and shuts down device capture instead of leaving a false `LISTENING LOCALLY` state.
 - Every candidate-mode tap arms a manual window. If a local gate window already exists, the tap upgrades it to `manual`, clears its automatic endpoint, and preserves tap-to-talk semantics through the backend wake check.
 - Even SDK microphone-stop `false` results are retained and logged instead of discarded.
@@ -42,12 +44,12 @@ Implemented lifecycle guarantees as of 2026-08-05:
 - The backend admits raw clips into a bounded global pool before per-connection queueing. The existing compute semaphore continues to cover Deepgram transcription and downstream utterance handling.
 - Backend candidate work has a 60-second deadline measured from clip acceptance. Timeout sends one terminal `assistant_done` when the connection is still alive.
 - Raw PCM is zeroed on rejection, cancellation, timeout, worker drain, and immediately after the finite transcription handler returns. It is not retained through GPT or tool processing.
-- [assistant-response-lifecycle.ts](../../frontend/src/even/assistant-response-lifecycle.ts) owns only response-card and conversation deadlines, and [assistant-conversation-state.ts](../../frontend/src/even/assistant-conversation-state.ts) owns the small response-to-reply state machine. Reading time begins after the SDK render succeeds rather than while the card is still being built. `runtime.ts` remains the UI orchestrator, while `MoonshineShadowTranscriber` exposes a one-shot voice-reply arm at its existing VAD speech-start boundary.
+- [assistant-response-lifecycle.ts](../../../frontend/src/even/assistant-response-lifecycle.ts) owns only response-card and conversation deadlines, and [assistant-conversation-state.ts](../../../frontend/src/even/assistant-conversation-state.ts) owns the small response-to-reply state machine. Reading time begins after the SDK render succeeds rather than while the card is still being built. `runtime.ts` remains the UI orchestrator, while `MoonshineShadowTranscriber` exposes a one-shot voice-reply arm at its existing VAD speech-start boundary.
 - Starting speech during a response replaces the card with `LISTENING`; the existing manual candidate mode then captures the complete utterance, including short answers that do not satisfy the ambient phrase gate. A pause does not end the turn until the existing two-second post-roll elapses, and resumed speech extends the same candidate.
 - Focused replies are correlated to their candidate ID. A late `assistant_done`, `assistant_response`, or `assistant_repeat` for another in-flight ambient candidate cannot end the active reply turn.
-- [realtime-protocol.ts](../../frontend/src/even/realtime-protocol.ts) owns server-message parsing and workspace-resource validation instead of leaving that protocol code inside `runtime.ts`. An empty or malformed `assistant_response` is treated as a terminal completion so the glasses cannot remain stuck on `THINKING`.
-- [realtime-socket.ts](../../frontend/src/even/realtime-socket.ts) owns safe sends, close handling, and reconnect backoff. A socket that opens during teardown or after a newer connection generation wins is explicitly closed if the runtime never adopts it.
-- [turn_coordinator.go](../internal/realtime/turn_coordinator.go) serializes transcript persistence, proposal confirmation, routing, tools, and response persistence for one user/session within a backend process. Different sessions still run concurrently. This closes the same-process multi-socket proposal and conversation race without reducing the process-wide Deepgram limit to one.
+- [realtime-protocol.ts](../../../frontend/src/even/realtime-protocol.ts) owns server-message parsing and workspace-resource validation instead of leaving that protocol code inside `runtime.ts`. An empty or malformed `assistant_response` is treated as a terminal completion so the glasses cannot remain stuck on `THINKING`.
+- [realtime-socket.ts](../../../frontend/src/even/realtime-socket.ts) owns safe sends, close handling, and reconnect backoff. A socket that opens during teardown or after a newer connection generation wins is explicitly closed if the runtime never adopts it.
+- [turn_coordinator.go](../../internal/realtime/turn_coordinator.go) serializes transcript persistence, proposal confirmation, routing, tools, and response persistence for one user/session within a backend process. Different sessions still run concurrently. This closes the same-process multi-socket proposal and conversation race without reducing the process-wide Deepgram limit to one.
 - A live Deepgram turn now receives a child context that is canceled if transcript delivery or downstream handling exits early, preventing a failed WebSocket turn from leaving its transcription goroutine alive.
 - `awaiting_confirmation` is now based on a successful `propose_task` or `propose_watch` tool result, not on the router's predicted action. Clarification questions therefore retain the ordinary follow-up prompt, while a real pending proposal receives the `SAVE THAT` / `NO` voice prompt. If proposal creation succeeds but final response generation fails, the effect metadata is preserved and a short confirmation fallback is returned instead of orphaning an invisible proposal.
 - `show that again`, `show it again`, and `repeat that` are locally wakeable. After accurate Deepgram transcription the backend emits `assistant_repeat` before persistence or GPT routing, and the WebView restores its last assistant card with fresh deadlines.
@@ -90,9 +92,9 @@ Sections 1 through 8 below retain the original baseline mapping and design ratio
 
 The frontend is a sibling of the backend at ../../frontend.
 
-- [App.tsx](../../frontend/src/app/App.tsx) owns the React lifecycle. Its effect around line 375 calls initializeEvenExperience(accessToken, onResponse, onStatus) and invokes the returned cleanup function on unmount or token change.
+- [App.tsx](../../../frontend/src/app/App.tsx) owns the React lifecycle. Its effect around line 375 calls initializeEvenExperience(accessToken, onResponse, onStatus) and invokes the returned cleanup function on unmount or token change.
 
-- [runtime.ts](../../frontend/src/even/runtime.ts) is the actual runtime controller. Despite being one function, it owns:
+- [runtime.ts](../../../frontend/src/even/runtime.ts) is the actual runtime controller. Despite being one function, it owns:
 
   - Even bridge setup.
   - WebSocket connection and reconnection.
@@ -104,14 +106,14 @@ The frontend is a sibling of the backend at ../../frontend.
   - Notification display.
   - Cleanup and sleep behavior.
 
-- [client.ts](../../frontend/src/shared/api/client.ts) creates the backend socket:
+- [client.ts](../../../frontend/src/shared/api/client.ts) creates the backend socket:
 
   1. Requests a single-use /auth/ws-ticket.
   2. Includes the current timezone.
   3. Opens /ws?ticket=....
   4. Uses an AbortController and timeout for connection establishment.
 
-- The Even SDK event listener is installed around line 1094 of [runtime.ts](../../frontend/src/even/runtime.ts). PCM first enters application code at event.audioEvent?.audioPcm around line 1104.
+- The Even SDK event listener is installed around line 1094 of [runtime.ts](../../../frontend/src/even/runtime.ts). PCM first enters application code at event.audioEvent?.audioPcm around line 1104.
 
 - Current audio forwarding is gated by listeningState === "listening". The callback makes a copy with Uint8Array.from(pcm).buffer and sends that copy as an untyped WebSocket binary message.
 
@@ -121,13 +123,13 @@ The frontend is a sibling of the backend at ../../frontend.
   - Stop: sends listening_stop, turns the microphone off, and returns to idle.
   - Receiving an assistant_response also turns the microphone off.
 
-- [audio.ts](../../frontend/src/even/audio.ts) is only a placeholder. It is not the current audio abstraction.
+- [audio.ts](../../../frontend/src/even/audio.ts) is only a placeholder. It is not the current audio abstraction.
 
 - The conversation feature hook and controls under ../../frontend/src/features/conversation are also placeholders. Moving Moonshine there would not align with the running application.
 
 ### Current frontend/server protocol
 
-Inbound client text messages in [internal/realtime/server.go](../internal/realtime/server.go):
+Inbound client text messages in [internal/realtime/server.go](../../internal/realtime/server.go):
 
 - listening_start
 - listening_stop
@@ -145,28 +147,28 @@ Outbound server messages:
 - listening_stopped
 - notification
 
-handleServerMessage around line 866 of runtime.ts interprets these. Transcript, thinking, response, and notification messages are rendered through [glasses-ui.ts](../../frontend/src/even/glasses-ui.ts).
+handleServerMessage around line 866 of runtime.ts interprets these. Transcript, thinking, response, and notification messages are rendered through [glasses-ui.ts](../../../frontend/src/even/glasses-ui.ts).
 
 ### WebSocket authentication and session state
 
-- [internal/auth/tickets.go](../internal/auth/tickets.go) authenticates the bearer token, resolves an application session, and issues a one-minute, single-use WebSocket ticket.
+- [internal/auth/tickets.go](../../internal/auth/tickets.go) authenticates the bearer token, resolves an application session, and issues a one-minute, single-use WebSocket ticket.
 
-- The ticket contains a trusted tool.Scope from [internal/tool/tool.go](../internal/tool/tool.go):
+- The ticket contains a trusted tool.Scope from [internal/tool/tool.go](../../internal/tool/tool.go):
 
   - UserID
   - SessionID
   - TimeZone
   - UtteranceID is added later per utterance.
 
-- session.Store.Resume in [internal/session/store.go](../internal/session/store.go) resumes an active session within a 30-minute window or creates a new one. A WebSocket disconnect does not itself end that application session.
+- session.Store.Resume in [internal/session/store.go](../../internal/session/store.go) resumes an active session within a 30-minute window or creates a new one. A WebSocket disconnect does not itself end that application session.
 
 - session.Store.Append persists finalized user and assistant utterances and updates session activity.
 
-- conversation.Manager in [internal/session/conversation.go](../internal/session/conversation.go) reconstructs recent conversation context and compacts older context when its configured token limits are exceeded.
+- conversation.Manager in [internal/session/conversation.go](../../internal/session/conversation.go) reconstructs recent conversation context and compacts older context when its configured token limits are exceeded.
 
 ### Backend WebSocket and Deepgram path
 
-[internal/realtime/server.go](../internal/realtime/server.go) contains most realtime orchestration.
+[internal/realtime/server.go](../../internal/realtime/server.go) contains most realtime orchestration.
 
 Important concurrency elements:
 
@@ -188,13 +190,13 @@ Current behavior:
 7. The configured UtteranceHandler processes it.
 8. The result becomes assistant_response or assistant_done.
 
-The current [stt.Transcriber](../internal/stt/transcriber.go) interface is explicitly live-stream-oriented:
+The current [stt.Transcriber](../../internal/stt/transcriber.go) interface is explicitly live-stream-oriented:
 
 - Input: a receive-only channel of byte slices.
 - Output: a send-only channel of transcript strings.
 - Partial and final updates: TranscriptObserver.
 
-[internal/stt/deepgram.go](../internal/stt/deepgram.go) implements it with a persistent Deepgram live WebSocket configured as:
+[internal/stt/deepgram.go](../../internal/stt/deepgram.go) implements it with a persistent Deepgram live WebSocket configured as:
 
 - Model: nova-3.
 - Encoding: linear16.
@@ -204,23 +206,24 @@ The current [stt.Transcriber](../internal/stt/transcriber.go) interface is expli
 - Interim results enabled.
 - Punctuation and smart formatting enabled.
 
-[internal/stt/deepgram_handler.go](../internal/stt/deepgram_handler.go) accumulates final fragments. A Deepgram speech-final event does not emit a completed utterance. Completion occurs when the backend explicitly finalizes the connection after the input channel closes.
+[internal/stt/deepgram_handler.go](../../internal/stt/deepgram_handler.go) accumulates final fragments. A Deepgram speech-final event does not emit a completed utterance. Completion occurs when the backend explicitly finalizes the connection after the input channel closes.
 
 The pinned Deepgram SDK contains a prerecorded FromStream API, but this repository neither wraps nor calls it. The existing implementation is therefore usable only as a live-stream adapter from the repository's perspective.
 
 ### Transcript, OpenAI, action, and memory path
 
-[main.go](../main.go) wires the realtime server. Its Utterance closure calls [handleUtterance](../utterance.go).
+[main.go](../../main.go) wires the realtime server. Its Utterance closure calls [handleUtterance](../../utterance.go).
 
 handleUtterance is the key reuse boundary:
 
 1. Persists the accurate user transcript.
 2. Calls assistant.Service.HandleUtterance.
-3. For ActionRemember, stores a memory.
-4. Persists a non-empty assistant response.
-5. Returns realtime.UtteranceResult.
+3. For ordinary actions, offers the persisted source to memory.Recorder.Capture without waiting for extraction or storage.
+4. For ActionRemember, calls memory.Recorder.RememberExplicit and waits for candidate extraction and durable persistence before acknowledging success.
+5. Persists a non-empty assistant response.
+6. Returns realtime.UtteranceResult.
 
-[assistant.Service.HandleUtterance](../internal/assistant/service.go):
+[assistant.Service.HandleUtterance](../../internal/assistant/service.go):
 
 1. Assigns the utterance ID to the tool scope.
 2. Checks whether a short yes/no utterance resolves an outstanding proposal.
@@ -228,7 +231,7 @@ handleUtterance is the key reuse boundary:
 4. For respond, propose_task, or propose_watch, loads memory and conversation context and invokes the agent.
 5. For ignore, state_update, and remember, it does not invoke the agent.
 
-[internal/assistant/router.go](../internal/assistant/router.go) defines:
+[internal/assistant/router.go](../../internal/assistant/router.go) defines:
 
 - ActionIgnore
 - ActionRespond
@@ -238,14 +241,21 @@ handleUtterance is the key reuse boundary:
 - ActionProposeWatch
 - ActionResolveProposal
 
-Its Decision already carries structured action, query, memory lookup, and memory-card fields.
+Its Decision carries only the structured action, standalone query, and memory lookup. Memory content is deliberately not part of the routing result.
 
-[internal/assistant/openai/classifier.go](../internal/assistant/openai/classifier.go) invokes the OpenAI Responses API and requests a strict JSON Schema result. The router prompt already recognizes direct requests, reminders, and implied future tasks. However:
+[internal/assistant/openai/classifier.go](../../internal/assistant/openai/classifier.go) invokes the OpenAI Responses API and requests a strict JSON Schema result. The router prompt already recognizes direct requests, reminders, and implied future tasks. However:
 
-- Passive preference retention is explicitly prohibited unless the user asks to remember it.
+- The remember action identifies an explicit request to save information, but the router does not construct the memory.
 - The classifier returns raw JSON to assistant.Router, which then unmarshals and validates it.
 - It is not currently a generic commitment or event extractor.
 - The router is not given timezone or current-time context.
+
+[internal/assistant/openai/memory_extractor.go](../../internal/assistant/openai/memory_extractor.go) is a separate strict-schema invocation with a different responsibility. It returns zero or more atomic memory candidates from the finalized user utterance. [internal/memory/recorder.go](../../internal/memory/recorder.go) runs that extractor in two modes:
+
+- Every non-remember outcome, including ignore, state_update, respond, proposal actions, and proposal confirmations, enters a bounded process-local queue through Capture. The assistant response path does not wait for extraction or persistence.
+- An explicit remember action calls RememberExplicit synchronously. Success is acknowledged only after the candidate batch is persisted; unsafe content and utterances with no saveable candidates receive a truthful non-success response.
+
+The recorder writes the entire candidate batch atomically through memory.Store. One source utterance may therefore create no memory, one memory, or several independently retrievable memories. This extractor does not choose assistant actions, invoke tools, or generate the user-facing response.
 
 The requested GPT-5.4 Nano can fit this existing Responses API call. The dated model documented at review time is gpt-5.4-nano-2026-03-17, and the existing text.format JSON Schema pattern matches the Responses structured-output mechanism.
 
@@ -254,32 +264,33 @@ References:
 - [OpenAI model and data-control documentation](https://developers.openai.com/api/docs/guides/your-data#which-models-and-features-are-eligible-for-data-residency)
 - [OpenAI Structured Outputs documentation](https://developers.openai.com/api/docs/guides/structured-outputs#structured-outputs-vs-json-mode)
 
-[internal/assistant/openai/agent.go](../internal/assistant/openai/agent.go) is a separate model invocation. It creates user-facing responses and executes tools. That should remain the response and action model. Switching the router to Nano does not require changing the agent model.
+[internal/assistant/openai/agent.go](../../internal/assistant/openai/agent.go) is a separate model invocation. It creates user-facing responses and executes tools. That should remain the response and action model. Switching the router to Nano does not require changing the agent model.
 
 ### Persistence, scheduling, and later intervention
 
-- [memory.Store](../internal/memory/store.go) persists structured memory cards and links them to source transcripts.
-- [memory/card.go](../internal/memory/card.go) supports kinds including preference, event, and goal.
-- [reminder/tool.go](../internal/automation/reminder/tool.go) exposes propose_task. It requires an absolute future RFC3339 due_at.
-- [reminder/store.go](../internal/automation/reminder/store.go) stores a pending task proposal tied to the source utterance.
-- [confirmation.go](../internal/automation/proposal/confirmation.go) accepts only short, explicit yes/no confirmation.
+- [memory.Store](../../internal/memory/store.go) persists atomic candidate batches and links every accepted memory to its source transcript.
+- [memory/candidate.go](../../internal/memory/candidate.go) adds stable keys and temporary-versus-durable lifecycle around the existing card content.
+- [memory/candidate_store.go](../../internal/memory/candidate_store.go) uses PostgreSQL full-text search plus focused topic-kind and exact-entity matching.
+- [reminder/tool.go](../../internal/automation/reminder/tool.go) exposes propose_task. It requires an absolute future RFC3339 due_at.
+- [reminder/store.go](../../internal/automation/reminder/store.go) stores a pending task proposal tied to the source utterance.
+- [confirmation.go](../../internal/automation/proposal/confirmation.go) accepts only short, explicit yes/no confirmation.
 - Accepted proposals flow through the scheduler registration dispatcher.
-- When due, [reminder/dispatcher.go](../internal/automation/reminder/dispatcher.go) creates a notification.
-- [notification.Service.Flush](../internal/notification/service.go) sends it through [realtime.Hub](../internal/realtime/hub.go).
+- When due, [reminder/dispatcher.go](../../internal/automation/reminder/dispatcher.go) creates a notification.
+- [notification.Service.Flush](../../internal/notification/service.go) sends it through [realtime.Hub](../../internal/realtime/hub.go).
 - The frontend receives notification and renders it on the glasses.
 
 There is no general commitment or event table. A future intention can currently become either:
 
 - A pending reminder proposal.
-- An explicitly requested memory card.
+- Zero or more atomic memories extracted independently from the finalized utterance.
 - No persistent object at all.
 
 ### Cancellation and shutdown
 
 - Each WebSocket connection has a derived context canceled when the connection ends.
 - Deepgram live transcription derives from that context.
-- Hub.Shutdown in [internal/realtime/hub.go](../internal/realtime/hub.go) closes connections and waits for their handlers.
-- [main.go](../main.go) responds to process signals, cancels background dispatchers, shuts down HTTP, and then shuts down realtime connections.
+- Hub.Shutdown in [internal/realtime/hub.go](../../internal/realtime/hub.go) closes connections and waits for their handlers.
+- [main.go](../../main.go) responds to process signals, cancels background dispatchers, shuts down HTTP, and then shuts down realtime connections.
 - Frontend cleanup in runtime.ts aborts connection attempts, clears timers, unsubscribes SDK events, closes the socket, turns off audio, and stops location tracking.
 
 ## 2. Proposed architecture map
@@ -382,35 +393,37 @@ Do not classify once in a candidate service and then call assistant.Service, bec
 
 | File | Current responsibility | Proposed change | Status | Likely types or functions |
 |---|---|---|---|---|
-| [frontend/runtime.ts](../../frontend/src/even/runtime.ts) | Entire Even lifecycle, PCM callback, socket, gestures, display | Instantiate and dispose the candidate service; feed copied PCM; separate ambient capture state from tap-to-talk state; send candidates | Modify | Candidate callback, ambient capture state |
-| [frontend/audio.ts](../../frontend/src/even/audio.ts) | Unused placeholder | Make this the imperative candidate-audio facade | Modify | CandidateAudioPipeline, start, pushPcm, stop, dispose |
+| [frontend/runtime.ts](../../../frontend/src/even/runtime.ts) | Entire Even lifecycle, PCM callback, socket, gestures, display | Instantiate and dispose the candidate service; feed copied PCM; separate ambient capture state from tap-to-talk state; send candidates | Modify | Candidate callback, ambient capture state |
+| [frontend/audio.ts](../../../frontend/src/even/audio.ts) | Unused placeholder | Make this the imperative candidate-audio facade | Modify | CandidateAudioPipeline, start, pushPcm, stop, dispose |
 | frontend/src/even/pcm-ring-buffer.ts | Does not exist | Fixed-capacity PCM storage addressed by sample offsets | New | PcmRingBuffer, write, sliceWindow, clear |
 | frontend/src/even/moonshine.ts | Does not exist | Worker-facing Moonshine lifecycle and transcript update API | New | MoonshineTranscriber, transcript segment types |
 | frontend/src/even/moonshine.worker.ts | Does not exist | Run inference outside the UI and runtime callback | New | Worker request and result protocol |
 | frontend/src/even/candidate-gate.ts | Does not exist | High-recall semantic trigger, window state, cooldown, deduplication | New | CandidateGate, CandidateTrigger, gate state machine |
-| [frontend/client.ts](../../frontend/src/shared/api/client.ts) | Ticket acquisition and socket creation | Mostly reuse; optionally expose typed socket helpers | Reuse or minor modification | No transport redesign required |
+| [frontend/client.ts](../../../frontend/src/shared/api/client.ts) | Ticket acquisition and socket creation | Mostly reuse; optionally expose typed socket helpers | Reuse or minor modification | No transport redesign required |
 | frontend/src/shared/api/realtime-protocol.ts | Does not exist | Centralize currently inline and untyped message definitions | New | CandidateAudioHeader, server message union |
-| [frontend/glasses-ui.ts](../../frontend/src/even/glasses-ui.ts) | Builds glasses transcript and message pages | Continue rendering authoritative backend responses | Reuse | None |
-| [frontend/App.tsx](../../frontend/src/app/App.tsx) | Starts and stops the Even experience | Reuse; perhaps expose feature or status information only | Reuse or minor modification | None |
+| [frontend/glasses-ui.ts](../../../frontend/src/even/glasses-ui.ts) | Builds glasses transcript and message pages | Continue rendering authoritative backend responses | Reuse | None |
+| [frontend/App.tsx](../../../frontend/src/app/App.tsx) | Starts and stops the Even experience | Reuse; perhaps expose feature or status information only | Reuse or minor modification | None |
 | frontend/package.json and lockfile | Frontend dependencies | Add the selected Moonshine runtime and worker or WASM build support | Modify | Dependency configuration |
-| [frontend/env.ts](../../frontend/src/shared/config/env.ts) | Frontend environment configuration | Candidate-mode feature flag and non-sensitive tuning | Modify | Feature configuration |
+| [frontend/env.ts](../../../frontend/src/shared/config/env.ts) | Frontend environment configuration | Candidate-mode feature flag and non-sensitive tuning | Modify | Feature configuration |
 | frontend/app.json | Even app permissions and network whitelist | Reuse unless Moonshine assets or runtime impose packaging or worker changes | Conditional | None |
-| [realtime/server.go](../internal/realtime/server.go) | WebSocket protocol, live audio orchestration, UI events | Add candidate header and binary state, bounded worker lifecycle, validation, and candidate results | Modify | CandidateAudio, CandidateHandler, pending candidate state |
+| [realtime/server.go](../../internal/realtime/server.go) | WebSocket protocol, live audio orchestration, UI events | Add candidate header and binary state, bounded worker lifecycle, validation, and candidate results | Modify | CandidateAudio, CandidateHandler, pending candidate state |
 | internal/realtime/candidate_protocol.go | Does not exist | Isolate candidate metadata validation and assembly | New | Header validation, size and duration checks |
-| [stt/transcriber.go](../internal/stt/transcriber.go) | Live streaming STT contract | Preserve it; add a separate finite-clip contract | Modify | AudioFormat, ClipTranscriber |
-| [stt/deepgram.go](../internal/stt/deepgram.go) | Deepgram live WebSocket adapter | Retain for fallback; share configuration where sensible | Reuse or minor modification | Shared Deepgram options |
+| [stt/transcriber.go](../../internal/stt/transcriber.go) | Live streaming STT contract | Preserve it; add a separate finite-clip contract | Modify | AudioFormat, ClipTranscriber |
+| [stt/deepgram.go](../../internal/stt/deepgram.go) | Deepgram live WebSocket adapter | Retain for fallback; share configuration where sensible | Reuse or minor modification | Shared Deepgram options |
 | internal/stt/deepgram_clip.go | Does not exist | Wrap Deepgram prerecorded FromStream | New | TranscribeClip |
 | internal/candidate/service.go | Does not exist | Own validation, ephemeral clip transcription, and raw-buffer clearing | New | Service.Process, Result |
-| [main.go](../main.go) | Dependency construction and handlers | Construct clip transcriber and service, candidate concurrency limit, and feature flag; wire to existing utterance closure | Modify | Candidate dependencies |
-| [utterance.go](../utterance.go) | Canonical transcript-to-assistant path | Reuse unchanged initially; later return a richer disposition if UI signaling needs it | Reuse or optional modification | Optional richer UtteranceResult |
-| [assistant/router.go](../internal/assistant/router.go) | Action taxonomy and decision validation | Reuse initially; extend only if a true event union is required | Reuse or conditional | Event fields or typed decision |
-| [OpenAI classifier](../internal/assistant/openai/classifier.go) | Responses API strict-schema routing | Configure GPT-5.4 Nano; evolve its single schema for event extraction rather than adding a second model call | Configuration change; conditional schema change | Typed classifier result |
-| [assistant/service.go](../internal/assistant/service.go) | Confirmation, routing, context, agent invocation | Reuse; no candidate-specific branch should be necessary | Reuse | None |
-| [memory/store.go](../internal/memory/store.go) | Structured memory persistence | Reuse if product policy permits extracted preferences or events to become memories | Reuse | None |
-| [reminder/tool.go](../internal/automation/reminder/tool.go) | Creates pending reminder proposals | Reuse for actionable reminders with resolvable time | Reuse | None |
-| [session/store.go](../internal/session/store.go) | Session resume and transcript append | Reuse | Reuse | None |
-| [realtime/hub.go](../internal/realtime/hub.go) | Thread-safe writes and user connection fanout | Reuse | Reuse | None |
-| [migrations](../migrations) | Sessions, memories, tasks, watches, notifications | No change for minimum implementation; add a migration only if commitment becomes a new persistent entity | Conditional | Optional commitment schema |
+| [main.go](../../main.go) | Dependency construction and handlers | Construct clip transcriber and service, candidate concurrency limit, and feature flag; wire to existing utterance closure | Modify | Candidate dependencies |
+| [utterance.go](../../utterance.go) | Canonical transcript-to-assistant path | Reuse for candidate audio; queue ordinary memory capture and wait for explicit remember persistence at this shared boundary | Reuse | UtteranceResult and memory-effect handling |
+| [assistant/router.go](../../internal/assistant/router.go) | Action taxonomy and decision validation | Keep routing limited to action, query, and lookup; extend only if a true event union is required | Reuse or conditional | Event fields or typed decision |
+| [OpenAI classifier](../../internal/assistant/openai/classifier.go) | Responses API strict-schema routing | Configure GPT-5.4 Nano and keep it separate from memory-content extraction | Configuration change | Action, query, memory lookup |
+| [assistant/service.go](../../internal/assistant/service.go) | Confirmation, routing, context, agent invocation | Reuse; no candidate-specific branch should be necessary | Reuse | None |
+| [OpenAI memory extractor](../../internal/assistant/openai/memory_extractor.go) | Zero-or-more atomic candidate extraction from finalized user text | Reuse for every accepted audio transport; never add a candidate-specific extractor | Reuse | Memory candidates only |
+| [memory/recorder.go](../../internal/memory/recorder.go) | Bounded background capture plus synchronous explicit remembering | Run from the application lifecycle context; keep ordinary capture off the response critical path | Reuse | Capture, RememberExplicit, Run |
+| [memory/store.go](../../internal/memory/store.go) | Atomic candidate persistence and indexed retrieval | Reuse for both explicit and background extraction | Reuse | RememberCandidates, Find |
+| [reminder/tool.go](../../internal/automation/reminder/tool.go) | Creates pending reminder proposals | Reuse for actionable reminders with resolvable time | Reuse | None |
+| [session/store.go](../../internal/session/store.go) | Session resume and transcript append | Reuse | Reuse | None |
+| [realtime/hub.go](../../internal/realtime/hub.go) | Thread-safe writes and user connection fanout | Reuse | Reuse | None |
+| [migrations](../../migrations) | Sessions, atomic memories, tasks, watches, notifications | Reuse the memory lifecycle and search schema; add another migration only if commitment becomes a new persistent entity | Reuse or conditional | Optional commitment schema |
 | Existing and new tests | Unit and integration coverage | Add ring, gate, protocol, cancellation, size-limit, clip-STT, and duplicate-processing tests | Modify and new | Test fixtures and fakes |
 
 ## 4. Frontend integration
@@ -606,15 +619,21 @@ After Deepgram returns:
 
 This means persistence still happens before assistant routing, as it does today.
 
-### GPT-5.4 Nano extraction
+### GPT-5.4 Nano routing and shared memory extraction
 
-The existing classifier is the right invocation site, but its abstraction needs refinement if structured event means more than the current Decision.
+The existing classifier is the right routing invocation site, but its abstraction needs refinement if a structured commitment or event means more than the current Decision.
 
 Minimum implementation:
 
 - Set OPENAI_ROUTER_MODEL to a pinned GPT-5.4 Nano model.
 - Keep the existing strict JSON Schema.
-- Continue returning the current action taxonomy.
+- Continue returning the current action taxonomy, a standalone query, and memory-lookup hints only.
+
+Memory formation is a separate shared pipeline after the authoritative transcript is persisted:
+
+- Ordinary utterances queue Recorder.Capture and continue without waiting.
+- Explicit remember requests run Recorder.RememberExplicit and wait for persistence before success is announced.
+- The memory extractor returns zero or more candidates and never makes routing, response, or tool decisions.
 
 Richer implementation:
 
@@ -623,7 +642,7 @@ Richer implementation:
 - Make the classifier return a typed result rather than raw JSON.
 - Let assistant.Router validate and translate that result into existing actions.
 
-Do not introduce a candidate-specific Nano extractor followed by the existing router. That would duplicate cost and can produce conflicting decisions.
+Do not introduce a candidate-specific event or memory extractor before the existing router. Candidate audio and live audio must share the same post-transcript router and recorder. The existing memory extractor is downstream, transport-independent, and cannot produce a competing action decision.
 
 Timezone-sensitive extraction needs special handling. Router.Route currently receives only transcript text, so it cannot safely turn tomorrow into an absolute timestamp. Either:
 
@@ -640,6 +659,8 @@ Candidate work should derive from the connection context. Cancellation must prop
 - OpenAI Responses request.
 - Agent and tool work.
 - Database operations where supported.
+
+Memory work has a deliberate lifecycle split. An explicit remember request remains on the utterance context because its acknowledgement depends on persistence. Ordinary Recorder.Capture jobs use the application lifecycle context, so a WebSocket disconnect after capture does not cancel accepted background extraction. The recorder uses one bounded serial worker rather than one detached goroutine per utterance.
 
 Use an owned worker, not detached goroutines:
 
@@ -693,15 +714,15 @@ If early thinking feedback is required for direct assistant requests, the handle
 
 7. **Legacy concurrency is not globally bounded.** Candidate work is globally bounded, and assistant turns are serialized per user/session inside one backend process. Live streaming connections remain outside the candidate semaphore, and multi-process ordering would require a distributed/session-store mechanism.
 
-8. **UtteranceResult still exposes effects indirectly.** It now carries targeted workspace resources and authoritative confirmation state, but it does not expose a general typed list of persisted effects or semantic dispositions.
+8. **UtteranceResult still exposes effects indirectly.** It carries targeted workspace resources and authoritative confirmation state, but it does not expose a general typed list of persisted effects or semantic dispositions. Background memory persistence intentionally arrives later through recorder-driven workspace-change notification.
 
-9. **The baseline confirmation signal was predictive.** This is now corrected for reminder/watch proposals by propagating successful proposal-tool results through `AgentResult` and `Outcome`. A future memory-proposal domain would need the same effect-based contract.
+9. **The baseline confirmation signal was predictive.** This is corrected for reminder/watch proposals by propagating successful proposal-tool results through `AgentResult` and `Outcome`. Explicit remember now follows the same principle by acknowledging success only after Recorder.RememberExplicit persists at least one candidate.
 
-10. **The existing taxonomy does not fully represent the goal.** A commitment is not presently a persistent domain object. state_update also has no obvious dedicated persistence path.
+10. **The existing taxonomy does not fully represent the goal.** A commitment is not presently a persistent domain object. A state_update can now produce temporary atomic memories through background extraction, but that does not create a commitment lifecycle.
 
-11. **Passive preference storage conflicts with current policy.** The classifier explicitly avoids remembering preferences unless the user requests it. Candidate detection alone should not silently change that privacy and product rule.
+11. **Automatic memory formation needs explicit product controls.** Accepted finalized user utterances now enter background extraction regardless of whether the router responds. The extractor can abstain, rejects secret material, and marks sensitive candidates for retrieval filtering, but consent, inspection, correction, deletion, and retention remain product-policy responsibilities.
 
-12. **OpenAI transport code is duplicated.** Classifier and agent use separate raw HTTP implementations. This does not block the candidate pipeline, but extending both independently would add maintenance cost.
+12. **OpenAI transport code is duplicated.** Classifier, agent, and memory extractor use separate HTTP implementations. This does not block the candidate pipeline, but extending them independently adds maintenance cost.
 
 13. **The page-host exit subscription is module-lifetime.** `glasses-page-host.ts` registers it once, preventing duplicates across token-driven runtime recreation, but the SDK unsubscribe handle is intentionally retained for the WebView lifetime rather than disposed per signed-in session.
 
@@ -716,6 +737,8 @@ Do not create:
 - A frontend direct-Supabase path for voice-derived memories.
 
 There should be exactly one authoritative transcript and one downstream assistant-processing path.
+
+The shared post-transcript memory extractor is not a duplicate candidate path: it observes the same persisted utterance after routing, produces only memory candidates, and is used identically by candidate and live audio.
 
 ## 7. Recommended data flow example
 
@@ -759,9 +782,9 @@ For:
 
    candidate.MatchWakePhrase checks the accurate transcript. Because it contains the standalone token "need", processing continues. A non-match returns assistant_done without persistence or an OpenAI call. A tap-generated candidate carries the manual category and bypasses this phrase check.
 
-10. **Nano extraction**
+10. **Nano routing**
 
-   The worker calls the existing handleUtterance. That persists the user transcript, then assistant.Service invokes assistant.Router, whose OpenAI classifier is configured for GPT-5.4 Nano.
+   The worker calls the existing handleUtterance. That persists the user transcript, then assistant.Service invokes assistant.Router, whose OpenAI classifier is configured for GPT-5.4 Nano. The routing result contains only an action, standalone query, and memory-lookup hints.
 
 11. **Commitment or event decision**
 
@@ -774,7 +797,11 @@ For:
 
     This is not currently a durable commitment entity.
 
-12. **Storage or scheduling**
+12. **Independent memory capture**
+
+    Because propose_task is not an explicit remember action, handleUtterance offers the same persisted source utterance to Recorder.Capture after assistant.Service returns. The bounded background worker independently extracts zero or more atomic candidates and persists the complete batch. It does not alter the propose_task decision, schedule anything, or delay the response.
+
+13. **Storage or scheduling**
 
     "After class" is not an absolute RFC3339 time. Therefore:
 
@@ -785,7 +812,7 @@ For:
 
     Without adding a new commitment table, nothing should claim a generic commitment was stored merely because Nano classified it.
 
-13. **Later intervention**
+14. **Later intervention**
 
     At the accepted task's due time, the scheduler calls the reminder dispatcher, which inserts a notification and flushes it through realtime.Hub. The existing frontend notification handler renders it on the glasses.
 
@@ -805,7 +832,7 @@ The remaining uncertainties require product decisions or broader real-device evi
 - Moonshine VAD/endpoint recall under real background noise, accents, short commands, and clipped wake phrases.
 - Deepgram prerecorded accuracy for the actual candidate-duration and signal-level distribution. Short low-volume clips have already produced empty transcripts during manual testing.
 - The consent, disclosure, and retention policy for ambient candidate audio sent to Deepgram, beyond the implemented ephemeral handling.
-- Whether passive preferences should be stored automatically. Current policy still requires an explicit memory request.
+- The consent, visibility, correction, deletion, and retention controls required for automatic preference and profile extraction.
 - What a commitment means as a durable product entity. No commitment table exists.
 - How phrases such as "after class" should be resolved without calendar context.
 - How multiple devices or sockets targeting one session should be ordered.
@@ -825,7 +852,7 @@ Binary WebSocket reception, candidate metadata and ID association, and finite-cl
 | 5 | Add candidate WebSocket protocol with a fake backend handler | Complete | Header and binary association, byte limits, invalid ordering, reconnect, duplicate IDs, cancellation, global admission, deadlines, and legacy-mode compatibility are tested. |
 | 6 | Add finite-clip Deepgram transcription | Implemented; broader recorded-fixture evaluation pending | Empty, error, and timeout cases terminate; cancellation works; raw bytes are cleared and never persisted. Compare real recorded fixtures against expected transcripts. |
 | 7 | Add the accurate-transcript wake check, then rejoin handleUtterance | Complete | Unapproved automatic candidates are discarded before persistence or OpenAI; manual candidates and approved phrases use the same session, memory, proposal, tool, response, and notification path as equivalent live transcripts. |
-| 8 | Configure GPT-5.4 Nano and evolve the schema only as needed | Existing structured router reused; distinct commitment schema undecided | Exactly one router classification occurs per accepted candidate. Add a new event schema only if commitments become a separate durable domain object. |
+| 8 | Configure GPT-5.4 Nano and evolve the schema only as needed | Structured router and shared atomic-memory extractor implemented; distinct commitment schema undecided | Exactly one router classification occurs per accepted candidate. Memory extraction remains transport-independent and cannot produce a competing action. Add a new event schema only if commitments become a separate durable domain object. |
 | 9 | Enable candidate mode behind a server and client feature flag | Implemented; soak validation pending | Candidate mode sends no listening_start or continuous backend PCM; ignored speech produces no glasses activity; rollback to legacy live mode requires configuration only. |
 | 9a | Add hands-free response and answer windows | Implemented; real-device timing validation pending | Cards auto-clear using bounded reading time; speech during the card or eight-second grace window sends original PCM through Deepgram without a tap; matching terminal messages alone end the focused turn; replay and existing proposal confirmation work by voice. |
 | 10 | Compare production-quality metrics | Not started | Measure Deepgram audio minutes, OpenAI calls, end-to-end latency, local battery and CPU, candidate recall, false positives, duplicate actions, and user-visible interruptions against the current baseline. |
@@ -834,4 +861,4 @@ Binary WebSocket reception, candidate metadata and ID association, and finite-cl
 
 The frontend candidate service buffers copied PCM, runs Moonshine locally, applies the approved phrase policy, and sends one metadata header plus one PCM frame. The backend uses a bounded candidate transport path and separate prerecorded ClipTranscriber. After transcription and immediate audio disposal, the accurate text must pass the same wake policy before entering the existing handleUtterance path.
 
-That is the smallest change that preserves the working session, response, tool, memory, proposal, scheduling, notification, and glasses-display architecture. The only domain-level expansion beyond it is optional: a real commitment or event model if reminders and memory cards are not sufficient.
+That is the smallest change that preserves the working session, response, tool, atomic-memory, proposal, scheduling, notification, and glasses-display architecture. The only domain-level expansion beyond it is optional: a real commitment or event model if reminders and atomic memories are not sufficient.

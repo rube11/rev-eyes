@@ -65,6 +65,23 @@ settings: inspect those existing effects before any deployment. The initial
 `deploy-lightsail.sh` path remains a static build; use the code-deployment path for
 native Moonshine.
 
+## Integration with the regular app
+
+The listening pipeline changes only audio capture and transcription. Accurate
+Deepgram clips enter the same utterance handler as live voice input, including
+session reopening and account-level turn ordering shared with typed chat.
+Routing, tools, reminders, watches, profiles, and background memory learning
+use the regular application services.
+
+Eligible finalized utterances are queued for automatic memory extraction even
+when the router chooses not to respond. The recorder uses the application
+context, so accepted memory work survives a microphone stop or WebSocket
+disconnect. Explicit memory commands keep their synchronous handling.
+
+Apply the regular database migrations through `0018_memory_profile.sql` before
+running this merged backend against an older database. The native deployment
+helper does not apply these memory migrations automatically.
+
 Configure the server service environment:
 
 ```dotenv
