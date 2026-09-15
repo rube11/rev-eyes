@@ -113,7 +113,11 @@ From the repository root, launch both services:
 ```
 
 The launcher reads `backend/.local.env`. You can also start each service in its
-own terminal with `go run .` from `backend/` and `pnpm dev` from `frontend/`.
+own terminal with `bash infra/run-backend.sh` from `backend/` and `pnpm dev` from
+`frontend/`. Server Moonshine is enabled by default; the backend helper prepares
+the native Linux x86_64 runtime and model on first use. To intentionally use the
+old manual mode, set `SERVER_MOONSHINE_ENABLED=false` and
+`VITE_SERVER_LISTENING_ENABLED=false` in their respective environments.
 
 ## Validation
 

@@ -57,6 +57,9 @@ type CandidateAudioHandler func(
 type AmbientListener func(context.Context, <-chan ambient.Input, func(ambient.Clip)) error
 
 type Handlers struct {
+	// Diagnostics is set only on the separate authenticated live-test server.
+	Diagnostics            bool
+	AmbientObserved        func(context.Context, <-chan ambient.Input, func(ambient.Clip), ambient.Observer) error
 	Ambient                AmbientListener
 	CandidateAudio         CandidateAudioHandler
 	CandidateMaxConcurrent int
@@ -107,6 +110,8 @@ func (message clientMessage) candidateHeader() candidateAudioHeader {
 }
 
 type serverMessage struct {
+	Final                bool                `json:"final,omitempty"`
+	ReceivedBytes        int64               `json:"received_bytes,omitempty"`
 	Type                 string              `json:"type"`
 	ID                   string              `json:"id,omitempty"`
 	Text                 string              `json:"text,omitempty"`

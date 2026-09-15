@@ -28,6 +28,9 @@ migration_binary=$(mktemp)
 runtime_bundle=$(mktemp)
 trap 'rm -f "$backend_binary" "$migration_binary" "$runtime_bundle"' EXIT
 
+if [[ ${SERVER_MOONSHINE_ENABLED:-true} != false ]]; then
+  export MOONSHINE_NATIVE_DIR=${MOONSHINE_NATIVE_DIR:-/tmp/rev-eyes-moonshine}
+fi
 bash infra/build-backend.sh "$backend_binary"
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -trimpath -ldflags='-s -w' -o "$migration_binary" ./cmd/migrate

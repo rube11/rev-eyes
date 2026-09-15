@@ -6,7 +6,7 @@ function required(name: string, value: string | undefined): string {
 }
 
 export const env = {
-  serverListeningEnabled: import.meta.env.VITE_SERVER_LISTENING_ENABLED?.trim().toLowerCase() === 'true',
+  serverListeningEnabled: import.meta.env.VITE_SERVER_LISTENING_ENABLED?.trim().toLowerCase() !== 'false',
   apiBaseUrl: required('VITE_API_BASE_URL', import.meta.env.VITE_API_BASE_URL),
   supabaseUrl: required('VITE_SUPABASE_URL', import.meta.env.VITE_SUPABASE_URL),
   supabasePublishableKey: required(

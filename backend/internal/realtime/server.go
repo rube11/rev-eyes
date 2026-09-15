@@ -116,6 +116,10 @@ func (s *Server) serveConnection(
 	scope tool.Scope,
 ) error {
 	ctx, cancel := context.WithCancel(parent)
+	if s.handlers.Diagnostics {
+		cancel()
+		ctx, cancel = context.WithTimeout(parent, 7*time.Minute)
+	}
 	messages := make(chan incomingMessage)
 	go s.readMessages(ctx, conn, messages)
 	candidateJobs := make(chan candidateJob, 1)
@@ -129,6 +133,9 @@ func (s *Server) serveConnection(
 	var transcription <-chan error
 	var pendingCandidate *candidateAudioHeader
 	audioMode := audioModeUnset
+	if s.handlers.Diagnostics {
+		audioMode = audioModeAmbient
+	}
 	usedCandidateIDs := newCandidateIDWindow()
 	var diagnosticLimiter clientDiagnosticLimiter
 	defer func() {

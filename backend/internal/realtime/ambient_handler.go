@@ -23,7 +23,24 @@ func (s *Server) listenAmbient(ctx context.Context, writer jsonWriter, input <-c
 			}
 		}
 	}()
-	return s.handlers.Ambient(ctx, input, func(clip ambient.Clip) {
+	listener := s.handlers.Ambient
+	if s.handlers.Diagnostics {
+		if s.handlers.AmbientObserved == nil {
+			return fmt.Errorf("observed server listening unavailable")
+		}
+		listener = func(ctx context.Context, input <-chan ambient.Input, emit func(ambient.Clip)) error {
+			return s.handlers.AmbientObserved(ctx, input, emit, ambient.Observer{
+				Ready: func() error { return writer.WriteJSON(serverMessage{Type: "ready"}) },
+				Transcript: func(line ambient.Line, base int64) error {
+					return writer.WriteJSON(serverMessage{Type: "moonshine_transcript", ID: fmt.Sprintf("%d-%d", base, line.ID), Text: line.Text, Final: line.Complete})
+				},
+				Audio: func(bytes int64) error {
+					return writer.WriteJSON(serverMessage{Type: "audio_received", ReceivedBytes: bytes})
+				},
+			})
+		}
+	}
+	return listener(ctx, input, func(clip ambient.Clip) {
 		if ctx.Err() != nil {
 			clearCandidateAudio(clip.Audio)
 			return
@@ -53,6 +70,9 @@ func (s *Server) listenAmbient(ctx context.Context, writer jsonWriter, input <-c
 		}
 		select {
 		case jobs <- job:
+			if s.handlers.Diagnostics {
+				_ = writer.WriteJSON(serverMessage{Type: "keyword_detected", ID: job.header.ID, Text: string(clip.Reason)})
+			}
 		default:
 			s.releaseCandidateAdmission(job)
 			clearCandidateAudio(clip.Audio)

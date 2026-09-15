@@ -183,7 +183,8 @@ func run() error {
 		return err
 	}
 	var ambientHandler realtime.AmbientListener
-	if environmentEnabled(os.Getenv("SERVER_MOONSHINE_ENABLED")) {
+	var observedAmbient func(context.Context, <-chan ambient.Input, func(ambient.Clip), ambient.Observer) error
+	if serverMoonshineEnabled(os.Getenv("SERVER_MOONSHINE_ENABLED")) {
 		concurrencyValue := strings.TrimSpace(os.Getenv("SERVER_MOONSHINE_MAX_CONCURRENCY"))
 		if concurrencyValue == "" {
 			concurrencyValue = "1"
@@ -199,6 +200,7 @@ func run() error {
 		defer factory.Close()
 		listener := &ambient.Listener{Factory: factory}
 		ambientHandler = listener.Run
+		observedAmbient = listener.RunObserved
 	}
 	var candidateAudioHandler realtime.CandidateAudioHandler
 	candidateMaxConcurrent := 0
@@ -368,6 +370,12 @@ func run() error {
 	})
 
 	mux := http.NewServeMux()
+	diagnosticsServer := realtime.NewServer(transcriber, realtime.Handlers{
+		Diagnostics: true, Ambient: ambientHandler, AmbientObserved: observedAmbient,
+		CandidateAudio: candidateAudioHandler, CandidateMaxConcurrent: candidateMaxConcurrent,
+		Authenticate: tickets.Consume, CheckOrigin: origins.Allows,
+	})
+	mux.Handle("/ws/moonshine", diagnosticsServer)
 	mux.HandleFunc("GET /health", web.Health)
 	mux.Handle("/auth/ws-ticket", origins.Handler(ticketHandler))
 	textChatAPI := origins.Handler(realtimeServer.TextHandler(tokenVerifier.Verify, sessionStore.Reopen))
@@ -417,7 +425,8 @@ func run() error {
 
 		serverErr := server.Shutdown(shutdownCtx)
 		realtimeErr := realtimeServer.Shutdown(shutdownCtx)
-		return errors.Join(serverErr, realtimeErr)
+		diagnosticsErr := diagnosticsServer.Shutdown(shutdownCtx)
+		return errors.Join(serverErr, realtimeErr, diagnosticsErr)
 	}
 }
 
@@ -434,6 +443,10 @@ func listenAddress() string {
 
 func environmentEnabled(value string) bool {
 	return strings.EqualFold(strings.TrimSpace(value), "true")
+}
+
+func serverMoonshineEnabled(value string) bool {
+	return !strings.EqualFold(strings.TrimSpace(value), "false")
 }
 
 const maxCandidateAudioConcurrency = 32

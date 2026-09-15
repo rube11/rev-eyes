@@ -1,0 +1,14 @@
+{
+  "package_id": "com.reveyes.moonshinediagnostics",
+  "edition": "202601",
+  "name": "Eyes Listening Test",
+  "version": "0.1.6",
+  "min_app_version": "2.0.0",
+  "min_sdk_version": "0.0.12",
+  "entrypoint": "index.html",
+  "permissions": [
+    { "name": "network", "desc": "Streams all glasses audio to server Moonshine; keyword-matched speech goes to Deepgram.", "whitelist": ["https://api.rev-eyes.com", "https://ikqdeosysrsynkxbijgn.supabase.co"] },
+    { "name": "g2-microphone", "desc": "Streams glasses audio to the Rev Eyes server during the listening test." }
+  ],
+  "supported_languages": ["en"]
+}

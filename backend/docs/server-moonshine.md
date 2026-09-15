@@ -1,6 +1,6 @@
 # Server-side Moonshine listening
 
-The opt-in path forwards G2 PCM to Go during ambient listening. Native Moonshine
+The default path forwards G2 PCM to Go during ambient listening. Native Moonshine
 recognizes speech on the server; the existing phrase policy gates finite Deepgram
 Nova-3 clips. No Python runtime or worker is used. Master’s manual Deepgram mode remains available when the new flag is off.
 
@@ -59,8 +59,9 @@ copies its `lib` and `model` directories to the versioned runtime directory befo
 replacing the backend. Installation stages the runtime and renames it into place;
 repeat deployments reuse identical files and reject different contents under the
 same version path. Running processes never have their mapped libraries overwritten.
-Without that variable it builds the original static Go
-backend. It still runs migration 0014 and updates the supplied email/origin
+Without that variable the scripts prepare/use `/tmp/rev-eyes-moonshine` and build
+the native backend by default. Set `SERVER_MOONSHINE_ENABLED=false` explicitly
+to build the original static backend. The deployment script still runs migration 0014 and updates the supplied email/origin
 settings: inspect those existing effects before any deployment. The initial
 `deploy-lightsail.sh` path remains a static build; use the code-deployment path for
 native Moonshine.
@@ -92,14 +93,29 @@ MOONSHINE_MODEL_DIR=/opt/rev-eyes/moonshine/v0.1.5/model
 
 The server flag also enables the existing candidate transcription handler. Its
 Deepgram configuration and `CANDIDATE_AUDIO_MAX_CONCURRENCY` still apply.
-A static binary rejects `SERVER_MOONSHINE_ENABLED=true` at startup rather than
-silently falling back. When rolling back to a static build, disable that flag.
+A static binary rejects server listening at startup rather than silently falling
+back. Server listening defaults on when the variable is unset. When intentionally
+running or rolling back to a static/manual build, set `SERVER_MOONSHINE_ENABLED=false`.
 
-Build the frontend with `VITE_SERVER_LISTENING_ENABLED=true` to enable continuous
-capture. The frontend follows master and contains no local speech model or gate.
+The frontend defaults to continuous server capture. Set
+`VITE_SERVER_LISTENING_ENABLED=false` only for intentional manual-mode builds.
+The frontend contains no local speech model or gate.
 Ship the compatible server first; an unavailable server reports a listening error.
 
 ## Verification
+
+### Eyes Listening Test
+
+`pnpm pack:diagnostics` in `frontend` builds Eyes Listening Test 0.1.6. It forwards
+all glasses PCM to authenticated `/ws/moonshine`, starts native ambient listening,
+and displays the complete Moonshine transcript with highlighted keywords, selected
+Deepgram results, and server-processed audio counts. Both app endpoints share the
+same native model and admission limit. The diagnostic endpoint lasts up to seven
+minutes and never routes test speech to assistant actions or saved history.
+Stopping cancels pending inference/clip work; received transcripts remain visible.
+No Python worker is used. Rough text is exposed only on the dedicated test endpoint.
+
+### Automated checks
 
 Default backend tests work without downloading Moonshine. Native testing uses:
 

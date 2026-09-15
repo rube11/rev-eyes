@@ -21,7 +21,7 @@ for command_name in go pnpm bash; do
 done
 
 printf -v backend_command \
-  'cd %q && set -a && source %q && set +a && go run .; status=$?; printf "\\nBackend exited with status %%s. Press Enter to close.\\n" "$status"; read -r' \
+  'cd %q && set -a && source %q && set +a && bash infra/run-backend.sh; status=$?; printf "\\nBackend exited with status %%s. Press Enter to close.\\n" "$status"; read -r' \
   "$backend_dir" "$backend_env"
 printf -v frontend_command \
   'cd %q && pnpm run dev; status=$?; printf "\\nFrontend exited with status %%s. Press Enter to close.\\n" "$status"; read -r' \
