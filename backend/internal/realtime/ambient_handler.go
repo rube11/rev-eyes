@@ -9,6 +9,19 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/candidate"
 )
 
+// DiagnosticsServer shares native listening and paid-clip capacity with the
+// application, but has no assistant, notification, or history handlers.
+func (s *Server) DiagnosticsServer(observed func(context.Context, <-chan ambient.Input, func(ambient.Clip), ambient.Observer) error) *Server {
+	d := NewServer(s.transcriber, Handlers{
+		Diagnostics: true, Ambient: s.handlers.Ambient, AmbientObserved: observed,
+		CandidateAudio: s.handlers.CandidateAudio,
+		Authenticate:   s.handlers.Authenticate, CheckOrigin: s.handlers.CheckOrigin,
+	})
+	d.candidateAdmissions = s.candidateAdmissions
+	d.candidatePermits = s.candidatePermits
+	return d
+}
+
 func (s *Server) listenAmbient(ctx context.Context, writer jsonWriter, input <-chan ambient.Input, jobs chan<- candidateJob) error {
 	defer func() {
 		for {

@@ -370,11 +370,7 @@ func run() error {
 	})
 
 	mux := http.NewServeMux()
-	diagnosticsServer := realtime.NewServer(transcriber, realtime.Handlers{
-		Diagnostics: true, Ambient: ambientHandler, AmbientObserved: observedAmbient,
-		CandidateAudio: candidateAudioHandler, CandidateMaxConcurrent: candidateMaxConcurrent,
-		Authenticate: tickets.Consume, CheckOrigin: origins.Allows,
-	})
+	diagnosticsServer := realtimeServer.DiagnosticsServer(observedAmbient)
 	mux.Handle("/ws/moonshine", diagnosticsServer)
 	mux.HandleFunc("GET /health", web.Health)
 	mux.Handle("/auth/ws-ticket", origins.Handler(ticketHandler))

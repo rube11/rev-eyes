@@ -15,6 +15,20 @@ import (
 
 type diagnosticFactory struct{}
 
+func TestDiagnosticsSharesApplicationClipAdmission(t *testing.T) {
+	app := NewServer(nil, Handlers{CandidateMaxConcurrent: 1, CandidateAudio: func(context.Context, []byte, stt.AudioFormat) (string, error) { return "", nil }})
+	diagnostics := app.DiagnosticsServer(nil)
+	first, second, extra := &candidateJob{}, &candidateJob{}, &candidateJob{}
+	if !app.tryAdmitCandidate(first) || !diagnostics.tryAdmitCandidate(second) {
+		t.Fatal("expected two retained clips within shared capacity")
+	}
+	if app.tryAdmitCandidate(extra) || diagnostics.tryAdmitCandidate(extra) {
+		t.Fatal("diagnostics bypassed application clip capacity")
+	}
+	app.releaseCandidateAdmission(*first)
+	diagnostics.releaseCandidateAdmission(*second)
+}
+
 func (diagnosticFactory) Open() (ambient.Stream, error) { return &diagnosticStream{}, nil }
 
 type diagnosticStream struct{ blocks int }
