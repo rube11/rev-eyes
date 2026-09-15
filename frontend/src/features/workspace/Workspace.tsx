@@ -17,6 +17,7 @@ type WorkspaceProps = {
   email: string
   glassesStatus: string
   latestResponse: string
+  latestTranscript: string
   dataError?: string
   isDemo: boolean
   onCreateMemory: (input: NewMemoryInput) => Promise<void>
@@ -1484,6 +1485,7 @@ export function Workspace({
   data,
   email,
   glassesStatus,
+  latestTranscript,
   dataError,
   isDemo,
   onCreateMemory,
@@ -1636,12 +1638,24 @@ export function Workspace({
 
         <div className={`page${view === 'now' ? ' page--home' : ''}`} key={view}>
           {view === 'now' ? (
-            <NowView
-              data={data}
-              onNavigate={navigate}
-              onAddMemory={() => setComposerOpen(true)}
-              currentTime={now}
-            />
+            <>
+              <section className="server-transcript" aria-live="polite">
+                <header>
+                  <span>Server transcript</span>
+                  <small>Deepgram · Go backend</small>
+                </header>
+                <p>
+                  {latestTranscript ||
+                    'Speak a wake phrase through the glasses. The complete transcript returned by the server will appear here.'}
+                </p>
+              </section>
+              <NowView
+                data={data}
+                onNavigate={navigate}
+                onAddMemory={() => setComposerOpen(true)}
+                currentTime={now}
+              />
+            </>
           ) : null}
           {view === 'conversations' ? (
             <ConversationsView data={data} />

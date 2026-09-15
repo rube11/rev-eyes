@@ -229,6 +229,7 @@ function App() {
     isDemoMode ? 'Connected' : 'Connecting',
   )
   const [latestResponse, setLatestResponse] = useState('')
+  const [latestTranscript, setLatestTranscript] = useState('')
   const [workspaceData, setWorkspaceData] = useState<WorkspaceData | undefined>(
     () => (isDemoMode ? createDemoWorkspaceData() : undefined),
   )
@@ -269,6 +270,7 @@ function App() {
         setWorkspaceOwnerId(undefined)
         setWorkspaceData(undefined)
         setDataError('')
+        setLatestTranscript('')
       }
       setSession(nextSession)
     }
@@ -485,6 +487,11 @@ function App() {
           requestWorkspaceRefreshRef.current(workspaceResources)
         }
       },
+      (text) => {
+        if (!disposed) {
+          setLatestTranscript(text)
+        }
+      },
     )
       .then((cleanup) => {
         if (disposed) {
@@ -673,6 +680,7 @@ function App() {
         email="demo@rev-eyes.com"
         glassesStatus={glassesStatus}
         latestResponse={latestResponse}
+        latestTranscript={latestTranscript}
         isDemo
         onCreateMemory={createMemory}
         onDeleteAutomation={deleteAutomation}
@@ -712,6 +720,7 @@ function App() {
       email={session.user.email ?? 'Account'}
       glassesStatus={glassesStatus}
       latestResponse={latestResponse}
+      latestTranscript={latestTranscript}
       dataError={dataError}
       isDemo={false}
       onCreateMemory={createMemory}

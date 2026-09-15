@@ -142,6 +142,7 @@ export async function initializeEvenExperience(
   onWorkspaceChanged: (resources: readonly WorkspaceResource[]) => void =
     () => undefined,
   onConnected: () => void = () => undefined,
+  onTranscript: (text: string) => void = () => undefined,
 ): Promise<() => void> {
   resumeGlassesPage()
   let active = true
@@ -1114,6 +1115,7 @@ export async function initializeEvenExperience(
           return
         }
         latestTranscript = message.text
+        onTranscript(message.text)
         if (sleeping) {
           reportStatus("Sleeping")
           return
