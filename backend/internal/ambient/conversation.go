@@ -43,47 +43,27 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 	block := make([]float32, 0, step)
 	defer clear(block[:cap(block)])
 	var end, base, floor int64
-	var audio chan stt.AudioInput
-	var done chan struct{}
-	var conversationErr error
-	var cancel context.CancelFunc
-	drain := func() {
-		for len(audio) > 0 {
-			clear((<-audio).PCM)
-		}
-	}
+	// Only this loop starts/stops conversations. Workers report completion on a
+	// fixed channel; channel nilness never selects the listening mode.
+	finished := make(chan error, 1)
+	var active *activeConversation
 	defer func() {
-		if cancel != nil {
-			cancel()
-			<-done
-			drain()
+		if active != nil {
+			active.cancel()
+			<-finished
+			active.clearAudio()
 		}
 	}()
+	// Called only after receiving completion, so no worker still owns PCM.
 	reset := func() error {
-		cancel()
-		drain()
-		audio = nil
-		done = nil
-		cancel = nil
+		active.cancel()
+		active.clearAudio()
+		active = nil
 		base = end
 		floor = end
 		block = block[:0]
 		clear(ring)
 		return stream.Reset()
-	}
-	send := func(event stt.AudioInput) error {
-		timer := time.NewTimer(2 * time.Second)
-		defer timer.Stop()
-		select {
-		case audio <- event:
-			return nil
-		case <-ctx.Done():
-			clear(event.PCM)
-			return ctx.Err()
-		case <-timer.C:
-			clear(event.PCM)
-			return errors.New("conversation audio stalled")
-		}
 	}
 	snapshot := func(start int64) []byte {
 		pcm := make([]byte, (end-start)*2)
@@ -93,16 +73,13 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 		return pcm
 	}
 	start := func(offset int64, automatic bool) error {
-		conversationCtx, stop := context.WithCancel(ctx)
-		cancel = stop
-		audio = make(chan stt.AudioInput, 16)
-		done = make(chan struct{})
-		go func(ch <-chan stt.AudioInput, finished chan<- struct{}) {
-			conversationErr = converse(conversationCtx, ch, automatic)
-			close(finished)
-		}(audio, done)
+		conversationCtx, cancel := context.WithCancel(ctx)
+		active = &activeConversation{audio: make(chan stt.AudioInput, 16), cancel: cancel}
+		go func(audio <-chan stt.AudioInput) {
+			finished <- converse(conversationCtx, audio, automatic)
+		}(active.audio)
 		if offset < end {
-			return send(stt.AudioInput{PCM: snapshot(offset)})
+			return active.send(ctx, stt.AudioInput{PCM: snapshot(offset)})
 		}
 		return nil
 	}
@@ -110,8 +87,11 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-done:
+		case conversationErr := <-finished:
 			if conversationErr != nil && !errors.Is(conversationErr, context.Canceled) {
+				active.cancel()
+				active.clearAudio()
+				active = nil
 				return conversationErr
 			}
 			if err := reset(); err != nil {
@@ -124,29 +104,29 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 			if event.Control != "" {
 				switch event.Control {
 				case "listening_start":
-					if audio == nil {
+					if active == nil {
 						if err := start(max(floor, end-SampleRate/4), false); err != nil {
 							return err
 						}
 						block = block[:0]
 					}
 				case "conversation_finalize":
-					if audio != nil {
+					if active != nil {
 						if len(block) > 0 {
-							if err := send(stt.AudioInput{PCM: snapshot(end - int64(len(block)))}); err != nil {
+							if err := active.send(ctx, stt.AudioInput{PCM: snapshot(end - int64(len(block)))}); err != nil {
 								return err
 							}
 							clear(block)
 							block = block[:0]
 						}
-						if err := send(stt.AudioInput{Finalize: true}); err != nil {
+						if err := active.send(ctx, stt.AudioInput{Finalize: true}); err != nil {
 							return err
 						}
 					}
 				case "conversation_stop":
-					if cancel != nil {
-						cancel()
-						<-done
+					if active != nil {
+						active.cancel()
+						<-finished
 						if err := reset(); err != nil {
 							return err
 						}
@@ -169,8 +149,8 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 				if len(block) != step {
 					continue
 				}
-				if audio != nil {
-					err = send(stt.AudioInput{PCM: snapshot(end - step)})
+				if active != nil {
+					err = active.send(ctx, stt.AudioInput{PCM: snapshot(end - step)})
 				} else {
 					err = stream.Add(block)
 					if err == nil {
@@ -197,7 +177,7 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 					clear(event.PCM)
 					return err
 				}
-				if audio == nil && end-base >= 60*SampleRate {
+				if active == nil && end-base >= 60*SampleRate {
 					if err := stream.Reset(); err != nil {
 						clear(event.PCM)
 						return err
@@ -218,5 +198,33 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 			}
 			clear(event.PCM)
 		}
+	}
+}
+
+// activeConversation owns the bounded handoff queue. Its listener cancels and
+// joins the consumer before clearing any frames the consumer did not consume.
+type activeConversation struct {
+	audio  chan stt.AudioInput
+	cancel context.CancelFunc
+}
+
+func (c *activeConversation) clearAudio() {
+	for len(c.audio) > 0 {
+		clear((<-c.audio).PCM)
+	}
+}
+
+func (c *activeConversation) send(ctx context.Context, event stt.AudioInput) error {
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case c.audio <- event:
+		return nil
+	case <-ctx.Done():
+		clear(event.PCM)
+		return ctx.Err()
+	case <-timer.C:
+		clear(event.PCM)
+		return errors.New("conversation audio stalled")
 	}
 }

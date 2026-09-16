@@ -160,7 +160,10 @@ func (s *Server) serveConnection(
 	var ambientCancel context.CancelFunc
 	var ambientInputs chan ambient.Input
 	var audio chan stt.AudioInput
-	var transcription <-chan error
+	// This connection starts one audio worker at a time and joins its result.
+	transcription := make(chan error, 1)
+	transcribing := false
+	legacyCapturing := false
 	var pendingCandidate *candidateAudioHeader
 	audioMode := audioModeUnset
 	if s.handlers.Diagnostics {
@@ -170,7 +173,7 @@ func (s *Server) serveConnection(
 	var diagnosticLimiter clientDiagnosticLimiter
 	defer func() {
 		cancel()
-		if transcription != nil {
+		if transcribing {
 			<-transcription
 		}
 		close(candidateJobs)
@@ -183,7 +186,8 @@ func (s *Server) serveConnection(
 			ambientCancel = nil
 		}
 		audio = nil
-		transcription = nil
+		legacyCapturing = false
+		transcribing = false
 		ambientActive = false
 		// The reader may have queued a frame concurrently with worker exit.
 		for len(ambientInputs) > 0 {
@@ -285,7 +289,7 @@ func (s *Server) serveConnection(
 					}
 					continue
 				}
-				if audio == nil {
+				if !legacyCapturing {
 					clear(incoming.data)
 					continue
 				}
@@ -328,7 +332,7 @@ func (s *Server) serveConnection(
 					continue
 				}
 				header := message.candidateHeader()
-				if audioMode == audioModeLegacy || audioMode == audioModeAmbient || transcription != nil {
+				if audioMode == audioModeLegacy || audioMode == audioModeAmbient || transcribing {
 					slog.WarnContext(ctx, "rejected candidate audio during legacy transcription")
 					if err := conn.WriteJSON(candidateDoneMessage(message.ID)); err != nil {
 						return fmt.Errorf("write candidate mode rejection: %w", err)
@@ -379,7 +383,7 @@ func (s *Server) serveConnection(
 				}
 
 			case "ambient_start":
-				if transcription != nil {
+				if transcribing {
 					continue
 				}
 				if audioMode == audioModeUnset {
@@ -396,15 +400,14 @@ func (s *Server) serveConnection(
 				ambientInputs = make(chan ambient.Input, 16)
 				ambientCtx, stopAmbient := context.WithCancel(ctx)
 				ambientCancel = stopAmbient
-				done := make(chan error, 1)
-				transcription = done
+				transcribing = true
 				go func(input <-chan ambient.Input) {
 					if s.handlers.AmbientStreaming != nil && !s.handlers.Diagnostics {
-						done <- s.handlers.AmbientStreaming(ambientCtx, input, func(ctx context.Context, audio <-chan stt.AudioInput, automatic bool) error {
+						transcription <- s.handlers.AmbientStreaming(ambientCtx, input, func(ctx context.Context, audio <-chan stt.AudioInput, automatic bool) error {
 							return s.runConversation(ctx, scope, conn, audio, automatic)
 						})
 					} else {
-						done <- s.listenAmbient(ambientCtx, conn, input, candidateJobs)
+						transcription <- s.listenAmbient(ambientCtx, conn, input, candidateJobs)
 					}
 				}(ambientInputs)
 
@@ -440,15 +443,15 @@ func (s *Server) serveConnection(
 					}
 					continue
 				}
-				if transcription != nil {
+				if transcribing {
 					continue
 				}
 				audioMode = audioModeLegacy
 				audio = make(chan stt.AudioInput, 100)
-				done := make(chan error, 1)
-				transcription = done
+				legacyCapturing = true
+				transcribing = true
 				go func(audio <-chan stt.AudioInput) {
-					done <- s.transcribeConnection(ctx, scope, conn, audio)
+					transcription <- s.transcribeConnection(ctx, scope, conn, audio)
 				}(audio)
 
 			case listeningStopMessageType:
@@ -458,14 +461,15 @@ func (s *Server) serveConnection(
 					}
 					continue
 				}
-				if transcription == nil {
+				if !transcribing {
 					if err := conn.WriteJSON(serverMessage{Type: listeningStoppedMessageType}); err != nil {
 						return fmt.Errorf("write listening state: %w", err)
 					}
 					continue
 				}
-				if audio != nil {
+				if legacyCapturing {
 					close(audio)
+					legacyCapturing = false
 					audio = nil
 				}
 
