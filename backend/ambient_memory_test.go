@@ -53,7 +53,7 @@ func TestAmbientTranscriptLearnsMemoryAfterSocketDisconnect(t *testing.T) {
 	scope := tool.Scope{UserID: "user", SessionID: "session"}
 	extractor := ambientMemoryExtractor{make(chan string, 1), make(chan struct{})}
 	stored := make(ambientMemoryWriter, 1)
-	recorder, err := memory.NewRecorder(extractor, stored)
+	recorder, err := memory.NewRecorder(extractor, stored, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -135,19 +135,16 @@ func run() error {
 		tokenVerifier.Verify,
 		proposalStore,
 		registrationDispatcher.Trigger,
-	)
-	if err != nil {
-		return err
-	}
-	workspaceAutomationHandler.SetWorkspaceChanged(
 		func(userID string, kind proposal.Kind) {
 			resource := realtime.WorkspaceWatches
 			if kind == proposal.KindReminder {
 				resource = realtime.WorkspaceTasks
 			}
 			realtimeHub.WorkspaceChanged(userID, resource)
-		},
-	)
+		})
+	if err != nil {
+		return err
+	}
 
 	classifier, err := openai.NewClassifier(
 		os.Getenv("OPENAI_API_KEY"),
@@ -170,13 +167,12 @@ func run() error {
 	memoryRecorder, err := memory.NewRecorder(
 		memoryExtractor,
 		memoryStore,
-	)
+		func(userID string) {
+			realtimeHub.WorkspaceChanged(userID, realtime.WorkspaceMemories)
+		})
 	if err != nil {
 		return err
 	}
-	memoryRecorder.SetOnStored(func(userID string) {
-		realtimeHub.WorkspaceChanged(userID, realtime.WorkspaceMemories)
-	})
 
 	transcriber, err := stt.NewDeepgramTranscriber(os.Getenv("DEEPGRAM_API_KEY"))
 	if err != nil {
@@ -304,13 +300,13 @@ func run() error {
 			return items, nil
 		}),
 		notificationService,
-	)
+		func(userID string) {
+			realtimeHub.WorkspaceChanged(userID, realtime.WorkspaceWatches)
+		})
 	if err != nil {
 		return err
 	}
-	watchDispatcher.SetWorkspaceChanged(func(userID string) {
-		realtimeHub.WorkspaceChanged(userID, realtime.WorkspaceWatches)
-	})
+
 	scheduledEventDispatcher, err := scheduler.NewDispatcher(
 		scheduledEventStore,
 		reminderDispatcher,
