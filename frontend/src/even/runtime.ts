@@ -199,6 +199,11 @@ export async function initializeEvenExperience(
     responseLifecycle.cancel()
   }
 
+  function clearAssistantResponseState(): void {
+    cancelAssistantResponseWindow()
+    thinking = false
+  }
+
   function handleResponseConversationExpired(): void {
     const generation = responseWindowGeneration
     void enqueueTransition(async () => {
@@ -307,8 +312,7 @@ export async function initializeEvenExperience(
   }
 
   async function showReady() {
-    cancelAssistantResponseWindow()
-    thinking = false
+    clearAssistantResponseState()
     awaitingResponse = false
     latestTranscript = ""
     idlePrompt = undefined
@@ -330,8 +334,7 @@ export async function initializeEvenExperience(
   }
 
   async function showConnectionLost() {
-    cancelAssistantResponseWindow()
-    thinking = false
+    clearAssistantResponseState()
     await setPage(
       buildCompactPage("OFFLINE  ·  RECONNECTING"),
       "offline",
@@ -369,8 +372,7 @@ export async function initializeEvenExperience(
   async function showAssistantPresentation(
     presentation: GlassesMessage,
   ) {
-    cancelAssistantResponseWindow()
-    thinking = false
+    clearAssistantResponseState()
     try {
       await setPage(
         buildMessagePage(presentation, "Opening mic", messagePageIndex),
@@ -399,8 +401,7 @@ export async function initializeEvenExperience(
   }
 
   async function showIdlePrompt(prompt: string) {
-    cancelAssistantResponseWindow()
-    thinking = false
+    clearAssistantResponseState()
     idlePrompt = prompt
     await setPage(buildCompactPage(prompt), "compact")
   }
@@ -614,8 +615,7 @@ export async function initializeEvenExperience(
       return
     }
     connection.release(closedSocket)
-    cancelAssistantResponseWindow()
-    thinking = false
+    clearAssistantResponseState()
     awaitingResponse = false
     latestTranscript = ""
     idlePrompt = undefined
@@ -729,10 +729,9 @@ export async function initializeEvenExperience(
   async function displayAssistantPresentation(
     presentation: GlassesMessage,
   ): Promise<void> {
-    cancelAssistantResponseWindow()
+    clearAssistantResponseState()
     messagePageIndex = 0
     awaitingResponse = false
-    thinking = false
     visibleAssistant = undefined
     if (listeningState !== "idle") {
       if (
@@ -796,10 +795,9 @@ export async function initializeEvenExperience(
       }
       case "conversation_idle": {
         if (!serverListeningEnabled) return
-        cancelAssistantResponseWindow()
+        clearAssistantResponseState()
         listeningState = "idle"
         awaitingResponse = false
-        thinking = false
         reportStatus(sleeping ? "Sleeping" : "Connected")
         if (!sleeping && !currentNotification) {
           if (visibleAssistant) await refreshAnswerStatus()
@@ -1133,8 +1131,7 @@ export async function initializeEvenExperience(
     }
     active = false
     takePendingTranscript()
-    thinking = false
-    cancelAssistantResponseWindow()
+    clearAssistantResponseState()
     listeningState = "idle"
     stopEvents()
     stopLocationEvents()

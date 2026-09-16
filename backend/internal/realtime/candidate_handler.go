@@ -135,10 +135,10 @@ func (s *Server) processCandidate(
 		job.admissionHeld = false
 	}
 	defer releaseAdmission()
-	if s.capacity.paid != nil {
+	if s.capacity.paidWorkPermits != nil {
 		select {
-		case s.capacity.paid <- struct{}{}:
-			defer func() { <-s.capacity.paid }()
+		case s.capacity.paidWorkPermits <- struct{}{}:
+			defer func() { <-s.capacity.paidWorkPermits }()
 		case <-ctx.Done():
 			return false
 		}

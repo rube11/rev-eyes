@@ -73,7 +73,7 @@ func NewServerWithHub(transcriber stt.Transcriber, hub *Hub, handlers Handlers) 
 			maxConcurrent = defaultCandidateConcurrency
 		}
 		capacity.retained = make(chan struct{}, maxConcurrent*candidateAdmissionFactor)
-		capacity.paid = make(chan struct{}, maxConcurrent)
+		capacity.paidWorkPermits = make(chan struct{}, maxConcurrent)
 	}
 	return newServer(transcriber, hub, handlers, capacity)
 }
@@ -81,8 +81,8 @@ func NewServerWithHub(transcriber stt.Transcriber, hub *Hub, handlers Handlers) 
 // Main listening and diagnostics share these limits. Retained slots last until
 // clip PCM is cleared; paid slots cover transcription AND downstream turns.
 type transcriptionCapacity struct {
-	retained chan struct{}
-	paid     chan struct{}
+	retained        chan struct{}
+	paidWorkPermits chan struct{}
 }
 
 func newServer(transcriber stt.Transcriber, hub *Hub, handlers Handlers, capacity *transcriptionCapacity) *Server {

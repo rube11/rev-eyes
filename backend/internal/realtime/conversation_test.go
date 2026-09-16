@@ -149,7 +149,7 @@ func TestConversationCancellationJoinsStreamAndReleasesAdmission(t *testing.T) {
 	default:
 		t.Fatal("paid connection outlived conversation")
 	}
-	if len(s.capacity.paid) != 0 {
+	if len(s.capacity.paidWorkPermits) != 0 {
 		t.Fatal("paid stream permit leaked")
 	}
 }
