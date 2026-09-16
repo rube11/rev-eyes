@@ -15,6 +15,69 @@ import (
 
 type diagnosticFactory struct{}
 
+type pausedFactory struct{ release <-chan struct{} }
+
+func (f pausedFactory) Open() (ambient.Stream, error) { return &pausedStream{release: f.release}, nil }
+
+type pausedStream struct{ release <-chan struct{} }
+
+func (s *pausedStream) Add([]float32) error               { <-s.release; return nil }
+func (*pausedStream) Transcript() ([]ambient.Line, error) { return nil, nil }
+func (*pausedStream) Reset() error                        { return nil }
+func (*pausedStream) Close()                              {}
+
+func TestDiagnosticsPreservesSmallFramesDuringInferencePause(t *testing.T) {
+	release := make(chan struct{})
+	// Model inference can pause longer than the 16-frame queue represents.
+	// Release it even if the client fails, so server cleanup cannot hang.
+	timer := time.AfterFunc(200*time.Millisecond, func() { close(release) })
+	defer func() {
+		if timer.Stop() {
+			close(release)
+		}
+	}()
+	listener := &ambient.Listener{Factory: pausedFactory{release: release}}
+	app := NewServer(nil, Handlers{
+		Ambient:        listener.Run,
+		Authenticate:   func(string) (tool.Scope, error) { return tool.Scope{UserID: "u", SessionID: "s"}, nil },
+		CandidateAudio: func(context.Context, []byte, stt.AudioFormat) (string, error) { return "", nil },
+	})
+	server := httptest.NewServer(app.DiagnosticsServer(listener.RunObserved))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/ws/moonshine", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.WriteJSON(map[string]string{"type": "ambient_start"}); err != nil {
+		t.Fatal(err)
+	}
+	var message serverMessage
+	if err := conn.ReadJSON(&message); err != nil || message.Type != "ready" {
+		t.Fatalf("ready: %+v %v", message, err)
+	}
+	// Two seconds of PCM in the same 20ms frame size used by live audio.
+	for i := 0; i < 100; i++ {
+		if err := conn.WriteMessage(websocket.BinaryMessage, make([]byte, 640)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for message.ReceivedBytes < 64000 {
+		if err := conn.ReadJSON(&message); err != nil {
+			t.Fatalf("lost audio during inference pause: %v", err)
+		}
+	}
+	if err := conn.WriteJSON(map[string]string{"type": "ambient_stop"}); err != nil {
+		t.Fatal(err)
+	}
+	for message.Type != listeningStoppedMessageType {
+		if err := conn.ReadJSON(&message); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestDiagnosticsSharesApplicationClipAdmission(t *testing.T) {
 	app := NewServer(nil, Handlers{CandidateMaxConcurrent: 1, CandidateAudio: func(context.Context, []byte, stt.AudioFormat) (string, error) { return "", nil }})
 	diagnostics := app.DiagnosticsServer(nil)

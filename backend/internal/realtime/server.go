@@ -27,6 +27,27 @@ type incomingMessage struct {
 	data        []byte
 }
 
+// Keep PCM and controls ordered without treating a short native inference
+// pause as overload. The bounded queue applies backpressure to the socket
+// reader; a stalled worker still closes the connection after two seconds.
+func enqueueAmbient(ctx context.Context, input chan<- ambient.Input, event ambient.Input) error {
+	select {
+	case input <- event:
+		return nil
+	default:
+	}
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case input <- event:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return errors.New("ambient input stalled for two seconds")
+	}
+}
+
 type Server struct {
 	transcriber         stt.Transcriber
 	handlers            Handlers
@@ -249,11 +270,9 @@ func (s *Server) serveConnection(
 						clearCandidateAudio(incoming.data)
 						return errors.New("ambient audio frame exceeds one second")
 					}
-					select {
-					case ambientInputs <- ambient.Input{PCM: incoming.data}:
-					default:
+					if err := enqueueAmbient(ctx, ambientInputs, ambient.Input{PCM: incoming.data}); err != nil {
 						clearCandidateAudio(incoming.data)
-						return errors.New("ambient audio queue full")
+						return err
 					}
 					continue
 				}
@@ -383,18 +402,14 @@ func (s *Server) serveConnection(
 				}
 			case "ambient_reply_arm", "ambient_reply_disarm":
 				if ambientActive {
-					select {
-					case ambientInputs <- ambient.Input{Control: message.Type}:
-					default:
-						return errors.New("ambient control queue full")
+					if err := enqueueAmbient(ctx, ambientInputs, ambient.Input{Control: message.Type}); err != nil {
+						return err
 					}
 				}
 			case listeningStartMessageType:
 				if ambientActive {
-					select {
-					case ambientInputs <- ambient.Input{Control: message.Type}:
-					default:
-						return errors.New("ambient control queue full")
+					if err := enqueueAmbient(ctx, ambientInputs, ambient.Input{Control: message.Type}); err != nil {
+						return err
 					}
 					continue
 				}
@@ -423,10 +438,8 @@ func (s *Server) serveConnection(
 
 			case listeningStopMessageType:
 				if ambientActive {
-					select {
-					case ambientInputs <- ambient.Input{Control: message.Type}:
-					default:
-						return errors.New("ambient control queue full")
+					if err := enqueueAmbient(ctx, ambientInputs, ambient.Input{Control: message.Type}); err != nil {
+						return err
 					}
 					continue
 				}
