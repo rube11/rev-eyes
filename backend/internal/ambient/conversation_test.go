@@ -151,3 +151,39 @@ func TestManualFinalizeFlushesPartialBlockAndKeepsConnection(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestStreamingShutdownClearsQueuedAudioAndJoinsConversation(t *testing.T) {
+	stream := &conversationStream{}
+	listener := Listener{Factory: conversationFactory{stream}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	input := make(chan Input, 4)
+	pcm := []byte{1, 0, 2, 0}
+	queued := []byte{3, 0, 4, 0}
+	input <- Input{Control: "listening_start"}
+	input <- Input{PCM: pcm}
+	input <- Input{Control: "conversation_finalize"}
+	input <- Input{PCM: queued}
+	joined := false
+	err := listener.RunStreaming(ctx, input, func(ctx context.Context, audio <-chan []byte, _ bool) error {
+		frame := <-audio
+		if len(frame) != 4 || frame[0] != 1 {
+			t.Error("finalize overtook partial PCM")
+		}
+		clear(frame)
+		cancel()
+		<-ctx.Done()
+		joined = true
+		return ctx.Err()
+	})
+	if !errors.Is(err, context.Canceled) || !joined {
+		t.Fatalf("err=%v joined=%v", err, joined)
+	}
+	for _, audio := range [][]byte{pcm, queued} {
+		for _, value := range audio {
+			if value != 0 {
+				t.Fatal("PCM retained after shutdown")
+			}
+		}
+	}
+}

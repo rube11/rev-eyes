@@ -153,3 +153,50 @@ func TestConversationCancellationJoinsStreamAndReleasesAdmission(t *testing.T) {
 		t.Fatal("paid stream permit leaked")
 	}
 }
+
+func TestConversationWakeAuthorizationAndIdleDelivery(t *testing.T) {
+	for _, automatic := range []bool{true, false} {
+		t.Run(map[bool]string{true: "automatic", false: "manual"}[automatic], func(t *testing.T) {
+			fake := &conversationTranscriber{words: make(chan string, 1), stopped: make(chan struct{})}
+			turns := make(chan string, 1)
+			s := NewServer(fake, Handlers{Utterance: func(_ context.Context, _ tool.Scope, text string) (UtteranceResult, error) {
+				turns <- text
+				return UtteranceResult{}, nil
+			}})
+			s.conversationIdle = 30 * time.Millisecond
+			writer := conversationWriter{messages: make(chan serverMessage, 10)}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- s.runConversation(ctx, tool.Scope{}, writer, nil, automatic) }()
+			fake.words <- "The weather is nice."
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if automatic && len(turns) != 0 {
+				t.Fatal("unapproved accurate speech executed")
+			}
+			if !automatic && len(turns) != 1 {
+				t.Fatal("manual authorization required a keyword")
+			}
+			close(writer.messages)
+			idle, thinking := 0, 0
+			for message := range writer.messages {
+				if message.Type == "conversation_idle" {
+					idle++
+				}
+				if message.Type == assistantThinkingMessageType {
+					thinking++
+				}
+			}
+			if idle != 1 || (automatic && thinking != 0) || (!automatic && thinking != 1) {
+				t.Fatalf("idle=%d thinking=%d automatic=%v", idle, thinking, automatic)
+			}
+			select {
+			case <-fake.stopped:
+			default:
+				t.Fatal("idle delivered before paid worker joined")
+			}
+		})
+	}
+}
