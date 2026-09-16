@@ -330,14 +330,15 @@ func run() error {
 	go scheduledEventDispatcher.Run(ctx)
 	go memoryRecorder.Run(ctx)
 	realtimeServer := realtime.NewServerWithHub(transcriber, realtimeHub, realtime.Handlers{
-		Ambient:                ambientHandler,
-		CandidateAudio:         candidateAudioHandler,
-		AmbientStreaming:       streamingAmbient,
-		CandidateMaxConcurrent: candidateMaxConcurrent,
-		ClientDiagnostic:       clientDiagnosticHandler,
-		Authenticate:           tickets.Consume,
-		PrepareSession:         sessionStore.Reopen,
-		CheckOrigin:            origins.Allows,
+		Ambient:                 ambientHandler,
+		CandidateAudio:          candidateAudioHandler,
+		AmbientStreaming:        streamingAmbient,
+		ConversationTranscriber: transcriber,
+		CandidateMaxConcurrent:  candidateMaxConcurrent,
+		ClientDiagnostic:        clientDiagnosticHandler,
+		Authenticate:            tickets.Consume,
+		PrepareSession:          sessionStore.Reopen,
+		CheckOrigin:             origins.Allows,
 		Connect: func(ctx context.Context, scope tool.Scope) error {
 			return notificationService.Flush(ctx, scope.UserID)
 		},

@@ -25,7 +25,7 @@ type countedLiveConversation struct {
 	calls atomic.Int32
 }
 
-func (c *countedLiveConversation) TranscribeConversation(ctx context.Context, audio <-chan []byte, completed chan<- string, observe stt.TranscriptObserver) error {
+func (c *countedLiveConversation) TranscribeConversation(ctx context.Context, audio <-chan stt.AudioInput, completed chan<- string, observe stt.TranscriptObserver) error {
 	c.calls.Add(1)
 	return c.live.TranscribeConversation(ctx, audio, completed, observe)
 }
@@ -53,7 +53,7 @@ func TestNativeStreamingConversationRoundTrip(t *testing.T) {
 	}
 	counted := &countedLiveConversation{Transcriber: deepgram, live: deepgram}
 	listener := &ambient.Listener{Factory: factory}
-	app := NewServer(counted, Handlers{
+	app := NewServer(counted, Handlers{ConversationTranscriber: counted,
 		Ambient: listener.Run, AmbientStreaming: listener.RunStreaming,
 		CandidateAudio: func(context.Context, []byte, stt.AudioFormat) (string, error) {
 			t.Error("used prerecorded request")

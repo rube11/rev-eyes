@@ -19,7 +19,7 @@ type echoTranscriber struct{}
 
 func (echoTranscriber) Transcribe(
 	ctx context.Context,
-	audio <-chan []byte,
+	audio <-chan stt.AudioInput,
 	completed chan<- string,
 	observe stt.TranscriptObserver,
 ) error {
@@ -31,11 +31,11 @@ func (echoTranscriber) Transcribe(
 			if !ok {
 				return nil
 			}
-			if err := observe(string(chunk)); err != nil {
+			if err := observe(string(chunk.PCM)); err != nil {
 				return err
 			}
 			select {
-			case completed <- string(chunk):
+			case completed <- string(chunk.PCM):
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -60,14 +60,14 @@ func TestTranscribeConnectionKeepsUtterancesWithConnectionContext(t *testing.T) 
 		},
 	})
 
-	audioA := make(chan []byte, 2)
-	audioA <- []byte("first-a")
-	audioA <- []byte("second-a")
+	audioA := make(chan stt.AudioInput, 2)
+	audioA <- stt.AudioInput{PCM: []byte("first-a")}
+	audioA <- stt.AudioInput{PCM: []byte("second-a")}
 	close(audioA)
 
-	audioB := make(chan []byte, 2)
-	audioB <- []byte("first-b")
-	audioB <- []byte("second-b")
+	audioB := make(chan stt.AudioInput, 2)
+	audioB <- stt.AudioInput{PCM: []byte("first-b")}
+	audioB <- stt.AudioInput{PCM: []byte("second-b")}
 	close(audioB)
 
 	errors := make(chan error, 2)
@@ -413,7 +413,7 @@ func TestServerControlsTranscriptionLifecycle(t *testing.T) {
 	processed := make(chan struct{}, 1)
 	server := NewServer(transcriberFunc(func(
 		ctx context.Context,
-		audio <-chan []byte,
+		audio <-chan stt.AudioInput,
 		completed chan<- string,
 		observe stt.TranscriptObserver,
 	) error {
@@ -495,16 +495,16 @@ func TestServerRestartsAfterSpeechEndpoint(t *testing.T) {
 	// listening_stop is sent; the next tap must be able to start a fresh stream.
 	server := NewServer(transcriberFunc(func(
 		ctx context.Context,
-		audio <-chan []byte,
+		audio <-chan stt.AudioInput,
 		completed chan<- string,
 		observe stt.TranscriptObserver,
 	) error {
 		select {
 		case chunk := <-audio:
-			if err := observe(string(chunk)); err != nil {
+			if err := observe(string(chunk.PCM)); err != nil {
 				return err
 			}
-			completed <- string(chunk)
+			completed <- string(chunk.PCM)
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -549,14 +549,14 @@ func (discardJSONWriter) WriteJSON(any) error {
 
 type transcriberFunc func(
 	context.Context,
-	<-chan []byte,
+	<-chan stt.AudioInput,
 	chan<- string,
 	stt.TranscriptObserver,
 ) error
 
 func (f transcriberFunc) Transcribe(
 	ctx context.Context,
-	audio <-chan []byte,
+	audio <-chan stt.AudioInput,
 	completed chan<- string,
 	observe stt.TranscriptObserver,
 ) error {

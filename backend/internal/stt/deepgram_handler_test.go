@@ -9,6 +9,24 @@ import (
 	msginterfaces "github.com/deepgram/deepgram-go-sdk/v3/pkg/api/listen/v1/websocket/interfaces"
 )
 
+func TestPersistentDeepgramEndpointsKeepAcceptingUtterances(t *testing.T) {
+	completed := make(chan string, 2)
+	handler := newDeepgramHandler(context.Background(), completed, func(string) error { return nil }, true)
+	for _, text := range []string{"glasses hello", "and tomorrow"} {
+		if err := handler.Message(deepgramMessage(text, true, true, false)); err != nil {
+			t.Fatal(err)
+		}
+		if got := <-completed; got != text {
+			t.Fatalf("got %q, want %q", got, text)
+		}
+		select {
+		case <-handler.Endpointed():
+			t.Fatal("persistent utterance requested connection closure")
+		default:
+		}
+	}
+}
+
 func TestDeepgramHandlerCompletesAtSpeechEndpoint(t *testing.T) {
 	completed := make(chan string, 1)
 	var updates []string
@@ -18,8 +36,7 @@ func TestDeepgramHandlerCompletesAtSpeechEndpoint(t *testing.T) {
 		func(text string) error {
 			updates = append(updates, text)
 			return nil
-		},
-	)
+		}, false)
 
 	messages := []struct {
 		message        *msginterfaces.MessageResponse
@@ -81,8 +98,7 @@ func TestDeepgramHandlerIncludesFinalSegmentFromExplicitFinalize(t *testing.T) {
 		func(text string) error {
 			updates = append(updates, text)
 			return nil
-		},
-	)
+		}, false)
 
 	if err := handler.Message(deepgramMessage("hello", true, false, false)); err != nil {
 		t.Fatalf("final segment Message() error = %v", err)
@@ -112,8 +128,7 @@ func TestDeepgramHandlerEmptyFinalizeSignalsWithoutCompleting(t *testing.T) {
 	handler := newDeepgramHandler(
 		context.Background(),
 		completed,
-		func(string) error { return nil },
-	)
+		func(string) error { return nil }, false)
 
 	if err := handler.Message(deepgramMessage("", false, false, true)); err != nil {
 		t.Fatalf("Message() error = %v", err)
@@ -133,8 +148,7 @@ func TestDeepgramHandlerReturnsTranscriptObserverError(t *testing.T) {
 		make(chan string, 1),
 		func(string) error {
 			return wantErr
-		},
-	)
+		}, false)
 
 	err := handler.Message(&msginterfaces.MessageResponse{
 		Channel: msginterfaces.Channel{

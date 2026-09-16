@@ -59,7 +59,7 @@ func TestTranscribeConnectionCancelsStreamWhenMessageDeliveryFails(t *testing.T)
 	streamCanceled := make(chan struct{})
 	server := NewServer(transcriberFunc(func(
 		ctx context.Context,
-		_ <-chan []byte,
+		_ <-chan stt.AudioInput,
 		completed chan<- string,
 		_ stt.TranscriptObserver,
 	) error {
@@ -81,7 +81,7 @@ func TestTranscribeConnectionCancelsStreamWhenMessageDeliveryFails(t *testing.T)
 		context.Background(),
 		tool.Scope{UserID: "user", SessionID: "session"},
 		failingJSONWriter{err: wantErr},
-		make(chan []byte),
+		make(chan stt.AudioInput),
 	)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("transcribeConnection() error = %v, want %v", err, wantErr)

@@ -3,6 +3,7 @@ package realtime
 import (
 	"context"
 	"fmt"
+	"github.com/rube11/rev-eyes/backend/internal/stt"
 	"log/slog"
 	"strings"
 
@@ -20,7 +21,7 @@ func (s *Server) transcribeConnection(
 	ctx context.Context,
 	scope tool.Scope,
 	writer jsonWriter,
-	audio <-chan []byte,
+	audio <-chan stt.AudioInput,
 ) error {
 	transcriptionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

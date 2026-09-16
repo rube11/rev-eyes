@@ -32,18 +32,18 @@ func NewDeepgramTranscriber(apiKey string) (*deepgramTranscriber, error) {
 
 func (dg *deepgramTranscriber) Transcribe(
 	ctx context.Context,
-	audio <-chan []byte,
+	audio <-chan AudioInput,
 	completed chan<- string,
 	observe TranscriptObserver,
 ) error {
 	return dg.transcribe(ctx, audio, completed, observe, false)
 }
 
-func (dg *deepgramTranscriber) TranscribeConversation(ctx context.Context, audio <-chan []byte, completed chan<- string, observe TranscriptObserver) error {
+func (dg *deepgramTranscriber) TranscribeConversation(ctx context.Context, audio <-chan AudioInput, completed chan<- string, observe TranscriptObserver) error {
 	return dg.transcribe(ctx, audio, completed, observe, true)
 }
 
-func (dg *deepgramTranscriber) transcribe(ctx context.Context, audio <-chan []byte, completed chan<- string, observe TranscriptObserver, persistent bool) error {
+func (dg *deepgramTranscriber) transcribe(ctx context.Context, audio <-chan AudioInput, completed chan<- string, observe TranscriptObserver, persistent bool) error {
 	if dg.deepgramKey == "" {
 		return errors.New("deepgram API key is required")
 	}
@@ -77,7 +77,7 @@ func (dg *deepgramTranscriber) transcribe(ctx context.Context, audio <-chan []by
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	handler := newDeepgramHandler(streamCtx, completed, observe)
+	handler := newDeepgramHandler(streamCtx, completed, observe, persistent)
 	dgClient, err := client.NewWSUsingCallbackWithCancel(
 		streamCtx,
 		cancel,
@@ -94,10 +94,6 @@ func (dg *deepgramTranscriber) transcribe(ctx context.Context, audio <-chan []by
 		return errors.New("connect to Deepgram")
 	}
 	defer dgClient.Stop()
-	var endpoint <-chan struct{}
-	if !persistent {
-		endpoint = handler.Endpointed()
-	}
 
 	for {
 		select {
@@ -107,22 +103,23 @@ func (dg *deepgramTranscriber) transcribe(ctx context.Context, audio <-chan []by
 			}
 			return streamCtx.Err()
 
-		case <-endpoint:
+		case <-handler.Endpointed():
 			return finalizeDeepgramStream(streamCtx, dgClient, handler)
 
-		case chunk, ok := <-audio:
+		case input, ok := <-audio:
 			if !ok {
 				if persistent {
 					return nil
 				}
 				return finalizeDeepgramStream(streamCtx, dgClient, handler)
 			}
-			if persistent && chunk == nil {
+			if persistent && input.Finalize {
 				if err := dgClient.Finalize(); err != nil {
 					return fmt.Errorf("finalize conversation utterance: %w", err)
 				}
 				continue
 			}
+			chunk := input.PCM
 			if len(chunk) == 0 {
 				continue
 			}

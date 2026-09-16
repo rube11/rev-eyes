@@ -20,6 +20,7 @@ type deepgramHandler struct {
 	completed  chan<- string
 	observe    TranscriptObserver
 	endpointed chan struct{}
+	persistent bool
 	endpoint   sync.Once
 	finalized  chan struct{}
 	finalize   sync.Once
@@ -29,12 +30,14 @@ func newDeepgramHandler(
 	ctx context.Context,
 	completed chan<- string,
 	observe TranscriptObserver,
+	persistent bool,
 ) *deepgramHandler {
 	return &deepgramHandler{
 		DefaultCallbackHandler: websocket.NewDefaultCallbackHandler(),
 		ctx:                    ctx,
 		completed:              completed,
 		observe:                observe,
+		persistent:             persistent,
 		endpointed:             make(chan struct{}),
 		finalized:              make(chan struct{}),
 	}
@@ -92,7 +95,7 @@ func (h *deepgramHandler) Message(message *msginterfaces.MessageResponse) error 
 		case <-h.ctx.Done():
 		}
 	}
-	if message.SpeechFinal && utterance != "" {
+	if !h.persistent && message.SpeechFinal && utterance != "" {
 		h.endpoint.Do(func() { close(h.endpointed) })
 	}
 

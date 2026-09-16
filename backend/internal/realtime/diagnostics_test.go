@@ -112,7 +112,7 @@ func (*diagnosticStream) Close()       {}
 func TestDiagnosticsShowsAllMoonshineAndSelectedDeepgramWithoutActions(t *testing.T) {
 	listener := &ambient.Listener{Factory: diagnosticFactory{}}
 	paidCalls := make(chan int, 2)
-	s := NewServer(transcriberFunc(func(context.Context, <-chan []byte, chan<- string, stt.TranscriptObserver) error {
+	s := NewServer(transcriberFunc(func(context.Context, <-chan stt.AudioInput, chan<- string, stt.TranscriptObserver) error {
 		t.Error("diagnostics opened paid live streaming")
 		return nil
 	}), Handlers{

@@ -8,12 +8,13 @@ import (
 	"time"
 
 	"github.com/rube11/rev-eyes/backend/internal/candidate"
+	"github.com/rube11/rev-eyes/backend/internal/stt"
 )
 
 // Conversation consumes owned PCM buffers and clears them after use. The bool
 // marks an automatic wake, whose first utterance must pass the accurate gate.
-// A nil buffer requests an utterance finalization without closing the stream.
-type Conversation func(context.Context, <-chan []byte, bool) error
+// Finalize requests an utterance endpoint without closing the stream.
+type Conversation func(context.Context, <-chan stt.AudioInput, bool) error
 
 // RunStreaming owns the rolling buffer and the handoff. Moonshine runs only
 // while idle. The triggering block is included in the replay exactly once;
@@ -42,13 +43,13 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 	block := make([]float32, 0, step)
 	defer clear(block[:cap(block)])
 	var end, base, floor int64
-	var audio chan []byte
+	var audio chan stt.AudioInput
 	var done chan struct{}
 	var conversationErr error
 	var cancel context.CancelFunc
 	drain := func() {
 		for len(audio) > 0 {
-			clear(<-audio)
+			clear((<-audio).PCM)
 		}
 	}
 	defer func() {
@@ -70,17 +71,17 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 		clear(ring)
 		return stream.Reset()
 	}
-	send := func(pcm []byte) error {
+	send := func(event stt.AudioInput) error {
 		timer := time.NewTimer(2 * time.Second)
 		defer timer.Stop()
 		select {
-		case audio <- pcm:
+		case audio <- event:
 			return nil
 		case <-ctx.Done():
-			clear(pcm)
+			clear(event.PCM)
 			return ctx.Err()
 		case <-timer.C:
-			clear(pcm)
+			clear(event.PCM)
 			return errors.New("conversation audio stalled")
 		}
 	}
@@ -94,14 +95,14 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 	start := func(offset int64, automatic bool) error {
 		conversationCtx, stop := context.WithCancel(ctx)
 		cancel = stop
-		audio = make(chan []byte, 16)
+		audio = make(chan stt.AudioInput, 16)
 		done = make(chan struct{})
-		go func(ch <-chan []byte, finished chan<- struct{}) {
+		go func(ch <-chan stt.AudioInput, finished chan<- struct{}) {
 			conversationErr = converse(conversationCtx, ch, automatic)
 			close(finished)
 		}(audio, done)
 		if offset < end {
-			return send(snapshot(offset))
+			return send(stt.AudioInput{PCM: snapshot(offset)})
 		}
 		return nil
 	}
@@ -132,13 +133,13 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 				case "conversation_finalize":
 					if audio != nil {
 						if len(block) > 0 {
-							if err := send(snapshot(end - int64(len(block)))); err != nil {
+							if err := send(stt.AudioInput{PCM: snapshot(end - int64(len(block)))}); err != nil {
 								return err
 							}
 							clear(block)
 							block = block[:0]
 						}
-						if err := send(nil); err != nil {
+						if err := send(stt.AudioInput{Finalize: true}); err != nil {
 							return err
 						}
 					}
@@ -169,7 +170,7 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 					continue
 				}
 				if audio != nil {
-					err = send(snapshot(end - step))
+					err = send(stt.AudioInput{PCM: snapshot(end - step)})
 				} else {
 					err = stream.Add(block)
 					if err == nil {

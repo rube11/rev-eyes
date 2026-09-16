@@ -17,10 +17,10 @@ type conversationTranscriber struct {
 	stopped chan struct{}
 }
 
-func (*conversationTranscriber) Transcribe(context.Context, <-chan []byte, chan<- string, stt.TranscriptObserver) error {
+func (*conversationTranscriber) Transcribe(context.Context, <-chan stt.AudioInput, chan<- string, stt.TranscriptObserver) error {
 	return errors.New("opened per-turn transcription")
 }
-func (f *conversationTranscriber) TranscribeConversation(ctx context.Context, _ <-chan []byte, completed chan<- string, observe stt.TranscriptObserver) error {
+func (f *conversationTranscriber) TranscribeConversation(ctx context.Context, _ <-chan stt.AudioInput, completed chan<- string, observe stt.TranscriptObserver) error {
 	f.calls.Add(1)
 	defer close(f.stopped)
 	for {
@@ -48,7 +48,7 @@ func TestConversationReusesConnectionAcrossTurnsAndExpiresAfterResponse(t *testi
 	fake := &conversationTranscriber{words: make(chan string, 4), stopped: make(chan struct{})}
 	turns := make(chan string, 4)
 	release := make(chan struct{})
-	s := NewServer(fake, Handlers{Utterance: func(ctx context.Context, _ tool.Scope, text string) (UtteranceResult, error) {
+	s := NewServer(fake, Handlers{ConversationTranscriber: fake, Utterance: func(ctx context.Context, _ tool.Scope, text string) (UtteranceResult, error) {
 		turns <- text
 		if text == "glasses hello" {
 			select {
@@ -124,7 +124,7 @@ func TestConversationReusesConnectionAcrossTurnsAndExpiresAfterResponse(t *testi
 
 func TestConversationCancellationJoinsStreamAndReleasesAdmission(t *testing.T) {
 	fake := &conversationTranscriber{words: make(chan string), stopped: make(chan struct{})}
-	s := NewServer(fake, Handlers{CandidateAudio: func(context.Context, []byte, stt.AudioFormat) (string, error) { return "", nil }})
+	s := NewServer(fake, Handlers{ConversationTranscriber: fake, CandidateAudio: func(context.Context, []byte, stt.AudioFormat) (string, error) { return "", nil }})
 	writer := conversationWriter{messages: make(chan serverMessage, 4)}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -159,7 +159,7 @@ func TestConversationWakeAuthorizationAndIdleDelivery(t *testing.T) {
 		t.Run(map[bool]string{true: "automatic", false: "manual"}[automatic], func(t *testing.T) {
 			fake := &conversationTranscriber{words: make(chan string, 1), stopped: make(chan struct{})}
 			turns := make(chan string, 1)
-			s := NewServer(fake, Handlers{Utterance: func(_ context.Context, _ tool.Scope, text string) (UtteranceResult, error) {
+			s := NewServer(fake, Handlers{ConversationTranscriber: fake, Utterance: func(_ context.Context, _ tool.Scope, text string) (UtteranceResult, error) {
 				turns <- text
 				return UtteranceResult{}, nil
 			}})

@@ -67,6 +67,9 @@ func NewServer(transcriber stt.Transcriber, handlers Handlers) *Server {
 
 // NewServerWithHub creates a realtime server with shared outbound delivery.
 func NewServerWithHub(transcriber stt.Transcriber, hub *Hub, handlers Handlers) *Server {
+	if handlers.AmbientStreaming != nil && handlers.ConversationTranscriber == nil {
+		panic("streaming ambient listening requires conversation transcription")
+	}
 	if hub == nil {
 		hub = NewHub()
 	}
@@ -151,7 +154,7 @@ func (s *Server) serveConnection(
 	var ambientActive bool
 	var ambientCancel context.CancelFunc
 	var ambientInputs chan ambient.Input
-	var audio chan []byte
+	var audio chan stt.AudioInput
 	var transcription <-chan error
 	var pendingCandidate *candidateAudioHeader
 	audioMode := audioModeUnset
@@ -283,7 +286,7 @@ func (s *Server) serveConnection(
 				}
 
 				select {
-				case audio <- incoming.data:
+				case audio <- stt.AudioInput{PCM: incoming.data}:
 				case transcriptionErr := <-transcription:
 					if err := finishTranscription(transcriptionErr); err != nil {
 						return err
@@ -392,7 +395,7 @@ func (s *Server) serveConnection(
 				transcription = done
 				go func(input <-chan ambient.Input) {
 					if s.handlers.AmbientStreaming != nil && !s.handlers.Diagnostics {
-						done <- s.handlers.AmbientStreaming(ambientCtx, input, func(ctx context.Context, audio <-chan []byte, automatic bool) error {
+						done <- s.handlers.AmbientStreaming(ambientCtx, input, func(ctx context.Context, audio <-chan stt.AudioInput, automatic bool) error {
 							return s.runConversation(ctx, scope, conn, audio, automatic)
 						})
 					} else {
@@ -436,10 +439,10 @@ func (s *Server) serveConnection(
 					continue
 				}
 				audioMode = audioModeLegacy
-				audio = make(chan []byte, 100)
+				audio = make(chan stt.AudioInput, 100)
 				done := make(chan error, 1)
 				transcription = done
-				go func(audio <-chan []byte) {
+				go func(audio <-chan stt.AudioInput) {
 					done <- s.transcribeConnection(ctx, scope, conn, audio)
 				}(audio)
 

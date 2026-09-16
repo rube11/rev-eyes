@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"github.com/rube11/rev-eyes/backend/internal/stt"
 	"testing"
 	"time"
 )
@@ -42,7 +43,7 @@ func TestStreamingHandoffReplaysOnceAndContinuesPastClipLimit(t *testing.T) {
 	done := make(chan error, 1)
 	received := make(chan []byte, 1)
 	go func() {
-		done <- listener.RunStreaming(ctx, input, func(ctx context.Context, audio <-chan []byte, automatic bool) error {
+		done <- listener.RunStreaming(ctx, input, func(ctx context.Context, audio <-chan stt.AudioInput, automatic bool) error {
 			if !automatic {
 				t.Error("keyword did not authorize automatic handoff")
 			}
@@ -52,8 +53,8 @@ func TestStreamingHandoffReplaysOnceAndContinuesPastClipLimit(t *testing.T) {
 				case <-ctx.Done():
 					return ctx.Err()
 				case pcm := <-audio:
-					all = append(all, pcm...)
-					clear(pcm)
+					all = append(all, pcm.PCM...)
+					clear(pcm.PCM)
 					if len(all) == 56*SampleRate*2 {
 						received <- all
 					}
@@ -98,9 +99,9 @@ func TestManualFinalizeFlushesPartialBlockAndKeepsConnection(t *testing.T) {
 	defer cancel()
 	input := make(chan Input)
 	done := make(chan error, 1)
-	frames := make(chan []byte, 4)
+	frames := make(chan stt.AudioInput, 4)
 	go func() {
-		done <- listener.RunStreaming(ctx, input, func(ctx context.Context, audio <-chan []byte, automatic bool) error {
+		done <- listener.RunStreaming(ctx, input, func(ctx context.Context, audio <-chan stt.AudioInput, automatic bool) error {
 			if automatic {
 				t.Error("tap should not require a wake phrase")
 			}
@@ -119,7 +120,7 @@ func TestManualFinalizeFlushesPartialBlockAndKeepsConnection(t *testing.T) {
 	input <- Input{Control: "conversation_finalize"}
 	select {
 	case pcm := <-frames:
-		if len(pcm) != 4 || pcm[0] != 1 || pcm[2] != 2 {
+		if len(pcm.PCM) != 4 || pcm.PCM[0] != 1 || pcm.PCM[2] != 2 {
 			t.Fatalf("partial frame lost: %v", pcm)
 		}
 	case <-ctx.Done():
@@ -127,7 +128,7 @@ func TestManualFinalizeFlushesPartialBlockAndKeepsConnection(t *testing.T) {
 	}
 	select {
 	case pcm := <-frames:
-		if pcm != nil {
+		if !pcm.Finalize {
 			t.Fatal("expected finalize signal")
 		}
 	case <-ctx.Done():
@@ -136,7 +137,7 @@ func TestManualFinalizeFlushesPartialBlockAndKeepsConnection(t *testing.T) {
 	input <- Input{PCM: make([]byte, step*2)}
 	select {
 	case pcm := <-frames:
-		if len(pcm) != step*2 {
+		if len(pcm.PCM) != step*2 {
 			t.Fatal("stream closed at finalization")
 		}
 	case <-ctx.Done():
@@ -165,12 +166,12 @@ func TestStreamingShutdownClearsQueuedAudioAndJoinsConversation(t *testing.T) {
 	input <- Input{Control: "conversation_finalize"}
 	input <- Input{PCM: queued}
 	joined := false
-	err := listener.RunStreaming(ctx, input, func(ctx context.Context, audio <-chan []byte, _ bool) error {
+	err := listener.RunStreaming(ctx, input, func(ctx context.Context, audio <-chan stt.AudioInput, _ bool) error {
 		frame := <-audio
-		if len(frame) != 4 || frame[0] != 1 {
+		if len(frame.PCM) != 4 || frame.PCM[0] != 1 {
 			t.Error("finalize overtook partial PCM")
 		}
-		clear(frame)
+		clear(frame.PCM)
 		cancel()
 		<-ctx.Done()
 		joined = true

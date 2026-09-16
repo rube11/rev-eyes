@@ -14,9 +14,9 @@ import (
 
 // runConversation owns one paid connection across multiple assistant turns.
 // The idle deadline lives on the server, independent of phone timers.
-func (s *Server) runConversation(ctx context.Context, scope tool.Scope, writer jsonWriter, audio <-chan []byte, automatic bool) error {
-	transcriber, ok := s.transcriber.(stt.ConversationTranscriber)
-	if !ok {
+func (s *Server) runConversation(ctx context.Context, scope tool.Scope, writer jsonWriter, audio <-chan stt.AudioInput, automatic bool) error {
+	transcriber := s.handlers.ConversationTranscriber
+	if transcriber == nil {
 		return errors.New("conversation streaming unavailable")
 	}
 	if s.candidatePermits != nil {

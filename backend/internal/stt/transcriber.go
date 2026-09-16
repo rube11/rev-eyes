@@ -4,10 +4,16 @@ import "context"
 
 type TranscriptObserver func(text string) error
 
+// AudioInput preserves the order of PCM and utterance finalization commands.
+// The producer transfers ownership of PCM to the transcription worker.
+type AudioInput struct {
+	PCM      []byte
+	Finalize bool
+}
+
 // ConversationTranscriber keeps one connection across utterance endpoints.
-// A nil audio frame requests finalization of the current utterance only.
 type ConversationTranscriber interface {
-	TranscribeConversation(context.Context, <-chan []byte, chan<- string, TranscriptObserver) error
+	TranscribeConversation(context.Context, <-chan AudioInput, chan<- string, TranscriptObserver) error
 }
 
 type Transcriber interface {
@@ -16,7 +22,7 @@ type Transcriber interface {
 	// completed channel and must keep consuming it until Transcribe returns.
 	Transcribe(
 		ctx context.Context,
-		audio <-chan []byte,
+		audio <-chan AudioInput,
 		completed chan<- string,
 		observe TranscriptObserver,
 	) error

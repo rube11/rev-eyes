@@ -57,6 +57,7 @@ type CandidateAudioHandler func(
 type AmbientListener func(context.Context, <-chan ambient.Input, func(ambient.Clip)) error
 
 type Handlers struct {
+	ConversationTranscriber stt.ConversationTranscriber
 	// Diagnostics is set only on the separate authenticated live-test server.
 	Diagnostics            bool
 	AmbientObserved        func(context.Context, <-chan ambient.Input, func(ambient.Clip), ambient.Observer) error
