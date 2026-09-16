@@ -379,7 +379,7 @@ test('server listening captures immediately and keeps audio running between manu
   await h.click()
   assert.ok(h.controls.includes('listening_start'))
   await h.click()
-  assert.ok(h.controls.includes('listening_stop'))
+  assert.ok(h.controls.includes('conversation_finalize'))
   assert.equal(h.audio.includes(false), false)
   await h.message('ambient_candidate', { id: 'ambient-manual' })
   await h.message('assistant_done', { id: 'ambient-manual' })
@@ -387,12 +387,14 @@ test('server listening captures immediately and keeps audio running between manu
   assert.match(h.pages.at(-1).label, /LISTENING/)
 })
 
-test('server follow-up expiry disarms the reply without stopping ambient capture', async t => {
+test('server owns follow-up expiry without stopping ambient capture', async t => {
   const h = await harness(t, true)
   await h.message('assistant_response', { text: 'It is noon.' })
   assert.ok(h.controls.includes('ambient_reply_arm'))
   assert.equal(h.controls.includes('listening_start'), false)
   await h.advance(30_000)
+  assert.notEqual(h.pages.at(-1).footer, 'Tap to talk')
+  await h.message('conversation_idle')
   assert.ok(h.controls.includes('ambient_reply_disarm'))
   assert.equal(h.controls.includes('ambient_stop'), false)
   assert.equal(h.audio.at(-1), true)
@@ -439,11 +441,30 @@ test('failed server capture on wake keeps the microphone error visible', async t
   assert.match(h.pages.at(-1).label, /MIC UNAVAILABLE/)
 })
 
-test('server tap finishes buffered follow-up before disarming recognition', async t => {
+test('server tap dismisses a visible answer and closes only the conversation', async t => {
   const h = await harness(t, true)
   await h.message('assistant_response', { text: 'It is noon.' })
   await h.pcm(new Uint8Array([1, 0, 2, 0]))
   const before = h.controls.length
   await h.click()
-  assert.deepEqual(h.controls.slice(before, before + 2), ['listening_stop', 'ambient_reply_disarm'])
+  assert.deepEqual(h.controls.slice(before, before + 2), ['conversation_stop', 'ambient_reply_disarm'])
+  assert.equal(h.controls.includes('ambient_stop'), false)
+  assert.equal(h.audio.at(-1), true)
+})
+
+test('streaming conversation accepts a keyword trigger and consecutive replies without restarting capture', async t => {
+  const h = await harness(t, true)
+  await h.message('conversation_started')
+  await h.message('user_transcript', { text: 'Glasses what is for dinner?' })
+  await h.message('assistant_thinking')
+  await h.message('assistant_response', { text: 'Try a vegetable curry.' })
+  await h.advance(45_000)
+  await h.message('user_transcript', { text: 'What ingredients do I need?' })
+  await h.message('assistant_thinking')
+  await h.message('assistant_response', { text: 'Chickpeas, vegetables and coconut milk.' })
+  assert.equal(h.audio.filter(Boolean).length, 1)
+  assert.equal(h.audio.includes(false), false)
+  assert.equal(h.controls.includes('conversation_stop'), false)
+  await h.message('conversation_idle')
+  assert.equal(h.pages.at(-1).footer, 'Tap to talk')
 })

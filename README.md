@@ -10,8 +10,8 @@ The project is currently in private beta.
 ## What it does
 
 - Streams tap-to-talk audio from the glasses and transcribes it with Deepgram.
-- Optionally listens continuously with server-side Moonshine and sends triggered
-  audio clips to Deepgram. See [server listening setup](backend/docs/server-moonshine.md).
+- Listens for keywords with server-side Moonshine, then opens one Deepgram stream
+  for the conversation. See [server listening setup](backend/docs/server-moonshine.md).
 - Routes conversations through OpenAI with relevant user and session context.
 - Builds a bounded memory profile from conversations and supports explicit
   remembering, correcting, reviewing, and forgetting.

@@ -1,5 +1,6 @@
 type TimerHandle = unknown
 type Options = {
+  serverManaged?: boolean
   conversationWindowMs?: number
   onConversationExpired: () => void
   scheduleTimer?: (callback: () => void, delayMs: number) => TimerHandle
@@ -27,6 +28,7 @@ export class AssistantResponseLifecycle {
     this.cancel()
     const generation = this.generation
     this.conversationActive = true
+    if (this.options.serverManaged) return
     this.timer = this.scheduleTimer(() => {
       if (generation !== this.generation || !this.conversationActive) return
       this.timer = undefined

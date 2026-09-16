@@ -178,6 +178,7 @@ export async function initializeEvenExperience(
     stop: () => bridge.audioControl(false),
   })
   const responseLifecycle = new AssistantResponseLifecycle({
+    serverManaged: serverListeningEnabled,
     onConversationExpired: handleResponseConversationExpired,
   })
   function reportStatus(status: string) {
@@ -896,6 +897,30 @@ export async function initializeEvenExperience(
 
   async function handleServerMessage(message: RealtimeServerMessage) {
     switch (message.type) {
+      case "conversation_started": {
+        if (!serverListeningEnabled || sleeping) return
+        cancelAssistantResponseWindow()
+        latestTranscript = ""
+        visibleAssistant = undefined
+        listeningState = "listening"
+        awaitingResponse = false
+        reportStatus("Listening")
+        if (!currentNotification) await showListening()
+        return
+      }
+      case "conversation_idle": {
+        if (!serverListeningEnabled) return
+        cancelAssistantResponseWindow()
+        listeningState = "idle"
+        awaitingResponse = false
+        clearThinkingAnimation()
+        reportStatus(sleeping ? "Sleeping" : "Connected")
+        if (!sleeping && !currentNotification) {
+          if (visibleAssistant) await refreshAnswerStatus()
+          else await showReady()
+        }
+        return
+      }
       case "workspace_changed": {
         if (message.resources) {
           onWorkspaceChanged(message.resources)
@@ -1051,9 +1076,18 @@ export async function initializeEvenExperience(
     }
 
     if (listeningState === "listening") {
+      if (serverListeningEnabled && visibleAssistant && surface === "message" && !latestTranscript) {
+        sendControl("conversation_stop")
+        cancelAssistantResponseWindow()
+        listeningState = "idle"
+        awaitingResponse = false
+        visibleAssistant = undefined
+        await showReady()
+        return
+      }
       // Finish a server reply before disarming its capture window. Recognition
       // may still be catching up with the final microphone frames.
-      const serverFinished = serverListeningEnabled ? sendControl("listening_stop") : undefined
+      const serverFinished = serverListeningEnabled ? sendControl("conversation_finalize") : undefined
       cancelAssistantResponseWindow()
       listeningState = "stopping"
       awaitingResponse = true

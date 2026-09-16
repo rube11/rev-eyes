@@ -1,8 +1,9 @@
 # Server-side Moonshine listening
 
 The default path forwards G2 PCM to Go during ambient listening. Native Moonshine
-recognizes speech on the server; the existing phrase policy gates finite Deepgram
-Nova-3 clips. No Python runtime or worker is used. Master’s manual Deepgram mode remains available when the new flag is off.
+recognizes speech on the server; the phrase policy opens a persistent Deepgram
+Nova-3 connection for an active conversation. No Python runtime or worker is used.
+Manual Deepgram mode remains available when the server-listening flag is off.
 
 ## Runtime and audio behavior
 
@@ -13,23 +14,28 @@ Nova-3 clips. No Python runtime or worker is used. Master’s manual Deepgram mo
   session; excess sessions fail explicitly, without paid-streaming fallback.
 - PCM is 16 kHz mono signed little-endian 16-bit. Each session keeps 30 seconds
   (960 KB) of PCM and evaluates recognition every 250 ms of received audio.
-- Triggered clips include up to 10 seconds before the detected line, and two
-  seconds after completion. A clip is capped at 30 seconds. Long uninterrupted
-  requests can therefore be truncated; subsequent segments need a new trigger.
+- A keyword in a partial Moonshine transcript opens Deepgram immediately. The
+  buffered audio includes up to 10 seconds before the detected line, followed by
+  continuous live audio. The buffer's 30-second limit does not truncate ongoing
+  speech. Moonshine pauses inference during the active Deepgram conversation.
 - Streams are recreated every 60 seconds with five seconds of audio replay to
   bound native transcript/audio history. Sample offsets suppress duplicate wakes.
   This should be evaluated against real long-form speech at stream boundaries.
-- A manual tap opens a bounded candidate without a keyword. Tap-to-finish flushes
-  it, including a reply whose first rough transcript has not arrived yet. Audio and control messages share one ordered queue.
-- After a displayed assistant response, the frontend may arm one keyword-free
-  reply. The server expires that authorization after at most 30 seconds even if
-  WebView timers stop; frontend dismissal disarms it sooner.
-- The existing candidate worker handles Deepgram concurrency, timeout, PCM
-  clearing, accurate-transcript wake validation, and assistant routing. Rough
-  Moonshine text stays out of history, logs, and glasses transcripts.
+- A manual tap opens a conversation without a keyword. Tap-to-finish flushes
+  remaining PCM and asks Deepgram to finalize the utterance while keeping the
+  connection open. Tapping a displayed answer dismisses the conversation.
+- The same Deepgram connection handles subsequent replies without a keyword.
+  The server closes it after 30 seconds without transcript activity or an
+  assistant completion; an in-flight assistant turn has its own 60-second limit.
+  Phone timers do not own this deadline. Idle returns to native keyword listening.
+- Streaming conversations share paid-transcription admission with diagnostic
+  clips. Automatic wakes require an accurate wake phrase before the first
+  assistant turn; later turns use the normal utterance handler. Rough Moonshine
+  text stays out of history, logs, and glasses transcripts.
 - WebSocket disconnect or explicit app sleep cancels native listening, active
-  ambient clip processing, and queued ambient clips, dropping pending raw audio. Reconnect starts fresh. Audio overload fails the connection
-  rather than building an unbounded backlog or blocking control messages.
+  conversations and queued audio. Reconnect starts fresh. Audio and controls share
+  a bounded ordered queue; brief inference pauses apply backpressure, and a
+  two-second stall fails explicitly.
 - The frontend's server flag disables local Moonshine loading. Phone lock is
   supported as long as G2 PCM/WebSocket forwarding continues, as observed on the
   device. Real-device end-to-end behavior still needs validation after deployment.
@@ -69,7 +75,7 @@ native Moonshine.
 ## Integration with the regular app
 
 The listening pipeline changes only audio capture and transcription. Accurate
-Deepgram clips enter the same utterance handler as live voice input, including
+Deepgram utterances enter the same handler as manual voice input, including
 session reopening and account-level turn ordering shared with typed chat.
 Routing, tools, reminders, watches, profiles, and background memory learning
 use the regular application services.
@@ -127,7 +133,13 @@ CGO_LDFLAGS='-L/tmp/rev-eyes-moonshine/lib -Wl,-rpath,/tmp/rev-eyes-moonshine/li
 ```
 
 Set `MOONSHINE_TEST_WAV` to the upstream v0.1.5 `test-assets/two_cities_16k.wav`
-fixture to include real speech inference. No test calls the paid Deepgram API.
+fixture to include real speech inference. Paid Deepgram tests require explicit
+`MOONSHINE_TEST_LIVE_DEEPGRAM=true`, `DEEPGRAM_API_KEY`, and synthetic PCM fixtures:
+`MOONSHINE_TEST_PCM` says "glasses remind me to buy milk tomorrow" and
+`MOONSHINE_TEST_FOLLOWUP_PCM` says "what about tomorrow" (16 kHz mono PCM16LE).
+`TestNativeStreamingConversationRoundTrip` verifies two assistant turns on one
+connection, idle closure, and return to native listening. Its assistant is a
+test stub, so no actions or user memories are created.
 
 Before enabling for users, measure trigger recall, false wakes, latency, CPU/RAM,
 and concurrency on the deployment host using recorded G2 audio. A desktop native
