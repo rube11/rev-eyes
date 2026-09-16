@@ -54,6 +54,7 @@ type Server struct {
 	candidateAdmissions chan struct{}
 	candidatePermits    chan struct{}
 	candidateTimeout    time.Duration
+	conversationIdle    time.Duration
 	turns               *turnCoordinator
 	upgrader            websocket.Upgrader
 	hub                 *Hub
@@ -390,7 +391,13 @@ func (s *Server) serveConnection(
 				done := make(chan error, 1)
 				transcription = done
 				go func(input <-chan ambient.Input) {
-					done <- s.listenAmbient(ambientCtx, conn, input, candidateJobs)
+					if s.handlers.AmbientStreaming != nil && !s.handlers.Diagnostics {
+						done <- s.handlers.AmbientStreaming(ambientCtx, input, func(ctx context.Context, audio <-chan []byte, automatic bool) error {
+							return s.runConversation(ctx, scope, conn, audio, automatic)
+						})
+					} else {
+						done <- s.listenAmbient(ambientCtx, conn, input, candidateJobs)
+					}
 				}(ambientInputs)
 
 			case "ambient_stop":
@@ -400,7 +407,7 @@ func (s *Server) serveConnection(
 						return err
 					}
 				}
-			case "ambient_reply_arm", "ambient_reply_disarm":
+			case "ambient_reply_arm", "ambient_reply_disarm", "conversation_finalize", "conversation_stop":
 				if ambientActive {
 					if err := enqueueAmbient(ctx, ambientInputs, ambient.Input{Control: message.Type}); err != nil {
 						return err

@@ -61,6 +61,7 @@ type Handlers struct {
 	Diagnostics            bool
 	AmbientObserved        func(context.Context, <-chan ambient.Input, func(ambient.Clip), ambient.Observer) error
 	Ambient                AmbientListener
+	AmbientStreaming       func(context.Context, <-chan ambient.Input, ambient.Conversation) error
 	CandidateAudio         CandidateAudioHandler
 	CandidateMaxConcurrent int
 	ClientDiagnostic       ClientDiagnosticHandler

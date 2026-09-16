@@ -183,6 +183,7 @@ func run() error {
 		return err
 	}
 	var ambientHandler realtime.AmbientListener
+	var streamingAmbient func(context.Context, <-chan ambient.Input, ambient.Conversation) error
 	var observedAmbient func(context.Context, <-chan ambient.Input, func(ambient.Clip), ambient.Observer) error
 	if serverMoonshineEnabled(os.Getenv("SERVER_MOONSHINE_ENABLED")) {
 		concurrencyValue := strings.TrimSpace(os.Getenv("SERVER_MOONSHINE_MAX_CONCURRENCY"))
@@ -200,6 +201,7 @@ func run() error {
 		defer factory.Close()
 		listener := &ambient.Listener{Factory: factory}
 		ambientHandler = listener.Run
+		streamingAmbient = listener.RunStreaming
 		observedAmbient = listener.RunObserved
 	}
 	var candidateAudioHandler realtime.CandidateAudioHandler
@@ -330,6 +332,7 @@ func run() error {
 	realtimeServer := realtime.NewServerWithHub(transcriber, realtimeHub, realtime.Handlers{
 		Ambient:                ambientHandler,
 		CandidateAudio:         candidateAudioHandler,
+		AmbientStreaming:       streamingAmbient,
 		CandidateMaxConcurrent: candidateMaxConcurrent,
 		ClientDiagnostic:       clientDiagnosticHandler,
 		Authenticate:           tickets.Consume,
