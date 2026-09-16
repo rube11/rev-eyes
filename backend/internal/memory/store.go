@@ -12,7 +12,6 @@ const (
 )
 
 var (
-	ErrDatabaseRequired       = errors.New("memory database is required")
 	ErrScopeRequired          = errors.New("memory scope is required")
 	ErrSourceRequired         = errors.New("source utterance ID is required")
 	ErrSourceUnavailable      = errors.New("source utterance is unavailable")
@@ -26,9 +25,9 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-func NewStore(pool *pgxpool.Pool) (*Store, error) {
+func NewStore(pool *pgxpool.Pool) *Store {
 	if pool == nil {
-		return nil, ErrDatabaseRequired
+		panic("database pool is required")
 	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool}
 }

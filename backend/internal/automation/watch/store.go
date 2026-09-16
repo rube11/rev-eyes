@@ -11,7 +11,6 @@ import (
 )
 
 var (
-	ErrDatabaseRequired  = errors.New("watch database is required")
 	ErrScopeRequired     = errors.New("watch scope is required")
 	ErrUtteranceRequired = errors.New("watch utterance is required")
 	ErrSessionInactive   = errors.New("watch session is not active")
@@ -22,11 +21,11 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-func NewStore(pool *pgxpool.Pool) (*Store, error) {
+func NewStore(pool *pgxpool.Pool) *Store {
 	if pool == nil {
-		return nil, ErrDatabaseRequired
+		panic("database pool is required")
 	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool}
 }
 
 func (s *Store) Propose(

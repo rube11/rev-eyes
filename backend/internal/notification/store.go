@@ -13,7 +13,6 @@ import (
 const maxTextLength = 1000
 
 var (
-	ErrDatabaseRequired       = errors.New("notification database is required")
 	ErrUserIDRequired         = errors.New("notification user ID is required")
 	ErrTextInvalid            = errors.New("notification text must contain 1 to 1000 characters")
 	ErrNotificationIDRequired = errors.New("notification ID is required")
@@ -28,11 +27,11 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-func NewStore(pool *pgxpool.Pool) (*Store, error) {
+func NewStore(pool *pgxpool.Pool) *Store {
 	if pool == nil {
-		return nil, ErrDatabaseRequired
+		panic("database pool is required")
 	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool}
 }
 
 func (s *Store) Create(ctx context.Context, userID, text string) (Notification, error) {

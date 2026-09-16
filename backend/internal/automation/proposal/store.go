@@ -14,7 +14,6 @@ import (
 )
 
 var (
-	ErrDatabaseRequired  = errors.New("proposal database is required")
 	ErrScopeRequired     = errors.New("proposal scope is required")
 	ErrUtteranceRequired = errors.New("proposal utterance is required")
 	ErrStatusInvalid     = errors.New("proposal status is invalid")
@@ -25,11 +24,11 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-func NewStore(pool *pgxpool.Pool) (*Store, error) {
+func NewStore(pool *pgxpool.Pool) *Store {
 	if pool == nil {
-		return nil, ErrDatabaseRequired
+		panic("database pool is required")
 	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool}
 }
 
 func (s *Store) ResolvePending(

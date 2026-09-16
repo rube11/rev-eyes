@@ -55,38 +55,14 @@ func run() error {
 	}
 	defer databasePool.Close()
 	slog.Info("database connection established")
-	sessionStore, err := session.NewStore(databasePool)
-	if err != nil {
-		return err
-	}
-	memoryStore, err := memory.NewStore(databasePool)
-	if err != nil {
-		return err
-	}
-	reminderStore, err := reminder.NewStore(databasePool)
-	if err != nil {
-		return err
-	}
-	watchStore, err := watch.NewStore(databasePool)
-	if err != nil {
-		return err
-	}
-	proposalStore, err := proposal.NewStore(databasePool)
-	if err != nil {
-		return err
-	}
-	notificationStore, err := notification.NewStore(databasePool)
-	if err != nil {
-		return err
-	}
-	registrationStore, err := registration.NewStore(databasePool)
-	if err != nil {
-		return err
-	}
-	scheduledEventStore, err := scheduler.NewStore(databasePool)
-	if err != nil {
-		return err
-	}
+	sessionStore := session.NewStore(databasePool)
+	memoryStore := memory.NewStore(databasePool)
+	reminderStore := reminder.NewStore(databasePool)
+	watchStore := watch.NewStore(databasePool)
+	proposalStore := proposal.NewStore(databasePool)
+	notificationStore := notification.NewStore(databasePool)
+	registrationStore := registration.NewStore(databasePool)
+	scheduledEventStore := scheduler.NewStore(databasePool)
 	scheduleRegistrar, err := registration.NewClient(
 		os.Getenv("SCHEDULE_REGISTRAR_URL"),
 		&http.Client{Timeout: 10 * time.Second},
