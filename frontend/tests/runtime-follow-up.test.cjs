@@ -7,7 +7,7 @@ const ts = require('typescript')
 
 // Exercise the real runtime, lifecycle and audio controller with fake SDK/socket
 // boundaries. No hardware microphone, network requests, or model calls.
-async function harness(t, serverListeningEnabled = false) {
+async function harness(t, serverListeningEnabled = false, reconnect = false) {
   let now = 0
   let eventHandler
   let allowAudio = true
@@ -20,14 +20,21 @@ async function harness(t, serverListeningEnabled = false) {
   const pages = []
   const statuses = []
   const upgrades = []
-  const listeners = new Map()
-  const socket = {
-    readyState: 1,
-    addEventListener: (type, fn) => listeners.set(type, fn),
-    removeEventListener: (type, fn) => { if (listeners.get(type) === fn) listeners.delete(type) },
-    send: data => { if (typeof data === 'string') controls.push(JSON.parse(data).type); else pcmFrames.push(Array.from(new Uint8Array(data))) },
-    close: () => { socket.readyState = 3; listeners.get('close')?.() },
+  let connectionGate
+  const sockets = []
+  function newSocket() {
+    const listeners = new Map()
+    const socket = {
+      listeners, readyState: 1,
+      addEventListener: (type, fn) => listeners.set(type, fn),
+      removeEventListener: (type, fn) => { if (listeners.get(type) === fn) listeners.delete(type) },
+      send: data => { if (typeof data === 'string') controls.push(JSON.parse(data).type); else pcmFrames.push(Array.from(new Uint8Array(data))) },
+      close: () => { socket.readyState = 3; listeners.get('close')?.() },
+    }
+    sockets.push(socket)
+    return socket
   }
+  let socket = newSocket()
   const bridge = {
     audioControl: async enabled => {
       audio.push(enabled)
@@ -60,7 +67,12 @@ async function harness(t, serverListeningEnabled = false) {
       buildTranscriptPage: text => ({ transcript: text }),
       presentGlassesMessage: text => ({ kind: 'answer', body: text }),
     },
-    '../shared/api/client': { connectRealtimeSocket: async () => socket },
+    '../shared/api/client': { connectRealtimeSocket: async () => {
+      if (reconnect && socket.readyState !== 1) socket = newSocket()
+      const opened = socket
+      if (connectionGate) await connectionGate
+      return opened
+    } },
   }
   const context = vm.createContext({
     console, AbortController, Uint8Array, WebSocket: { OPEN: 1 },
@@ -102,7 +114,7 @@ async function harness(t, serverListeningEnabled = false) {
   const dispose = await initializeEvenExperience('synthetic-test-token', value => statuses.push(value))
   t.after(dispose)
   await advance(0)
-  const message = async (type, extra = {}) => { listeners.get('message')?.({ data: JSON.stringify({ type, ...extra }) }); await flush() }
+  const message = async (type, extra = {}) => { socket.listeners.get('message')?.({ data: JSON.stringify({ type, ...extra }) }); await flush() }
   const click = async () => { eventHandler?.({ sysEvent: { eventType: 0 } }); await flush() }
   const sleep = async () => { eventHandler?.({ jsonData: { gesture: 'LONG_PRESS' } }); await flush() }
   const scroll = async direction => { eventHandler?.({ textEvent: { eventType: direction > 0 ? 2 : 1 } }); await flush() }
@@ -112,7 +124,8 @@ async function harness(t, serverListeningEnabled = false) {
     await message('assistant_thinking')
     await message('assistant_response', { text: 'It is noon.' })
   }
-  return { audio, controls, pages, statuses, upgrades, pcmFrames,
+  return { audio, controls, pages, statuses, upgrades, pcmFrames, sockets,
+    delayConnection: () => { let release; connectionGate = new Promise(resolve => { release = resolve }); return release },
     pcm: async pcm => { eventHandler?.({ audioEvent: { audioPcm: pcm } }); await flush() }, message, click, sleep, scroll, reply, advance, dispose,
     disconnect: async () => { socket.close(); await flush() },
     denyAudio: () => { allowAudio = false },
@@ -466,5 +479,49 @@ test('streaming conversation accepts a keyword trigger and consecutive replies w
   assert.equal(h.audio.includes(false), false)
   assert.equal(h.controls.includes('conversation_stop'), false)
   await h.message('conversation_idle')
+  assert.equal(h.pages.at(-1).footer, 'Tap to talk')
+})
+
+
+test('reconnect starts fresh capture and ignores events from the old socket', async t => {
+  const h = await harness(t, true, true)
+  const oldMessage = h.sockets[0].listeners.get('message')
+  await h.message('conversation_started')
+  await h.disconnect()
+  await h.advance(1_000)
+  assert.equal(h.sockets.length, 2)
+  assert.equal(h.controls.filter(x => x === 'ambient_start').length, 2)
+  const pageCount = h.pages.length
+  oldMessage({ data: JSON.stringify({ type: 'assistant_response', text: 'Stale reply' }) })
+  await h.advance(500)
+  assert.equal(h.pages.length, pageCount)
+  assert.equal(h.audio.at(-1), true)
+})
+
+test('teardown closes a socket that finishes connecting late', async t => {
+  const h = await harness(t, true, true)
+  const release = h.delayConnection()
+  await h.disconnect()
+  await h.advance(1_000)
+  await h.dispose()
+  release()
+  await h.advance(0)
+  assert.equal(h.sockets.at(-1).readyState, 3)
+  assert.equal(h.audio.at(-1), false)
+  assert.equal(h.controls.filter(x => x === 'ambient_start').length, 1)
+})
+
+test('server notifications defer answers and acknowledge dismissal without stopping ambient capture', async t => {
+  const h = await harness(t, true)
+  await h.message('assistant_response', { text: 'First answer' })
+  await h.message('notification', { id: 'n1', text: 'Reminder' })
+  await h.message('assistant_response', { text: 'Deferred answer' })
+  assert.equal(h.pages.at(-1).message.body, 'Reminder')
+  await h.click()
+  assert.ok(h.controls.includes('notification_ack'))
+  assert.equal(h.pages.at(-1).message.body, 'Deferred answer')
+  assert.equal(h.controls.includes('ambient_stop'), false)
+  await h.message('conversation_idle')
+  assert.equal(h.audio.at(-1), true)
   assert.equal(h.pages.at(-1).footer, 'Tap to talk')
 })
