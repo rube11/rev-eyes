@@ -247,15 +247,10 @@ func run() error {
 		}
 	}
 
-	toolExecutor, err := tool.NewExecutor(toolRegistry)
-	if err != nil {
-		return err
-	}
 	agent, err := openai.NewAgent(
 		os.Getenv("OPENAI_API_KEY"),
 		os.Getenv("OPENAI_AGENT_MODEL"),
 		toolRegistry,
-		toolExecutor,
 	)
 	if err != nil {
 		return err

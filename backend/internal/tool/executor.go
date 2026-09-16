@@ -3,28 +3,12 @@ package tool
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 )
 
-var ErrRegistryRequired = errors.New("tool registry is required")
-
-// Executor resolves and runs registered tools.
-type Executor struct {
-	registry *Registry
-}
-
-func NewExecutor(registry *Registry) (*Executor, error) {
-	if registry == nil {
-		return nil, ErrRegistryRequired
-	}
-
-	return &Executor{registry: registry}, nil
-}
-
 // Execute validates a tool call, resolves it through the registry, and runs it.
-func (e *Executor) Execute(
+func (r *Registry) Execute(
 	ctx context.Context,
 	scope Scope,
 	name string,
@@ -46,7 +30,7 @@ func (e *Executor) Execute(
 		return Result{}, fmt.Errorf("tool %q received invalid JSON arguments", name)
 	}
 
-	selected, found := e.registry.Get(name)
+	selected, found := r.Get(name)
 	if !found {
 		return Result{}, fmt.Errorf("tool %q is not registered", name)
 	}

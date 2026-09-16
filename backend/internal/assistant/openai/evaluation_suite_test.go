@@ -299,11 +299,8 @@ func TestLiveWebFailureEvaluationScenarios(t *testing.T) {
 			if err := registry.Register(search); err != nil {
 				t.Fatalf("Register(search_web) error = %v", err)
 			}
-			executor, err := tool.NewExecutor(registry)
-			if err != nil {
-				t.Fatalf("NewExecutor() error = %v", err)
-			}
-			agent, err := NewAgent(apiKey, requiredLiveEnv(t, "OPENAI_AGENT_MODEL"), registry, executor)
+
+			agent, err := NewAgent(apiKey, requiredLiveEnv(t, "OPENAI_AGENT_MODEL"), registry)
 			if err != nil {
 				t.Fatalf("NewAgent() error = %v", err)
 			}

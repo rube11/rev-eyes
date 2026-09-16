@@ -56,7 +56,6 @@ type Agent struct {
 	apiKey        string
 	model         string
 	registry      *tool.Registry
-	executor      *tool.Executor
 	client        *http.Client
 	endpoint      string
 	maxToolRounds int
@@ -67,7 +66,6 @@ func NewAgent(
 	apiKey string,
 	model string,
 	registry *tool.Registry,
-	executor *tool.Executor,
 ) (*Agent, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	model = strings.TrimSpace(model)
@@ -79,15 +77,12 @@ func NewAgent(
 		return nil, errors.New("OpenAI model is required")
 	case registry == nil:
 		return nil, errors.New("tool registry is required")
-	case executor == nil:
-		return nil, errors.New("tool executor is required")
 	}
 
 	return &Agent{
 		apiKey:        apiKey,
 		model:         model,
 		registry:      registry,
-		executor:      executor,
 		client:        &http.Client{Timeout: 30 * time.Second},
 		endpoint:      responsesURL,
 		maxToolRounds: defaultMaxToolRounds,

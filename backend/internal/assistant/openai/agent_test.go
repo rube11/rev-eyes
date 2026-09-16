@@ -289,11 +289,8 @@ func testAgent(
 			t.Fatalf("Register() error = %v", err)
 		}
 	}
-	executor, err := tool.NewExecutor(registry)
-	if err != nil {
-		t.Fatalf("NewExecutor() error = %v", err)
-	}
-	agent, err := NewAgent("test-key", "test-model", registry, executor)
+
+	agent, err := NewAgent("test-key", "test-model", registry)
 	if err != nil {
 		t.Fatalf("NewAgent() error = %v", err)
 	}

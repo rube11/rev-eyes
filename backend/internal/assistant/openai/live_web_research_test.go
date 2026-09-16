@@ -47,31 +47,24 @@ func TestLiveEyesWebResearchScenarios(t *testing.T) {
 			if err := registry.Register(recordedSearch); err != nil {
 				t.Fatalf("Register(search_web) error = %v", err)
 			}
-			executor, err := tool.NewExecutor(registry)
-			if err != nil {
-				t.Fatalf("tool.NewExecutor() error = %v", err)
-			}
+
 			agent, err := NewAgent(
 				openAIKey,
 				requiredLiveEnv(t, "OPENAI_AGENT_MODEL"),
 				registry,
-				executor,
 			)
 			if err != nil {
 				t.Fatalf("NewAgent() error = %v", err)
 			}
 
 			memoryReader := &scenarioMemoryReader{cards: scenario.memories}
-			service, err := assistant.NewService(
+			service := assistant.NewService(
 				assistant.NewRouter(classify),
 				agent,
 				memoryReader,
 				emptyConversationReader{},
 				noProposalConfirmer{},
 			)
-			if err != nil {
-				t.Fatalf("assistant.NewService() error = %v", err)
-			}
 
 			for _, card := range scenario.memories {
 				if err := card.Normalize().Validate(); err != nil {
