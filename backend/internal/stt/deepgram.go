@@ -36,6 +36,14 @@ func (dg *deepgramTranscriber) Transcribe(
 	completed chan<- string,
 	observe TranscriptObserver,
 ) error {
+	return dg.transcribe(ctx, audio, completed, observe, false)
+}
+
+func (dg *deepgramTranscriber) TranscribeConversation(ctx context.Context, audio <-chan []byte, completed chan<- string, observe TranscriptObserver) error {
+	return dg.transcribe(ctx, audio, completed, observe, true)
+}
+
+func (dg *deepgramTranscriber) transcribe(ctx context.Context, audio <-chan []byte, completed chan<- string, observe TranscriptObserver, persistent bool) error {
 	if dg.deepgramKey == "" {
 		return errors.New("deepgram API key is required")
 	}
@@ -86,6 +94,10 @@ func (dg *deepgramTranscriber) Transcribe(
 		return errors.New("connect to Deepgram")
 	}
 	defer dgClient.Stop()
+	var endpoint <-chan struct{}
+	if !persistent {
+		endpoint = handler.Endpointed()
+	}
 
 	for {
 		select {
@@ -95,18 +107,30 @@ func (dg *deepgramTranscriber) Transcribe(
 			}
 			return streamCtx.Err()
 
-		case <-handler.Endpointed():
+		case <-endpoint:
 			return finalizeDeepgramStream(streamCtx, dgClient, handler)
 
 		case chunk, ok := <-audio:
 			if !ok {
+				if persistent {
+					return nil
+				}
 				return finalizeDeepgramStream(streamCtx, dgClient, handler)
+			}
+			if persistent && chunk == nil {
+				if err := dgClient.Finalize(); err != nil {
+					return fmt.Errorf("finalize conversation utterance: %w", err)
+				}
+				continue
 			}
 			if len(chunk) == 0 {
 				continue
 			}
 
 			_, err := dgClient.Write(chunk)
+			if persistent {
+				clear(chunk)
+			}
 			if err != nil {
 				return fmt.Errorf("write audio to Deepgram: %w", err)
 			}
