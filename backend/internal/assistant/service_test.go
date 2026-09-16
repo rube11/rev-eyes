@@ -12,9 +12,9 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
-type routerFunc func(ctx context.Context, utterance string) (Decision, error)
+type routerFunc func(context.Context, string) (Decision, error)
 
-func (f routerFunc) Route(ctx context.Context, utterance string) (Decision, error) {
+func (f routerFunc) RouteWithContext(ctx context.Context, utterance string, _ session.Conversation) (Decision, error) {
 	return f(ctx, utterance)
 }
 
@@ -26,14 +26,9 @@ type agentFunc func(
 	[]memory.Card,
 ) (string, error)
 
-func (f agentFunc) Respond(
-	ctx context.Context,
-	scope tool.Scope,
-	query string,
-	conversation session.Conversation,
-	memories []memory.Card,
-) (string, error) {
-	return f(ctx, scope, query, conversation, memories)
+func (f agentFunc) RespondWithResult(ctx context.Context, scope tool.Scope, query string, conversation session.Conversation, memories []memory.Card) (AgentResult, error) {
+	text, err := f(ctx, scope, query, conversation, memories)
+	return AgentResult{Text: text}, err
 }
 
 type proposalAwareAgentFunc func(
@@ -43,17 +38,6 @@ type proposalAwareAgentFunc func(
 	session.Conversation,
 	[]memory.Card,
 ) (AgentResult, error)
-
-func (f proposalAwareAgentFunc) Respond(
-	ctx context.Context,
-	scope tool.Scope,
-	query string,
-	conversation session.Conversation,
-	memories []memory.Card,
-) (string, error) {
-	result, err := f(ctx, scope, query, conversation, memories)
-	return result.Text, err
-}
 
 func (f proposalAwareAgentFunc) RespondWithResult(
 	ctx context.Context,
@@ -403,7 +387,7 @@ func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
 			utteranceID string,
 			text string,
 		) (session.Conversation, error) {
-			if scope != wantScope || utteranceID != "utterance-789" || text != "What is nearby?" {
+			if scope != wantScope || utteranceID != "utterance-789" || text != "what's around here" {
 				t.Fatalf("Prepare() scope = %#v, utterance ID = %q, text = %q", scope, utteranceID, text)
 			}
 			return wantConversation, nil
@@ -434,7 +418,7 @@ func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
 	}
 }
 
-func TestHandleUtteranceLoadsMemoryAndConversationInParallel(t *testing.T) {
+func TestHandleUtterancePreparesConversationBeforeRoutingAndMemory(t *testing.T) {
 	t.Parallel()
 
 	started := make(chan string, 2)
@@ -468,7 +452,6 @@ func TestHandleUtteranceLoadsMemoryAndConversationInParallel(t *testing.T) {
 			string,
 		) (session.Conversation, error) {
 			started <- "conversation"
-			<-release
 			return session.Conversation{}, nil
 		}),
 		noProposalConfirmation,
@@ -491,13 +474,16 @@ func TestHandleUtteranceLoadsMemoryAndConversationInParallel(t *testing.T) {
 	seen := map[string]bool{}
 	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
-	for range 2 {
+	for index := range 2 {
 		select {
 		case dependency := <-started:
+			if index == 0 && dependency != "conversation" {
+				t.Fatal("memory loaded before conversation preparation")
+			}
 			seen[dependency] = true
 		case <-timer.C:
 			close(release)
-			t.Fatal("memory and conversation context did not start in parallel")
+			t.Fatal("conversation preparation or memory lookup did not start")
 		}
 	}
 	close(release)
@@ -525,7 +511,7 @@ func TestHandleUtteranceDoesNotCallAgentForNonResponseAction(t *testing.T) {
 			return nil, nil
 		}),
 		conversationReaderFunc(func(context.Context, tool.Scope, string, string) (session.Conversation, error) {
-			t.Fatal("Prepare() called for state update")
+			// Context is required before the router can choose state_update.
 			return session.Conversation{}, nil
 		}),
 		noProposalConfirmation,

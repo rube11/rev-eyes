@@ -23,45 +23,21 @@ var (
 
 const proposalResponseFallback = "I have that ready. Should I save it?"
 
-// ActivityRouter decides how the assistant should handle a finalized utterance.
+// ActivityRouter classifies finalized speech using the prepared conversation.
 type ActivityRouter interface {
-	Route(ctx context.Context, utterance string) (Decision, error)
-}
-
-type contextualRouter interface {
 	RouteWithContext(context.Context, string, session.Conversation) (Decision, error)
 }
 
 // Agent generates a response for a routed query. Scope must be populated from
 // trusted authentication and application-session state by the caller.
 type Agent interface {
-	Respond(
-		ctx context.Context,
-		scope tool.Scope,
-		query string,
-		conversation session.Conversation,
-		memories []memory.Card,
-	) (string, error)
+	RespondWithResult(context.Context, tool.Scope, string, session.Conversation, []memory.Card) (AgentResult, error)
 }
 
 // AgentResult includes effects that the response text alone cannot prove.
 type AgentResult struct {
 	Text            string
 	ProposalCreated bool
-}
-
-// ProposalAwareAgent reports whether a successful tool call created a proposal.
-// Agents that do not implement it still work, but never claim confirmation is
-// pending based only on the router's intent.
-type ProposalAwareAgent interface {
-	Agent
-	RespondWithResult(
-		ctx context.Context,
-		scope tool.Scope,
-		query string,
-		conversation session.Conversation,
-		memories []memory.Card,
-	) (AgentResult, error)
 }
 
 // MemoryManager retrieves and manages memories within the trusted user scope.
@@ -154,17 +130,14 @@ func (s *Service) HandleUtterance(
 
 	var conversation session.Conversation
 	var conversationErr error
-	var decision Decision
 	prepared := false
-	if router, ok := s.router.(contextualRouter); ok && !shouldIgnore(utterance) {
+	if !shouldIgnore(utterance) {
 		// Load once before routing so a clarification can change the lookup.
 		// Reuse the same context for the answer; do not add a resolver model call.
 		conversation, conversationErr = s.conversation.Prepare(ctx, scope, utteranceID, utterance)
 		prepared = true
-		decision, err = router.RouteWithContext(ctx, utterance, conversation)
-	} else {
-		decision, err = s.router.Route(ctx, utterance)
 	}
+	decision, err := s.router.RouteWithContext(ctx, utterance, conversation)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("route utterance: %w", err)
 	}
@@ -265,21 +238,8 @@ func (s *Service) HandleUtterance(
 		slog.WarnContext(ctx, "conversation context failed", "error", conversationErr)
 	}
 
-	var response string
-	if proposalAware, ok := s.agent.(ProposalAwareAgent); ok {
-		result, resultErr := proposalAware.RespondWithResult(
-			ctx,
-			turnScope,
-			query,
-			conversation,
-			cards,
-		)
-		response = result.Text
-		outcome.ProposalCreated = result.ProposalCreated
-		err = resultErr
-	} else {
-		response, err = s.agent.Respond(ctx, turnScope, query, conversation, cards)
-	}
+	result, err := s.agent.RespondWithResult(ctx, turnScope, query, conversation, cards)
+	outcome.ProposalCreated = result.ProposalCreated
 	if err != nil && outcome.ProposalCreated && ctx.Err() == nil {
 		slog.WarnContext(
 			ctx,
@@ -292,7 +252,7 @@ func (s *Service) HandleUtterance(
 	if err != nil {
 		return outcome, fmt.Errorf("generate assistant response: %w", err)
 	}
-	outcome.Response = strings.TrimSpace(response)
+	outcome.Response = strings.TrimSpace(result.Text)
 
 	return outcome, nil
 }
