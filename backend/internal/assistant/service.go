@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -11,14 +10,6 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
-)
-
-var (
-	ErrRouterRequired            = errors.New("assistant router is required")
-	ErrAgentRequired             = errors.New("assistant agent is required")
-	ErrMemoryRequired            = errors.New("assistant memory reader is required")
-	ErrConversationRequired      = errors.New("assistant conversation reader is required")
-	ErrProposalConfirmerRequired = errors.New("assistant proposal confirmer is required")
 )
 
 const proposalResponseFallback = "I have that ready. Should I save it?"
@@ -81,21 +72,9 @@ func NewService(
 	memories MemoryManager,
 	conversation ConversationReader,
 	proposals ProposalConfirmer,
-) (*Service, error) {
-	if activityRouter == nil {
-		return nil, ErrRouterRequired
-	}
-	if agent == nil {
-		return nil, ErrAgentRequired
-	}
-	if memories == nil {
-		return nil, ErrMemoryRequired
-	}
-	if conversation == nil {
-		return nil, ErrConversationRequired
-	}
-	if proposals == nil {
-		return nil, ErrProposalConfirmerRequired
+) *Service {
+	if activityRouter == nil || agent == nil || memories == nil || conversation == nil || proposals == nil {
+		panic("assistant dependencies are required")
 	}
 
 	return &Service{
@@ -104,7 +83,7 @@ func NewService(
 		memories:     memories,
 		conversation: conversation,
 		proposals:    proposals,
-	}, nil
+	}
 }
 
 // HandleUtterance resolves clear proposal confirmations, then routes new speech.

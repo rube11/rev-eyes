@@ -176,7 +176,7 @@ var noProposalConfirmation = proposalConfirmerFunc(func(
 })
 
 func TestHandleUtteranceUsesActualProposalResult(t *testing.T) {
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{Action: ActionProposeTask, Query: "tomorrow after class"}, nil
 		}),
@@ -196,9 +196,6 @@ func TestHandleUtteranceUsesActualProposalResult(t *testing.T) {
 		noConversation,
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
 
 	outcome, err := service.HandleUtterance(
 		context.Background(),
@@ -227,7 +224,7 @@ func TestHandleUtteranceRespondsToMeaningfulStateTransition(t *testing.T) {
 		Title:   "Daily protein target",
 		Summary: "The user targets 150 grams of protein per day.",
 	}}
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{
 				Action:       ActionStateTransition,
@@ -261,9 +258,7 @@ func TestHandleUtteranceRespondsToMeaningfulStateTransition(t *testing.T) {
 		noConversation,
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
+
 	outcome, err := service.HandleUtterance(
 		context.Background(),
 		tool.Scope{UserID: "user-1", SessionID: "session-1"},
@@ -280,7 +275,7 @@ func TestHandleUtteranceRespondsToMeaningfulStateTransition(t *testing.T) {
 }
 
 func TestHandleUtteranceFallsBackAfterProposalResponseFailure(t *testing.T) {
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{Action: ActionProposeTask}, nil
 		}),
@@ -297,9 +292,6 @@ func TestHandleUtteranceFallsBackAfterProposalResponseFailure(t *testing.T) {
 		noConversation,
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
 
 	outcome, err := service.HandleUtterance(
 		context.Background(),
@@ -341,7 +333,7 @@ func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
 		}},
 	}
 	agentCalled := false
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{
 				Action:       ActionRespond,
@@ -394,9 +386,6 @@ func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
 		}),
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
 
 	outcome, err := service.HandleUtterance(
 		context.Background(),
@@ -423,7 +412,7 @@ func TestHandleUtterancePreparesConversationBeforeRoutingAndMemory(t *testing.T)
 
 	started := make(chan string, 2)
 	release := make(chan struct{})
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{Action: ActionRespond, Query: "dinner ideas"}, nil
 		}),
@@ -456,9 +445,6 @@ func TestHandleUtterancePreparesConversationBeforeRoutingAndMemory(t *testing.T)
 		}),
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
 
 	done := make(chan error, 1)
 	go func() {
@@ -498,7 +484,7 @@ func TestHandleUtterancePreparesConversationBeforeRoutingAndMemory(t *testing.T)
 func TestHandleUtteranceDoesNotCallAgentForNonResponseAction(t *testing.T) {
 	t.Parallel()
 
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{Action: ActionStateUpdate}, nil
 		}),
@@ -516,9 +502,6 @@ func TestHandleUtteranceDoesNotCallAgentForNonResponseAction(t *testing.T) {
 		}),
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
 
 	outcome, err := service.HandleUtterance(context.Background(), tool.Scope{}, "utterance-1", "I'm at work")
 	if err != nil {
@@ -535,7 +518,7 @@ func TestHandleUtteranceDoesNotCallAgentForNonResponseAction(t *testing.T) {
 func TestHandleUtteranceUsesOriginalUtteranceWhenQueryIsEmpty(t *testing.T) {
 	t.Parallel()
 
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{Action: ActionRespond}, nil
 		}),
@@ -549,9 +532,6 @@ func TestHandleUtteranceUsesOriginalUtteranceWhenQueryIsEmpty(t *testing.T) {
 		noConversation,
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
 
 	if _, err := service.HandleUtterance(
 		context.Background(),
@@ -567,7 +547,7 @@ func TestHandleUtteranceWrapsDependencyErrors(t *testing.T) {
 	t.Parallel()
 
 	routeErr := errors.New("route failed")
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{}, routeErr
 		}),
@@ -578,15 +558,13 @@ func TestHandleUtteranceWrapsDependencyErrors(t *testing.T) {
 		noConversation,
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
+
 	if _, err := service.HandleUtterance(context.Background(), tool.Scope{}, "utterance-1", "hello"); !errors.Is(err, routeErr) {
 		t.Fatalf("HandleUtterance() error = %v, want wrapped route error", err)
 	}
 
 	agentErr := errors.New("agent failed")
-	service, err = NewService(
+	service = NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{Action: ActionRespond, Query: "hello"}, nil
 		}),
@@ -597,9 +575,7 @@ func TestHandleUtteranceWrapsDependencyErrors(t *testing.T) {
 		noConversation,
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
+
 	if _, err := service.HandleUtterance(context.Background(), tool.Scope{}, "utterance-1", "hello"); !errors.Is(err, agentErr) {
 		t.Fatalf("HandleUtterance() error = %v, want wrapped agent error", err)
 	}
@@ -608,7 +584,7 @@ func TestHandleUtteranceWrapsDependencyErrors(t *testing.T) {
 func TestHandleUtteranceContinuesWhenMemoryLookupFails(t *testing.T) {
 	t.Parallel()
 
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{Action: ActionRespond, Query: "hello"}, nil
 		}),
@@ -627,9 +603,6 @@ func TestHandleUtteranceContinuesWhenMemoryLookupFails(t *testing.T) {
 		noConversation,
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
 
 	outcome, err := service.HandleUtterance(context.Background(), tool.Scope{}, "utterance-1", "hello")
 	if err != nil {
@@ -644,7 +617,7 @@ func TestHandleUtteranceContinuesWhenConversationPreparationFails(t *testing.T) 
 	t.Parallel()
 
 	wantConversation := session.Conversation{Summary: "Recovered context."}
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{Action: ActionRespond, Query: "hello"}, nil
 		}),
@@ -671,9 +644,6 @@ func TestHandleUtteranceContinuesWhenConversationPreparationFails(t *testing.T) 
 		}),
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
 
 	outcome, err := service.HandleUtterance(
 		context.Background(),
@@ -689,29 +659,11 @@ func TestHandleUtteranceContinuesWhenConversationPreparationFails(t *testing.T) 
 	}
 }
 
-func TestNewServiceRequiresDependencies(t *testing.T) {
-	t.Parallel()
-
-	agent := agentFunc(func(context.Context, tool.Scope, string, session.Conversation, []memory.Card) (string, error) {
-		return "", nil
-	})
-	activityRouter := routerFunc(func(context.Context, string) (Decision, error) {
-		return Decision{}, nil
-	})
-
-	if _, err := NewService(nil, agent, noMemories, noConversation, noProposalConfirmation); !errors.Is(err, ErrRouterRequired) {
-		t.Fatalf("NewService(nil, agent) error = %v", err)
-	}
-	if _, err := NewService(activityRouter, nil, noMemories, noConversation, noProposalConfirmation); !errors.Is(err, ErrAgentRequired) {
-		t.Fatalf("NewService(router, nil) error = %v", err)
-	}
-	if _, err := NewService(activityRouter, agent, nil, noConversation, noProposalConfirmation); !errors.Is(err, ErrMemoryRequired) {
-		t.Fatalf("NewService(router, agent, nil) error = %v", err)
-	}
-	if _, err := NewService(activityRouter, agent, noMemories, nil, noProposalConfirmation); !errors.Is(err, ErrConversationRequired) {
-		t.Fatalf("NewService(router, agent, memories, nil) error = %v", err)
-	}
-	if _, err := NewService(activityRouter, agent, noMemories, noConversation, nil); !errors.Is(err, ErrProposalConfirmerRequired) {
-		t.Fatalf("NewService(router, agent, memories, conversation, nil) error = %v", err)
-	}
+func TestNewServiceRejectsIncompleteAssembly(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("incomplete assembly did not panic")
+		}
+	}()
+	NewService(nil, nil, nil, nil, nil)
 }

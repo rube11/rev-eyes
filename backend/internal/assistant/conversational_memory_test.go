@@ -66,7 +66,7 @@ func TestMemoryReviewUsesContextAndExplicitProfileMode(t *testing.T) {
 		}
 		return `{"action":"memory_review","query":"what do you know about me","memory_review_all":true}`, nil
 	})
-	service, err := NewService(router, agentFunc(func(_ context.Context, scope tool.Scope, query string, got session.Conversation, memories []memory.Card) (string, error) {
+	service := NewService(router, agentFunc(func(_ context.Context, scope tool.Scope, query string, got session.Conversation, memories []memory.Card) (string, error) {
 		if query != "I meant me" || !scope.MemoryReview || scope.UtteranceID != "current" || !reflect.DeepEqual(got, prior) || !reflect.DeepEqual(memories, cards) {
 			t.Fatalf("agent lost original context: %q %#v", query, scope)
 		}
@@ -84,9 +84,7 @@ func TestMemoryReviewUsesContextAndExplicitProfileMode(t *testing.T) {
 		}
 		return prior, nil
 	}), noProposalConfirmation)
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	result, err := service.HandleUtterance(ctx, tool.Scope{UserID: "owner", SessionID: "chat"}, "current", "I meant me")
 	if err != nil || result.Response == "" || result.MemoryChanged || result.ProposalCreated || loads != 1 || reviews != 1 || classifications != 1 {
 		t.Fatalf("result=%#v err=%v loads=%d reviews=%d classifications=%d", result, err, loads, reviews, classifications)
@@ -103,7 +101,7 @@ func TestMemoryReviewFallbackIsBoundedAndErrorsStayErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls, agentCalls := 0, 0
-			service, err := NewService(routerFunc(func(context.Context, string) (Decision, error) {
+			service := NewService(routerFunc(func(context.Context, string) (Decision, error) {
 				return Decision{Action: ActionMemoryReview, Query: "school"}, nil
 			}),
 				agentFunc(func(_ context.Context, scope tool.Scope, query string, _ session.Conversation, cards []memory.Card) (string, error) {
@@ -125,10 +123,8 @@ func TestMemoryReviewFallbackIsBoundedAndErrorsStayErrors(t *testing.T) {
 					}
 					return nil, nil
 				}}, noConversation, noProposalConfirmation)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = service.HandleUtterance(context.Background(), tool.Scope{}, "id", "What school do I go to?")
+
+			_, err := service.HandleUtterance(context.Background(), tool.Scope{}, "id", "What school do I go to?")
 			if calls != tc.wantCalls || (err != nil) != (tc.failAt > 0) {
 				t.Fatalf("calls=%d err=%v", calls, err)
 			}
@@ -141,7 +137,7 @@ func TestMemoryReviewFallbackIsBoundedAndErrorsStayErrors(t *testing.T) {
 
 func TestContextualResponseStillRetrievesMemoriesAndLoadsConversationOnce(t *testing.T) {
 	loads, finds := 0, 0
-	service, err := NewService(NewRouter(func(context.Context, string) (string, error) {
+	service := NewService(NewRouter(func(context.Context, string) (string, error) {
 		return `{"action":"respond","query":"Dinner after the gym","memory_lookup":{"terms":["food preference"]}}`, nil
 	}), agentFunc(func(_ context.Context, _ tool.Scope, _ string, _ session.Conversation, cards []memory.Card) (string, error) {
 		if len(cards) != 1 {
@@ -155,9 +151,7 @@ func TestContextualResponseStillRetrievesMemoriesAndLoadsConversationOnce(t *tes
 		loads++
 		return session.Conversation{}, nil
 	}), noProposalConfirmation)
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	if _, err := service.HandleUtterance(context.Background(), tool.Scope{}, "id", "what should I eat"); err != nil {
 		t.Fatal(err)
 	}

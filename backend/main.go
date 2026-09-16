@@ -267,16 +267,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	assistantService, err := assistant.NewService(
+	assistantService := assistant.NewService(
 		activityRouter,
 		agent,
 		memoryStore,
 		conversationManager,
 		proposalConfirmer,
 	)
-	if err != nil {
-		return err
-	}
 
 	notificationService, err := notification.NewService(notificationStore, realtimeHub)
 	if err != nil {

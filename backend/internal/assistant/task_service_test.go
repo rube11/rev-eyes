@@ -14,7 +14,7 @@ func TestHandleUtteranceRoutesTaskCandidateToAgent(t *testing.T) {
 	t.Parallel()
 
 	agentCalled := false
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{
 				Action: ActionProposeTask,
@@ -35,9 +35,6 @@ func TestHandleUtteranceRoutesTaskCandidateToAgent(t *testing.T) {
 		noConversation,
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
 
 	outcome, err := service.HandleUtterance(
 		context.Background(),
@@ -63,7 +60,7 @@ func TestHandleUtteranceResolvesTaskBeforeRouting(t *testing.T) {
 	wantScope := tool.Scope{UserID: "user-1", SessionID: "session-1"}
 	wantTurnScope := wantScope
 	wantTurnScope.UtteranceID = "utterance-2"
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			t.Fatal("Route() was called")
 			return Decision{}, nil
@@ -91,9 +88,6 @@ func TestHandleUtteranceResolvesTaskBeforeRouting(t *testing.T) {
 			return "  Okay, I saved that reminder.  ", true, nil
 		}),
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
 
 	outcome, err := service.HandleUtterance(
 		context.Background(),
@@ -114,7 +108,7 @@ func TestHandleUtteranceReportsTaskConfirmationFailure(t *testing.T) {
 	t.Parallel()
 
 	wantErr := errors.New("database unavailable")
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			t.Fatal("Route() was called")
 			return Decision{}, nil
@@ -128,11 +122,8 @@ func TestHandleUtteranceReportsTaskConfirmationFailure(t *testing.T) {
 			return "", false, wantErr
 		}),
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
 
-	_, err = service.HandleUtterance(context.Background(), tool.Scope{}, "utterance-1", "yes")
+	_, err := service.HandleUtterance(context.Background(), tool.Scope{}, "utterance-1", "yes")
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("HandleUtterance() error = %v", err)
 	}

@@ -13,7 +13,7 @@ func TestTextRespondsWhereAudioStaysSilent(t *testing.T) {
 	for _, action := range []Action{ActionIgnore, ActionStateUpdate} {
 		for _, alwaysRespond := range []bool{false, true} {
 			called := false
-			service, err := NewService(
+			service := NewService(
 				routerFunc(func(context.Context, string) (Decision, error) {
 					return Decision{Action: action, Query: "incidental narration"}, nil
 				}),
@@ -24,9 +24,7 @@ func TestTextRespondsWhereAudioStaysSilent(t *testing.T) {
 					}
 					return "Hey! How can I help?", nil
 				}), noMemories, noConversation, noProposalConfirmation)
-			if err != nil {
-				t.Fatal(err)
-			}
+
 			outcome, err := service.HandleUtterance(context.Background(), tool.Scope{AlwaysRespond: alwaysRespond}, "turn", "hey")
 			if err != nil {
 				t.Fatal(err)
@@ -46,16 +44,14 @@ func TestTextRespondsWhereAudioStaysSilent(t *testing.T) {
 
 func TestTextKeepsSpecializedRoutes(t *testing.T) {
 	for _, action := range []Action{ActionRemember, ActionMemoryCorrect, ActionProposeTask, ActionProposeWatch} {
-		service, err := NewService(routerFunc(func(context.Context, string) (Decision, error) {
+		service := NewService(routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{Action: action, Query: "original request"}, nil
 		}),
 			proposalAwareAgentFunc(func(context.Context, tool.Scope, string, session.Conversation, []memory.Card) (AgentResult, error) {
 				return AgentResult{Text: "Should I save it?", ProposalCreated: true}, nil
 			}),
 			noMemories, noConversation, noProposalConfirmation)
-		if err != nil {
-			t.Fatal(err)
-		}
+
 		result, err := service.HandleUtterance(context.Background(), tool.Scope{AlwaysRespond: true}, "turn", "original request")
 		if err != nil {
 			t.Fatal(err)
