@@ -19,10 +19,10 @@ func (s *Server) runConversation(ctx context.Context, scope tool.Scope, writer j
 	if transcriber == nil {
 		return errors.New("conversation streaming unavailable")
 	}
-	if s.candidatePermits != nil {
+	if s.capacity.paid != nil {
 		select {
-		case s.candidatePermits <- struct{}{}:
-			defer func() { <-s.candidatePermits }()
+		case s.capacity.paid <- struct{}{}:
+			defer func() { <-s.capacity.paid }()
 		default:
 			return errors.New("conversation capacity exhausted")
 		}

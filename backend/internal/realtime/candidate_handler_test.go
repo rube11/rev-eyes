@@ -49,7 +49,7 @@ func TestCandidateAdmissionBoundsRetainedAudio(t *testing.T) {
 	}
 	server.releaseCandidateAdmission(second)
 	server.releaseCandidateAdmission(third)
-	if got := len(server.candidateAdmissions); got != 0 {
+	if got := len(server.capacity.retained); got != 0 {
 		t.Fatalf("candidate admissions retained %d slots", got)
 	}
 }
@@ -97,7 +97,7 @@ func TestCandidateProcessingDeadlineCancelsWorkAndSendsDone(t *testing.T) {
 	if !allZero(audio) {
 		t.Fatal("timed-out candidate audio was not cleared")
 	}
-	if got := len(server.candidateAdmissions); got != 0 {
+	if got := len(server.capacity.retained); got != 0 {
 		t.Fatalf("candidate timeout retained %d admission slots", got)
 	}
 }
@@ -342,7 +342,7 @@ func TestAmbientStopCancelsActiveAndQueuedCandidatesButKeepsWorker(t *testing.T)
 			}
 		}
 	}
-	if len(server.candidateAdmissions) != 0 {
+	if len(server.capacity.retained) != 0 {
 		t.Fatal("canceled candidates retained admission")
 	}
 }

@@ -12,14 +12,11 @@ import (
 // DiagnosticsServer shares native listening and paid-clip capacity with the
 // application, but has no assistant, notification, or history handlers.
 func (s *Server) DiagnosticsServer(observed func(context.Context, <-chan ambient.Input, func(ambient.Clip), ambient.Observer) error) *Server {
-	d := NewServer(s.transcriber, Handlers{
+	return newServer(s.transcriber, NewHub(), Handlers{
 		Diagnostics: true, Ambient: s.handlers.Ambient, AmbientObserved: observed,
 		CandidateAudio: s.handlers.CandidateAudio,
 		Authenticate:   s.handlers.Authenticate, CheckOrigin: s.handlers.CheckOrigin,
-	})
-	d.candidateAdmissions = s.candidateAdmissions
-	d.candidatePermits = s.candidatePermits
-	return d
+	}, s.capacity)
 }
 
 func (s *Server) listenAmbient(ctx context.Context, writer jsonWriter, input <-chan ambient.Input, jobs chan<- candidateJob) error {
@@ -30,7 +27,7 @@ func (s *Server) listenAmbient(ctx context.Context, writer jsonWriter, input <-c
 				if !ok {
 					return
 				}
-				clearCandidateAudio(event.PCM)
+				clear(event.PCM)
 			default:
 				return
 			}
@@ -55,7 +52,7 @@ func (s *Server) listenAmbient(ctx context.Context, writer jsonWriter, input <-c
 	}
 	return listener(ctx, input, func(clip ambient.Clip) {
 		if ctx.Err() != nil {
-			clearCandidateAudio(clip.Audio)
+			clear(clip.Audio)
 			return
 		}
 		job := candidateJob{
@@ -67,17 +64,17 @@ func (s *Server) listenAmbient(ctx context.Context, writer jsonWriter, input <-c
 		// associate completions with the active tap interaction, including rejection.
 		if clip.Reason == candidate.WakeManual {
 			if err := writer.WriteJSON(serverMessage{Type: "ambient_candidate", ID: job.header.ID}); err != nil {
-				clearCandidateAudio(clip.Audio)
+				clear(clip.Audio)
 				return
 			}
 		}
 		if err := job.header.validate(); err != nil {
-			clearCandidateAudio(clip.Audio)
+			clear(clip.Audio)
 			_ = writer.WriteJSON(candidateDoneMessage(job.header.ID))
 			return
 		}
 		if !s.tryAdmitCandidate(&job) {
-			clearCandidateAudio(clip.Audio)
+			clear(clip.Audio)
 			_ = writer.WriteJSON(candidateDoneMessage(job.header.ID))
 			return
 		}
@@ -88,7 +85,7 @@ func (s *Server) listenAmbient(ctx context.Context, writer jsonWriter, input <-c
 			}
 		default:
 			s.releaseCandidateAdmission(job)
-			clearCandidateAudio(clip.Audio)
+			clear(clip.Audio)
 			_ = writer.WriteJSON(candidateDoneMessage(job.header.ID))
 		}
 	})

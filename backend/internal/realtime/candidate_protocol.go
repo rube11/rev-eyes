@@ -145,9 +145,3 @@ func validGateCategory(category string) bool {
 		return false
 	}
 }
-
-func clearCandidateAudio(audio []byte) {
-	for index := range audio {
-		audio[index] = 0
-	}
-}

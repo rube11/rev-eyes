@@ -47,7 +47,7 @@ func (s *Server) runCandidateWorker(
 					return
 				}
 				s.releaseCandidateAdmission(job)
-				clearCandidateAudio(job.audio)
+				clear(job.audio)
 			default:
 				close(done)
 				return
@@ -101,11 +101,11 @@ func (s *Server) processCandidateBeforeDeadline(
 }
 
 func (s *Server) tryAdmitCandidate(job *candidateJob) bool {
-	if job == nil || s.candidateAdmissions == nil {
+	if job == nil || s.capacity.retained == nil {
 		return job != nil
 	}
 	select {
-	case s.candidateAdmissions <- struct{}{}:
+	case s.capacity.retained <- struct{}{}:
 		job.admissionHeld = true
 		return true
 	default:
@@ -114,10 +114,10 @@ func (s *Server) tryAdmitCandidate(job *candidateJob) bool {
 }
 
 func (s *Server) releaseCandidateAdmission(job candidateJob) {
-	if !job.admissionHeld || s.candidateAdmissions == nil {
+	if !job.admissionHeld || s.capacity.retained == nil {
 		return
 	}
-	<-s.candidateAdmissions
+	<-s.capacity.retained
 }
 
 func (s *Server) processCandidate(
@@ -126,7 +126,7 @@ func (s *Server) processCandidate(
 	writer jsonWriter,
 	job candidateJob,
 ) bool {
-	defer clearCandidateAudio(job.audio)
+	defer clear(job.audio)
 	releaseAdmission := func() {
 		if !job.admissionHeld {
 			return
@@ -135,10 +135,10 @@ func (s *Server) processCandidate(
 		job.admissionHeld = false
 	}
 	defer releaseAdmission()
-	if s.candidatePermits != nil {
+	if s.capacity.paid != nil {
 		select {
-		case s.candidatePermits <- struct{}{}:
-			defer func() { <-s.candidatePermits }()
+		case s.capacity.paid <- struct{}{}:
+			defer func() { <-s.capacity.paid }()
 		case <-ctx.Done():
 			return false
 		}
@@ -172,7 +172,7 @@ func (s *Server) processCandidate(
 	}
 
 	transcript, err := s.handlers.CandidateAudio(ctx, job.audio, format)
-	clearCandidateAudio(job.audio)
+	clear(job.audio)
 	releaseAdmission()
 	if err != nil {
 		if ctx.Err() == nil {

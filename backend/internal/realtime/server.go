@@ -49,15 +49,14 @@ func enqueueAmbient(ctx context.Context, input chan<- ambient.Input, event ambie
 }
 
 type Server struct {
-	transcriber         stt.Transcriber
-	handlers            Handlers
-	candidateAdmissions chan struct{}
-	candidatePermits    chan struct{}
-	candidateTimeout    time.Duration
-	conversationIdle    time.Duration
-	turns               *turnCoordinator
-	upgrader            websocket.Upgrader
-	hub                 *Hub
+	transcriber      stt.Transcriber
+	handlers         Handlers
+	capacity         *transcriptionCapacity
+	candidateTimeout time.Duration
+	conversationIdle time.Duration
+	turns            *turnCoordinator
+	upgrader         websocket.Upgrader
+	hub              *Hub
 }
 
 // NewServer creates the realtime WebSocket server.
@@ -67,33 +66,39 @@ func NewServer(transcriber stt.Transcriber, handlers Handlers) *Server {
 
 // NewServerWithHub creates a realtime server with shared outbound delivery.
 func NewServerWithHub(transcriber stt.Transcriber, hub *Hub, handlers Handlers) *Server {
+	capacity := &transcriptionCapacity{}
+	if handlers.CandidateAudio != nil {
+		maxConcurrent := handlers.CandidateMaxConcurrent
+		if maxConcurrent <= 0 {
+			maxConcurrent = defaultCandidateConcurrency
+		}
+		capacity.retained = make(chan struct{}, maxConcurrent*candidateAdmissionFactor)
+		capacity.paid = make(chan struct{}, maxConcurrent)
+	}
+	return newServer(transcriber, hub, handlers, capacity)
+}
+
+// Main listening and diagnostics share these limits. Retained slots last until
+// clip PCM is cleared; paid slots cover transcription AND downstream turns.
+type transcriptionCapacity struct {
+	retained chan struct{}
+	paid     chan struct{}
+}
+
+func newServer(transcriber stt.Transcriber, hub *Hub, handlers Handlers, capacity *transcriptionCapacity) *Server {
 	if handlers.AmbientStreaming != nil && handlers.ConversationTranscriber == nil {
 		panic("streaming ambient listening requires conversation transcription")
 	}
 	if hub == nil {
 		hub = NewHub()
 	}
-	var candidateAdmissions chan struct{}
-	var candidatePermits chan struct{}
-	if handlers.CandidateAudio != nil {
-		maxConcurrent := handlers.CandidateMaxConcurrent
-		if maxConcurrent <= 0 {
-			maxConcurrent = defaultCandidateConcurrency
-		}
-		candidateAdmissions = make(
-			chan struct{},
-			maxConcurrent*candidateAdmissionFactor,
-		)
-		candidatePermits = make(chan struct{}, maxConcurrent)
-	}
 	return &Server{
-		transcriber:         transcriber,
-		handlers:            handlers,
-		candidateAdmissions: candidateAdmissions,
-		candidatePermits:    candidatePermits,
-		candidateTimeout:    defaultCandidateProcessingTimeout,
-		hub:                 hub,
-		turns:               newTurnCoordinator(),
+		transcriber:      transcriber,
+		handlers:         handlers,
+		capacity:         capacity,
+		candidateTimeout: defaultCandidateProcessingTimeout,
+		hub:              hub,
+		turns:            newTurnCoordinator(),
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
@@ -183,7 +188,7 @@ func (s *Server) serveConnection(
 		// The reader may have queued a frame concurrently with worker exit.
 		for len(ambientInputs) > 0 {
 			event := <-ambientInputs
-			clearCandidateAudio(event.PCM)
+			clear(event.PCM)
 		}
 		ambientInputs = nil
 
@@ -221,7 +226,7 @@ func (s *Server) serveConnection(
 					header := *pendingCandidate
 					pendingCandidate = nil
 					if len(incoming.data) != header.ByteLength {
-						clearCandidateAudio(incoming.data)
+						clear(incoming.data)
 						slog.WarnContext(
 							ctx,
 							"rejected candidate audio payload",
@@ -240,7 +245,7 @@ func (s *Server) serveConnection(
 						acceptedAt: time.Now(),
 					}
 					if !s.tryAdmitCandidate(&job) {
-						clearCandidateAudio(incoming.data)
+						clear(incoming.data)
 						slog.WarnContext(
 							ctx,
 							"candidate audio capacity full",
@@ -261,7 +266,7 @@ func (s *Server) serveConnection(
 						)
 					default:
 						s.releaseCandidateAdmission(job)
-						clearCandidateAudio(incoming.data)
+						clear(incoming.data)
 						slog.WarnContext(ctx, "candidate audio queue full", "candidate_id", header.ID)
 						if err := conn.WriteJSON(candidateDoneMessage(header.ID)); err != nil {
 							return fmt.Errorf("write candidate queue state: %w", err)
@@ -271,17 +276,17 @@ func (s *Server) serveConnection(
 				}
 				if ambientActive {
 					if len(incoming.data) > 32000 {
-						clearCandidateAudio(incoming.data)
+						clear(incoming.data)
 						return errors.New("ambient audio frame exceeds one second")
 					}
 					if err := enqueueAmbient(ctx, ambientInputs, ambient.Input{PCM: incoming.data}); err != nil {
-						clearCandidateAudio(incoming.data)
+						clear(incoming.data)
 						return err
 					}
 					continue
 				}
 				if audio == nil {
-					clearCandidateAudio(incoming.data)
+					clear(incoming.data)
 					continue
 				}
 

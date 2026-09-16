@@ -40,7 +40,7 @@ func (s *Service) Process(
 	audio []byte,
 	format stt.AudioFormat,
 ) (string, error) {
-	defer clearBytes(audio)
+	defer clear(audio)
 	if ctx == nil {
 		return "", ErrContextRequired
 	}
@@ -77,10 +77,4 @@ func (s *Service) Process(
 		return "", err
 	}
 	return strings.TrimSpace(transcript), nil
-}
-
-func clearBytes(audio []byte) {
-	for index := range audio {
-		audio[index] = 0
-	}
 }
