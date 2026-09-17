@@ -5,7 +5,6 @@ type TicketResponse = {
 }
 
 type RealtimeConnectionOptions = {
-  path?: "/ws" | "/ws/moonshine"
   signal?: AbortSignal
   timeoutMs?: number
 }
@@ -63,7 +62,7 @@ export async function connectRealtimeSocket(
       throw new Error("WebSocket ticket response was empty")
     }
 
-    const url = new URL(options.path ?? "/ws", env.apiBaseUrl)
+    const url = new URL("/ws", env.apiBaseUrl)
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
     url.searchParams.set("ticket", ticket)
 
