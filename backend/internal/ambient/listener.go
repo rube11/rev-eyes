@@ -47,29 +47,12 @@ type Input struct {
 type Listener struct{ Factory Factory }
 
 func (l *Listener) Run(ctx context.Context, input <-chan Input, emit func(Clip)) error {
-	return l.RunObserved(ctx, input, emit, Observer{})
-}
-
-// Observer is optional, session-local presentation for the authenticated live
-// test. Regular listening never exposes rough transcripts.
-type Observer struct {
-	Ready      func() error
-	Transcript func(Line, int64) error
-	Audio      func(int64) error
-}
-
-func (l *Listener) RunObserved(ctx context.Context, input <-chan Input, emit func(Clip), observer Observer) error {
 	stream, err := l.Factory.Open()
 	if err != nil {
 		return err
 	}
 	defer stream.Close()
-	if observer.Ready != nil {
-		if err := observer.Ready(); err != nil {
-			return err
-		}
-	}
-	d := detector{stream: stream, emit: emit, seen: make(map[uint64]bool), observer: observer}
+	d := detector{stream: stream, emit: emit, seen: make(map[uint64]bool)}
 	defer clear(d.ring[:])
 	// Process fixed blocks, independent of WebSocket frame size.
 	block := make([]float32, 0, step)
@@ -138,8 +121,6 @@ func (l *Listener) RunObserved(ctx context.Context, input <-chan Input, emit fun
 }
 
 type detector struct {
-	observer                          Observer
-	acknowledged                      int64
 	replyUntil                        time.Time
 	replyStart                        int64
 	stream                            Stream
@@ -162,11 +143,6 @@ func (d *detector) process(block []float32) error {
 	for _, line := range lines {
 		if math.IsNaN(line.Start) || math.IsNaN(line.Duration) || math.IsInf(line.Start, 0) || math.IsInf(line.Duration, 0) || line.Start < 0 || line.Duration < 0 {
 			continue
-		}
-		if d.observer.Transcript != nil {
-			if err := d.observer.Transcript(line, d.base); err != nil {
-				return err
-			}
 		}
 		end := d.base + int64((line.Start+line.Duration)*SampleRate)
 		if end > d.end {
@@ -204,12 +180,6 @@ func (d *detector) process(block []float32) error {
 	}
 	if d.pending && ((d.finish > 0 && d.end >= d.finish) || d.end-d.start >= retention) {
 		d.flush()
-	}
-	if d.observer.Audio != nil && d.end-d.acknowledged >= SampleRate {
-		if err := d.observer.Audio(d.end * 2); err != nil {
-			return err
-		}
-		d.acknowledged = d.end
 	}
 	// Moonshine retains transcript lines. Recreate streams periodically so long
 	// listening sessions remain bounded, replaying context across the boundary.

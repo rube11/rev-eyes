@@ -110,16 +110,8 @@ Ship the compatible server first; an unavailable server reports a listening erro
 
 ## Verification
 
-### Eyes Listening Test
-
-`pnpm pack:diagnostics` in `frontend` builds Eyes Listening Test 0.1.6. It forwards
-all glasses PCM to authenticated `/ws/moonshine`, starts native ambient listening,
-and displays the complete Moonshine transcript with highlighted keywords, selected
-Deepgram results, and server-processed audio counts. Both app endpoints share the
-same native model and admission limit. The diagnostic endpoint lasts up to seven
-minutes and never routes test speech to assistant actions or saved history.
-Stopping cancels pending inference/clip work; received transcripts remain visible.
-No Python worker is used. Rough text is exposed only on the dedicated test endpoint.
+The temporary Eyes Listening Test app and `/ws/moonshine` endpoint have been
+removed from the release. Rough Moonshine text stays internal to wake detection.
 
 ### Automated checks
 

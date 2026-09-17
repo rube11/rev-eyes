@@ -1,5 +1,10 @@
 # Behavior-preserving simplification
 
+This report records the refactor baseline. Before release, the owner requested
+removal of the temporary Eyes Listening Test app, diagnostic endpoint, and
+client audit logging. References to diagnostics below describe historical checks,
+not currently shipped functionality. Native conversation tests remain.
+
 ## Starting point
 
 - Source: remote `testingMoonshineAgain`, fetched and fast-forward checked.

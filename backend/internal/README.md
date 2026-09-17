@@ -46,10 +46,9 @@ tap-to-talk lifecycle. Neither mode silently substitutes for a failed listener.
 - Root `utterance.go` persists transcripts and handles explicit/background memory
   recording. Both remembering and correcting use the same persistence path.
 
-Authenticated diagnostics can expose rough text but cannot invoke the assistant
-or persistence. Its server shares transcription admission with the main path.
-Rough text is otherwise private trigger data. Atomic memory candidates in
-`memory/` are a separate concept from audio candidates.
+Rough Moonshine text is private trigger data. The temporary diagnostic app and
+endpoint are removed from production. Atomic memory candidates in `memory/` are
+a separate concept from audio candidates.
 
 Frontend `RealtimeConnection` owns socket setup, adoption, listeners, and retries;
 the glasses runtime serializes UI transitions and owns microphone interaction.
