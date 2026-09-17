@@ -1,0 +1,54 @@
+.workspace {
+  min-height: 100svh;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  background: var(--surface-0);
+}
+
+.workspace-main {
+  min-width: 0;
+  --page-gutter: clamp(28px, 4.8vw, 64px);
+}
+
+.page {
+  width: min(920px, 100%);
+  margin: 0 auto;
+  padding: var(--space-7) var(--page-gutter) 96px;
+  animation: fade-rise var(--dur-slow) var(--ease-out) both;
+}
+
+.page--home {
+  padding-top: var(--space-5);
+}
+
+@media (max-width: 1040px) and (min-width: 841px) {
+  .workspace {
+    grid-template-columns: 196px minmax(0, 1fr);
+  }
+
+  .workspace-main {
+    --page-gutter: 36px;
+  }
+}
+
+@media (max-width: 840px) {
+  .workspace {
+    display: block;
+  }
+
+  .workspace-main {
+    --page-gutter: 24px;
+    padding-bottom: calc(var(--tabbar-height) + var(--space-6) + env(safe-area-inset-bottom));
+  }
+
+  .page {
+    padding-top: var(--space-6);
+    padding-bottom: var(--space-8);
+  }
+}
+
+@media (max-width: 440px) {
+  .workspace-main {
+    --page-gutter: 20px;
+  }
+}

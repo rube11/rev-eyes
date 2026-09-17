@@ -1,0 +1,85 @@
+/* Design tokens. Dark-only, warm grays, one sage accent. */
+:root {
+  /* Surfaces */
+  --surface-sunken: #151515;
+  --surface-0: #191919;
+  --surface-1: #1e1e1e;
+  --surface-2: #232323;
+  --surface-3: #292929;
+  --surface-overlay: rgb(11 12 12 / 48%);
+
+  /* Foreground */
+  --fg: #f2f1ee;
+  --fg-muted: #aaa8a3;
+  --fg-faint: #85837e;
+  --fg-inverse: #191919;
+  --fill-strong: #eeede8;
+
+  /* Hairlines */
+  --line: rgb(255 255 255 / 9%);
+  --line-strong: rgb(255 255 255 / 19%);
+
+  /* Accent: sage. Live state, pending review, active navigation. */
+  --accent: #9fc2a8;
+  --accent-soft: rgb(159 194 168 / 12%);
+  --accent-line: rgb(159 194 168 / 40%);
+  --accent-ink: #12180f;
+
+  /* Semantic */
+  --warn: #d9b892;
+  --warn-soft: rgb(217 184 146 / 10%);
+  --warn-line: rgb(217 184 146 / 40%);
+  --danger: #e8a89e;
+  --danger-soft: rgb(232 168 158 / 10%);
+  --success: var(--accent);
+
+  /* Shape */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  /* Space, 4px base */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 56px;
+  --space-10: 72px;
+
+  /* Type */
+  --font-sans: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --text-2xs: 0.6875rem;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-md: 1.0625rem;
+  --text-lg: clamp(1.25rem, 1.1rem + 0.6vw, 1.5rem);
+  --text-xl: clamp(1.75rem, 1.5rem + 1vw, 2.25rem);
+  --text-2xl: clamp(2.125rem, 1.8rem + 1.6vw, 2.75rem);
+  --leading-tight: 1.1;
+  --leading-snug: 1.35;
+  --leading-body: 1.6;
+  --leading-loose: 1.75;
+  --tracking-tight: -0.035em;
+  --tracking-caps: 0.08em;
+  --weight-regular: 430;
+  --weight-medium: 500;
+  --weight-semibold: 580;
+
+  /* Motion */
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 280ms;
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Layout */
+  --tabbar-height: 62px;
+  --focus-ring: 2px solid var(--fg);
+}

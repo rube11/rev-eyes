@@ -15,6 +15,8 @@ import type {
   WatchItem,
   WorkspaceData,
   WorkspaceResource,
+  MemoryEdit,
+  MemoryLayer,
 } from './workspaceTypes'
 
 type SessionRow = {
@@ -39,10 +41,19 @@ type MemoryRow = {
   topics: string[]
   kind: MemoryKind
   status: MemoryItem['status']
+  memory_key: string | null
+  profile_layer: MemoryLayer
+  profile_override: 'core' | 'detail' | null
   created_at: string
   updated_at: string
+  observed_at: string | null
   expires_at: string | null
+  inactive_at: string | null
+  observed_source_id: string | null
 }
+
+const memoryColumns =
+  'id,title,summary,topics,kind,status,memory_key,profile_layer,profile_override,created_at,updated_at,observed_at,expires_at,inactive_at,observed_source_id'
 
 type WatchRow = {
   id: string
@@ -112,7 +123,7 @@ function shorten(text: string, limit: number): string {
     : `${normalized.slice(0, limit - 1).trimEnd()}…`
 }
 
-function mapMemory(row: MemoryRow): MemoryItem {
+function mapMemory(row: MemoryRow, sourceConversationId?: string): MemoryItem {
   return {
     id: row.id,
     title: row.title,
@@ -120,10 +131,44 @@ function mapMemory(row: MemoryRow): MemoryItem {
     topics: row.topics,
     kind: row.kind,
     status: row.status,
+    layer: row.profile_override ?? row.profile_layer ?? 'detail',
+    assignedLayer: row.profile_layer ?? 'detail',
+    pinned: row.profile_override === 'core',
+    memoryKey: row.memory_key ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    observedAt: row.observed_at ?? row.updated_at,
     expiresAt: row.expires_at ?? undefined,
+    inactiveAt: row.inactive_at ?? undefined,
+    sourceUtteranceId: row.observed_source_id ?? undefined,
+    sourceConversationId,
   }
+}
+
+/** Forgotten memories stay recoverable from the workspace for this long. */
+const forgottenRetention = 30 * 24 * 60 * 60 * 1000
+
+async function loadMemorySources(
+  userId: string,
+  utteranceIds: string[],
+  signal: AbortSignal,
+): Promise<Map<string, string>> {
+  const sources = new Map<string, string>()
+  for (let index = 0; index < utteranceIds.length; index += 100) {
+    const { data, error } = await supabase
+      .from('transcript_utterances')
+      .select('id,session_id')
+      .eq('user_id', userId)
+      .in('id', utteranceIds.slice(index, index + 100))
+      .abortSignal(signal)
+    if (error) {
+      throw new Error(error.message)
+    }
+    for (const row of (data ?? []) as Pick<TranscriptRow, 'id' | 'session_id'>[]) {
+      sources.set(row.id, row.session_id)
+    }
+  }
+  return sources
 }
 
 function mapConversations(
@@ -254,12 +299,15 @@ async function loadMemories(
   signal: AbortSignal,
 ): Promise<MemoryItem[]> {
   const now = new Date().toISOString()
+  const forgottenSince = new Date(Date.now() - forgottenRetention).toISOString()
   const { data, error } = await supabase
     .from('memories')
-    .select('id,title,summary,topics,kind,status,created_at,updated_at,expires_at')
+    .select(memoryColumns)
     .eq('user_id', userId)
-    .eq('status', 'active')
-    .or(`expires_at.is.null,expires_at.gt.${now}`)
+    .or(
+      `and(status.eq.active,or(expires_at.is.null,expires_at.gt.${now})),` +
+      `and(status.eq.forgotten,inactive_at.gt.${forgottenSince})`,
+    )
     .order('updated_at', { ascending: false })
     .limit(200)
     .abortSignal(signal)
@@ -267,7 +315,10 @@ async function loadMemories(
   if (error) {
     throw new Error(error.message)
   }
-  return ((data ?? []) as MemoryRow[]).map(mapMemory)
+  const rows = (data ?? []) as MemoryRow[]
+  const utteranceIds = [...new Set(rows.flatMap((row) => row.observed_source_id ? [row.observed_source_id] : []))]
+  const sources = utteranceIds.length ? await loadMemorySources(userId, utteranceIds, signal) : new Map<string, string>()
+  return rows.map((row) => mapMemory(row, row.observed_source_id ? sources.get(row.observed_source_id) : undefined))
 }
 
 async function loadWatches(
@@ -352,7 +403,7 @@ export async function saveMemory(
       entities: [],
       status: 'active',
     })
-    .select('id,title,summary,topics,kind,status,created_at,updated_at,expires_at')
+    .select(memoryColumns)
     .single()
 
   if (error) {
@@ -421,6 +472,21 @@ export async function resolveWorkspaceProposal(
     {
       method: 'POST',
       body: JSON.stringify({ decision }),
+    },
+  )
+}
+
+export async function editWorkspaceMemory(
+  accessToken: string,
+  memoryId: string,
+  edit: MemoryEdit,
+): Promise<void> {
+  await runWorkspaceAction(
+    accessToken,
+    `/workspace/memories/${encodeURIComponent(memoryId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(edit),
     },
   )
 }
@@ -563,8 +629,15 @@ export function createDemoWorkspaceData(): WorkspaceData {
         topics: ['friends', 'work'],
         kind: 'relationship',
         status: 'active',
+        layer: 'core',
+        assignedLayer: 'core',
+        pinned: false,
+        memoryKey: 'profile.relationship.maya',
         createdAt: fromNow(-day),
         updatedAt: fromNow(-day),
+        observedAt: fromNow(-day),
+        sourceUtteranceId: 'demo-line-05',
+        sourceConversationId: conversationTwo,
       },
       {
         id: 'demo-memory-02',
@@ -574,8 +647,14 @@ export function createDemoWorkspaceData(): WorkspaceData {
         topics: ['preferences'],
         kind: 'preference',
         status: 'active',
+        layer: 'core',
+        assignedLayer: 'detail',
+        pinned: true,
         createdAt: fromNow(-11 * day),
         updatedAt: fromNow(-11 * day),
+        observedAt: fromNow(-11 * day),
+        sourceUtteranceId: 'demo-line-09',
+        sourceConversationId: conversationThree,
       },
       {
         id: 'demo-memory-03',
@@ -585,8 +664,15 @@ export function createDemoWorkspaceData(): WorkspaceData {
         topics: ['work', 'goals'],
         kind: 'goal',
         status: 'active',
+        layer: 'core',
+        assignedLayer: 'core',
+        pinned: false,
+        memoryKey: 'profile.role.beta_lead',
         createdAt: fromNow(-16 * day),
         updatedAt: fromNow(-3 * day),
+        observedAt: fromNow(-3 * day),
+        sourceUtteranceId: 'demo-line-01',
+        sourceConversationId: conversationOne,
       },
       {
         id: 'demo-memory-04',
@@ -596,8 +682,59 @@ export function createDemoWorkspaceData(): WorkspaceData {
         topics: ['preferences'],
         kind: 'instruction',
         status: 'active',
+        layer: 'core',
+        assignedLayer: 'core',
+        pinned: false,
         createdAt: fromNow(-29 * day),
         updatedAt: fromNow(-8 * day),
+        observedAt: fromNow(-8 * day),
+      },
+      {
+        id: 'demo-memory-05',
+        title: 'Noah is travelling this week',
+        summary: 'Noah is in Seattle until Friday and wants the beta before he flies back.',
+        topics: ['work', 'friends'],
+        kind: 'event',
+        status: 'active',
+        layer: 'recent',
+        assignedLayer: 'recent',
+        pinned: false,
+        createdAt: fromNow(-2 * hour),
+        updatedAt: fromNow(-2 * hour),
+        observedAt: fromNow(-2 * hour),
+        expiresAt: fromNow(3 * day),
+        sourceUtteranceId: 'demo-line-02',
+        sourceConversationId: conversationOne,
+      },
+      {
+        id: 'demo-memory-06',
+        title: 'Dentist is on Pine Street',
+        summary: 'The dentist’s office is on Pine Street, a ten minute walk from the apartment.',
+        topics: ['places', 'health'],
+        kind: 'fact',
+        status: 'active',
+        layer: 'detail',
+        assignedLayer: 'detail',
+        pinned: false,
+        memoryKey: 'profile.health.dentist_location',
+        createdAt: fromNow(-40 * day),
+        updatedAt: fromNow(-40 * day),
+        observedAt: fromNow(-40 * day),
+      },
+      {
+        id: 'demo-memory-07',
+        title: 'Used to take the 7:10 train',
+        summary: 'Commuted on the 7:10 train before switching to cycling in the spring.',
+        topics: ['personal'],
+        kind: 'fact',
+        status: 'forgotten',
+        layer: 'detail',
+        assignedLayer: 'detail',
+        pinned: false,
+        createdAt: fromNow(-120 * day),
+        updatedAt: fromNow(-day),
+        observedAt: fromNow(-120 * day),
+        inactiveAt: fromNow(-day),
       },
     ],
     watches: [

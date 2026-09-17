@@ -1,0 +1,42 @@
+.boot-screen {
+  min-height: 100svh;
+  padding: clamp(28px, 5vw, 64px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  color: var(--fg);
+  background: var(--surface-0);
+}
+
+.boot-screen__brand {
+  font-size: var(--text-lg);
+}
+
+.boot-screen__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+.boot-screen--error {
+  justify-content: flex-start;
+  gap: clamp(48px, 12vh, 120px);
+}
+
+.boot-screen__problem {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-4);
+  max-width: 44ch;
+}
+
+.boot-screen__message {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  letter-spacing: -0.015em;
+  line-height: var(--leading-snug);
+  text-wrap: balance;
+}

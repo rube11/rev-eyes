@@ -121,6 +121,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	workspaceMemoryHandler, err := memory.NewWorkspaceHandler(
+		tokenVerifier.Verify,
+		memoryStore,
+		func(userID string) {
+			realtimeHub.WorkspaceChanged(userID, realtime.WorkspaceMemories)
+		})
+	if err != nil {
+		return err
+	}
 
 	classifier, err := openai.NewClassifier(
 		os.Getenv("OPENAI_API_KEY"),
@@ -362,6 +371,9 @@ func run() error {
 		"OPTIONS /workspace/automations/{kind}/{resource_id}",
 		workspaceAutomationAPI,
 	)
+	workspaceMemoryAPI := origins.Handler(workspaceMemoryHandler)
+	mux.Handle("PATCH /workspace/memories/{memory_id}", workspaceMemoryAPI)
+	mux.Handle("OPTIONS /workspace/memories/{memory_id}", workspaceMemoryAPI)
 	mux.Handle("/internal/scheduler/run", schedulerHandler)
 	mux.Handle("/", realtimeServer)
 

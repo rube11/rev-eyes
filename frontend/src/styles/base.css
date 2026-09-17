@@ -1,0 +1,74 @@
+:root {
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color-scheme: dark;
+  font-family: var(--font-sans);
+  font-optical-sizing: auto;
+  font-feature-settings: 'cv11' 1;
+  color: var(--fg);
+  background: var(--surface-0);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  min-width: 280px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100svh;
+  overflow-x: hidden;
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
+  letter-spacing: -0.006em;
+  background: var(--surface-0);
+}
+
+button, input, textarea, select {
+  font: inherit;
+  letter-spacing: inherit;
+  accent-color: var(--accent);
+}
+
+button {
+  color: inherit;
+}
+
+button, a, summary {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+summary {
+  list-style: none;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
+button:focus-visible, summary:focus-visible, input:focus-visible,
+textarea:focus-visible, select:focus-visible, a:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 3px;
+}
+
+::selection {
+  color: var(--fg-inverse);
+  background: var(--fill-strong);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

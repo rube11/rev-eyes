@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { FocusEvent, FormEvent } from 'react'
+import './SignIn.css'
 
 export function SignIn({
   email,
@@ -73,8 +74,11 @@ export function SignIn({
       <section className="auth-access">
         <form className="auth-form" onSubmit={onSubmit}>
           <header>
-            <a className="auth-wordmark" href="#">rev/eyes</a>
-            <h2>Sign in</h2>
+            <a className="wordmark auth-wordmark" href="#">rev<span className="wordmark__slash">/</span>eyes</a>
+            <div>
+              <h1>Sign in</h1>
+              <p className="auth-lede">Your memories, reminders and watches, ready for your glasses.</p>
+            </div>
           </header>
           <label className="field">
             <span>Email</span>
@@ -105,8 +109,8 @@ export function SignIn({
               {error}
             </p>
           ) : null}
-          <button className="auth-submit" type="submit" disabled={submitting || storageUnavailable}>
-            <span>{submitting ? 'Signing in…' : 'Sign in'}</span>
+          <button className="primary-action auth-submit" type="submit" disabled={submitting || storageUnavailable}>
+            {submitting ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
       </section>

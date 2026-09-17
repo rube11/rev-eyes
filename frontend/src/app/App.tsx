@@ -13,6 +13,7 @@ import {
   refreshWorkspaceData,
   resolveWorkspaceProposal,
   saveMemory,
+  editWorkspaceMemory,
 } from '../features/workspace/workspaceData'
 import { workspaceResources } from '../features/workspace/workspaceTypes'
 import type {
@@ -21,14 +22,17 @@ import type {
   ProposalDecision,
   WorkspaceData,
   WorkspaceResource,
+  MemoryEdit,
 } from '../features/workspace/workspaceTypes'
 import { Workspace } from '../features/workspace/Workspace'
 import { ConnectionSession } from '../even/connection-session'
 import { updateWorkspaceErrors } from '../features/workspace/workspaceLoad'
+import { applyMemoryEdit } from '../features/workspace/memoryModel'
 import type { WorkspaceErrors, WorkspaceLoadResult } from '../features/workspace/workspaceLoad'
 import { Homepage } from '../features/landing/Homepage'
 import { SignIn } from '../features/auth/SignIn'
 import { sessionStorage, supabase } from '../shared/api/supabase'
+import './boot.css'
 
 const isDemoMode = false
 const workspaceRefreshDebounceMs = 100
@@ -80,9 +84,9 @@ function mergeWorkspaceData(
 function LoadingScreen({ label = 'Loading…' }: { label?: string }) {
   return (
     <main className="boot-screen">
-      <span className="boot-screen__brand">rev/eyes</span>
-      <div className="boot-screen__status">
-        <span className="status-mark status-mark--active" />
+      <span className="wordmark boot-screen__brand">rev<span className="wordmark__slash">/</span>eyes</span>
+      <div className="boot-screen__status" role="status">
+        <span className="status-mark status-mark--active" aria-hidden="true" />
         <span>{label}</span>
       </div>
     </main>
@@ -480,8 +484,12 @@ function App() {
               topics: [input.topic],
               kind: input.kind,
               status: 'active',
+              layer: 'detail',
+              assignedLayer: 'detail',
+              pinned: false,
               createdAt: timestamp,
               updatedAt: timestamp,
+              observedAt: timestamp,
             },
             ...current.memories,
           ],
@@ -506,6 +514,29 @@ function App() {
           }
         : current,
     )
+  }
+
+  const editMemory = async (memoryId: string, edit: MemoryEdit) => {
+    if (!isDemoMode) {
+      if (!session?.access_token) {
+        throw new Error('Sign in again to update this memory.')
+      }
+      await editWorkspaceMemory(session.access_token, memoryId, edit)
+    }
+    const at = new Date().toISOString()
+    setWorkspaceData((current) =>
+      current
+        ? {
+            ...current,
+            memories: current.memories.map((memory) =>
+              memory.id === memoryId ? applyMemoryEdit(memory, edit, at) : memory,
+            ),
+          }
+        : current,
+    )
+    if (!isDemoMode) {
+      requestWorkspaceRefreshRef.current(['memories'])
+    }
   }
 
   const resolveAutomation = async (
@@ -617,6 +648,7 @@ function App() {
         glassesStatus={glassesStatus}
         isDemo
         onCreateMemory={createMemory}
+        onEditMemory={editMemory}
         onDeleteAutomation={deleteAutomation}
         onResolveAutomation={resolveAutomation}
         onSignOut={signOut}
@@ -651,10 +683,13 @@ function App() {
 
   if (sessionError) {
     return (
-      <main className="boot-screen">
-        <span className="boot-screen__brand">rev/eyes</span>
-        <p role="alert">{sessionError}</p>
-        <button className="auth-submit" onClick={() => window.location.reload()}>Reload app</button>
+      <main className="boot-screen boot-screen--error">
+        <span className="wordmark boot-screen__brand">rev<span className="wordmark__slash">/</span>eyes</span>
+        <div className="boot-screen__problem">
+          <p className="eyebrow">Something went wrong</p>
+          <p className="boot-screen__message" role="alert">{sessionError}</p>
+          <button className="primary-action" type="button" onClick={() => window.location.reload()}>Reload app</button>
+        </div>
       </main>
     )
   }
@@ -681,6 +716,7 @@ function App() {
       onRetry={() => requestWorkspaceRefreshRef.current([], true)}
       isDemo={false}
       onCreateMemory={createMemory}
+      onEditMemory={editMemory}
       onDeleteAutomation={deleteAutomation}
       onResolveAutomation={resolveAutomation}
       onSignOut={signOut}

@@ -18,6 +18,8 @@ var (
 	ErrCandidateBatchTooLarge = errors.New("memory candidate batch is too large")
 	ErrDuplicateMemoryKey     = errors.New("memory candidate keys must be unique within a batch")
 	ErrMemoryAmbiguous        = errors.New("more than one memory matches the request")
+	ErrMemoryNotFound         = errors.New("memory not found")
+	ErrInvalidMemoryEdit      = errors.New("invalid memory edit")
 )
 
 // Store persists atomic memories and their transcript sources.
