@@ -366,7 +366,8 @@ func run() error {
 	mux.Handle("PATCH /workspace/memories/{memory_id}", workspaceMemoryAPI)
 	mux.Handle("OPTIONS /workspace/memories/{memory_id}", workspaceMemoryAPI)
 	mux.Handle("/internal/scheduler/run", schedulerHandler)
-	mux.Handle("/", realtimeServer)
+	mux.Handle("/{$}", realtimeServer)
+	mux.Handle("/ws", realtimeServer)
 
 	server := &http.Server{
 		Addr:              listenAddress(),
