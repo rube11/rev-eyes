@@ -34,6 +34,7 @@ func NewWorkspaceHandler(
 	verifier auth.TokenVerifier,
 	commander WorkspaceCommander,
 	triggerSchedule func(),
+	workspaceChanged func(string, Kind),
 ) (*WorkspaceHandler, error) {
 	if verifier == nil {
 		return nil, ErrWorkspaceVerifierRequired
@@ -45,17 +46,11 @@ func NewWorkspaceHandler(
 		return nil, ErrWorkspaceTriggerRequired
 	}
 	return &WorkspaceHandler{
-		verifier:        verifier,
-		commander:       commander,
-		triggerSchedule: triggerSchedule,
+		verifier:         verifier,
+		commander:        commander,
+		triggerSchedule:  triggerSchedule,
+		workspaceChanged: workspaceChanged,
 	}, nil
-}
-
-// SetWorkspaceChanged registers delivery for successful owner-scoped changes.
-func (h *WorkspaceHandler) SetWorkspaceChanged(
-	workspaceChanged func(userID string, kind Kind),
-) {
-	h.workspaceChanged = workspaceChanged
 }
 
 func (h *WorkspaceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

@@ -9,7 +9,7 @@ const empty = (): WorkspaceData => ({ tasks: [], watches: [], memories: [], conv
 const task = (id: string, dueAt: string, status: TaskItem['status'] = 'accepted'): TaskItem =>
   ({ id, title: id, dueAt, status, schedule: 'Once', createdAt: at(4) })
 const memory = (id: string, createdAt: string, extra: Partial<MemoryItem> = {}): MemoryItem =>
-  ({ id, title: id, summary: id, createdAt, updatedAt: createdAt, kind: 'fact', topics: [], status: 'active', ...extra })
+  ({ id, title: id, summary: id, createdAt, updatedAt: createdAt, observedAt: createdAt, kind: 'fact', topics: [], status: 'active', layer: 'detail', assignedLayer: 'detail', pinned: false, ...extra })
 const watch = (id: string, expiresAt: string, status: WatchItem['status'] = 'active'): WatchItem =>
   ({ id, query: id, condition: '', expiresAt, status, intervalMinutes: 60, createdAt: at(4), seenCount: 0 })
 

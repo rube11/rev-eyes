@@ -57,14 +57,12 @@ func TestRecorderCapturesInApplicationBackground(t *testing.T) {
 			return len(candidates), nil
 		}),
 		2,
-		time.Second,
-	)
+		time.Second, func(userID string) {
+			stored <- userID
+		})
 	if err != nil {
 		t.Fatalf("newRecorder() error = %v", err)
 	}
-	recorder.SetOnStored(func(userID string) {
-		stored <- userID
-	})
 
 	appCtx, cancel := context.WithCancel(context.Background())
 	runDone := make(chan struct{})
@@ -131,12 +129,11 @@ func TestRecorderDoesNotNotifyWhenWriterStoresNothingOrFails(t *testing.T) {
 					return test.stored, test.err
 				}),
 				1,
-				time.Second,
-			)
+				time.Second, func(string) { notifications++ })
 			if err != nil {
 				t.Fatalf("newRecorder() error = %v", err)
 			}
-			recorder.SetOnStored(func(string) { notifications++ })
+
 			recorder.process(context.Background(), captureJob{
 				scope:    tool.Scope{UserID: "user-1", SessionID: "session-1"},
 				sourceID: "utterance-1",
@@ -177,14 +174,13 @@ func TestRecorderRememberExplicitUsesAtomicKeyedPipeline(t *testing.T) {
 			return 1, nil
 		}),
 		1,
-		time.Second,
-	)
+		time.Second, func(string) {
+			t.Fatal("background refresh callback ran for explicit memory")
+		})
 	if err != nil {
 		t.Fatalf("newRecorder() error = %v", err)
 	}
-	recorder.SetOnStored(func(string) {
-		t.Fatal("background refresh callback ran for explicit memory")
-	})
+
 	if err := recorder.RememberExplicit(
 		context.Background(),
 		wantScope,
@@ -209,12 +205,10 @@ func TestRecorderRememberExplicitRejectsEmptyExtraction(t *testing.T) {
 			return 0, nil
 		}),
 		1,
-		time.Second,
-	)
+		time.Second, func(string) { notifications++ })
 	if err != nil {
 		t.Fatalf("newRecorder() error = %v", err)
 	}
-	recorder.SetOnStored(func(string) { notifications++ })
 
 	err = recorder.RememberExplicit(
 		context.Background(),
@@ -258,8 +252,7 @@ func TestRecorderBasesTemporaryExpiryOnCaptureTime(t *testing.T) {
 			return 1, nil
 		}),
 		1,
-		time.Second,
-	)
+		time.Second, nil)
 	if err != nil {
 		t.Fatalf("newRecorder() error = %v", err)
 	}
@@ -289,8 +282,7 @@ func TestRecorderDropsTemporaryMemoryAfterItsCaptureWindow(t *testing.T) {
 			return 1, nil
 		}),
 		1,
-		time.Second,
-	)
+		time.Second, nil)
 	if err != nil {
 		t.Fatalf("newRecorder() error = %v", err)
 	}
@@ -321,8 +313,7 @@ func TestRecorderRejectsEntireInvalidExtractionBatch(t *testing.T) {
 			return 0, nil
 		}),
 		1,
-		time.Second,
-	)
+		time.Second, nil)
 	if err != nil {
 		t.Fatalf("newRecorder() error = %v", err)
 	}
@@ -346,8 +337,7 @@ func TestRecorderCaptureIsBoundedAndValidatesWork(t *testing.T) {
 			return 0, nil
 		}),
 		1,
-		time.Second,
-	)
+		time.Second, nil)
 	if err != nil {
 		t.Fatalf("newRecorder() error = %v", err)
 	}
@@ -375,13 +365,13 @@ func TestNewRecorderRequiresExtractorAndWriter(t *testing.T) {
 	extractor := extractorFunc(func(context.Context, string) ([]Candidate, error) {
 		return nil, nil
 	})
-	if _, err := NewRecorder(nil, writer); !errors.Is(err, ErrExtractorRequired) {
+	if _, err := NewRecorder(nil, writer, nil); !errors.Is(err, ErrExtractorRequired) {
 		t.Fatalf("NewRecorder(nil, writer) error = %v", err)
 	}
-	if _, err := NewRecorder(extractor, nil); !errors.Is(err, ErrWriterRequired) {
+	if _, err := NewRecorder(extractor, nil, nil); !errors.Is(err, ErrWriterRequired) {
 		t.Fatalf("NewRecorder(extractor, nil) error = %v", err)
 	}
-	if _, err := NewRecorder(extractor, writer); err != nil {
+	if _, err := NewRecorder(extractor, writer, nil); err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
 }

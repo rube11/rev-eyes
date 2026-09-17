@@ -44,6 +44,7 @@ func NewDispatcher(
 	repository Repository,
 	searcher Searcher,
 	notifier PendingNotifier,
+	workspaceChanged func(string),
 ) (*Dispatcher, error) {
 	if repository == nil {
 		return nil, ErrRepositoryRequired
@@ -54,12 +55,7 @@ func NewDispatcher(
 	if notifier == nil {
 		return nil, ErrNotifierRequired
 	}
-	return &Dispatcher{repository: repository, searcher: searcher, notifier: notifier}, nil
-}
-
-// SetWorkspaceChanged registers delivery after a scheduled watch changes.
-func (d *Dispatcher) SetWorkspaceChanged(workspaceChanged func(userID string)) {
-	d.workspaceChanged = workspaceChanged
+	return &Dispatcher{repository: repository, searcher: searcher, notifier: notifier, workspaceChanged: workspaceChanged}, nil
 }
 
 func (d *Dispatcher) RunResource(ctx context.Context, resourceID string) error {

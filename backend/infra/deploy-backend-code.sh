@@ -25,12 +25,27 @@ migration_source="migrations/$migration_name"
 migration_unit="rev-eyes-migrate-0014-$(date +%s)"
 backend_binary=$(mktemp)
 migration_binary=$(mktemp)
-trap 'rm -f "$backend_binary" "$migration_binary"' EXIT
+runtime_bundle=$(mktemp)
+trap 'rm -f "$backend_binary" "$migration_binary" "$runtime_bundle"' EXIT
 
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -trimpath -ldflags='-s -w' -o "$backend_binary" .
+if [[ ${SERVER_MOONSHINE_ENABLED:-true} != false ]]; then
+  export MOONSHINE_NATIVE_DIR=${MOONSHINE_NATIVE_DIR:-/tmp/rev-eyes-moonshine}
+fi
+bash infra/build-backend.sh "$backend_binary"
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -trimpath -ldflags='-s -w' -o "$migration_binary" ./cmd/migrate
+
+# Native dependencies are versioned separately from the rollback binary.
+native_enabled=false
+if [[ -n ${MOONSHINE_NATIVE_DIR:-} ]]; then
+  native_enabled=true
+  test -f "$MOONSHINE_NATIVE_DIR/model/streaming_config.json"
+  tar -czf "$runtime_bundle" -C "$MOONSHINE_NATIVE_DIR" lib model
+  scp "$runtime_bundle" "$host:/tmp/"
+  ssh "$host" "sudo bash -s -- /tmp/$(basename "$runtime_bundle") /opt/rev-eyes/moonshine/v0.1.5" \
+    < infra/install-moonshine-runtime.sh
+  ssh "$host" "rm /tmp/$(basename "$runtime_bundle")"
+fi
 
 scp \
   "$backend_binary" \
@@ -56,6 +71,13 @@ ssh "$host" "
   fi
   sudo cp -p /etc/rev-eyes/backend.env /etc/rev-eyes/backend.env.previous
   sudo install -o root -g root -m 0755 /tmp/$(basename "$backend_binary") /opt/rev-eyes/backend
+  if [ '$native_enabled' = true ]; then
+    sudo sed -i '/^SERVER_MOONSHINE_ENABLED=/d; /^MOONSHINE_MODEL_DIR=/d' /etc/rev-eyes/backend.env
+    printf '%s\n' \
+      'SERVER_MOONSHINE_ENABLED=true' \
+      'MOONSHINE_MODEL_DIR=/opt/rev-eyes/moonshine/v0.1.5/model' \
+      | sudo tee -a /etc/rev-eyes/backend.env >/dev/null
+  fi
   sudo sed -i '/^BETA_ALLOWED_EMAILS=/d' /etc/rev-eyes/backend.env
   printf '%s\n' 'BETA_ALLOWED_EMAILS=$beta_allowed_emails' \
     | sudo tee -a /etc/rev-eyes/backend.env >/dev/null

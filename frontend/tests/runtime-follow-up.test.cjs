@@ -7,7 +7,7 @@ const ts = require('typescript')
 
 // Exercise the real runtime, lifecycle and audio controller with fake SDK/socket
 // boundaries. No hardware microphone, network requests, or model calls.
-async function harness(t) {
+async function harness(t, serverListeningEnabled = false, reconnect = false) {
   let now = 0
   let eventHandler
   let allowAudio = true
@@ -15,18 +15,26 @@ async function harness(t) {
   let sequence = 0
   const timers = new Map()
   const audio = []
+  const pcmFrames = []
   const controls = []
   const pages = []
   const statuses = []
   const upgrades = []
-  const listeners = new Map()
-  const socket = {
-    readyState: 1,
-    addEventListener: (type, fn) => listeners.set(type, fn),
-    removeEventListener: (type, fn) => { if (listeners.get(type) === fn) listeners.delete(type) },
-    send: data => { if (typeof data === 'string') controls.push(JSON.parse(data).type) },
-    close: () => { socket.readyState = 3; listeners.get('close')?.() },
+  let connectionGate
+  const sockets = []
+  function newSocket() {
+    const listeners = new Map()
+    const socket = {
+      listeners, readyState: 1,
+      addEventListener: (type, fn) => listeners.set(type, fn),
+      removeEventListener: (type, fn) => { if (listeners.get(type) === fn) listeners.delete(type) },
+      send: data => { if (typeof data === 'string') controls.push(JSON.parse(data).type); else pcmFrames.push(Array.from(new Uint8Array(data))) },
+      close: () => { socket.readyState = 3; listeners.get('close')?.() },
+    }
+    sockets.push(socket)
+    return socket
   }
+  let socket = newSocket()
   const bridge = {
     audioControl: async enabled => {
       audio.push(enabled)
@@ -39,6 +47,7 @@ async function harness(t) {
     stopAppLocationUpdates: async () => {},
   }
   const mocks = {
+    "../shared/config/env": { env: { serverListeningEnabled } },
     '@evenrealities/even_hub_sdk': {
       AppLocationAccuracy: { Medium: 1 }, AudioInputSource: { Glasses: 1 },
       OsEventTypeList: { CLICK_EVENT: 0, SCROLL_TOP_EVENT: 1, SCROLL_BOTTOM_EVENT: 2, DOUBLE_CLICK_EVENT: 3 },
@@ -58,7 +67,12 @@ async function harness(t) {
       buildTranscriptPage: text => ({ transcript: text }),
       presentGlassesMessage: text => ({ kind: 'answer', body: text }),
     },
-    '../shared/api/client': { connectRealtimeSocket: async () => socket },
+    '../shared/api/client': { connectRealtimeSocket: async () => {
+      if (reconnect && socket.readyState !== 1) socket = newSocket()
+      const opened = socket
+      if (connectionGate) await connectionGate
+      return opened
+    } },
   }
   const context = vm.createContext({
     console, AbortController, Uint8Array, WebSocket: { OPEN: 1 },
@@ -100,7 +114,7 @@ async function harness(t) {
   const dispose = await initializeEvenExperience('synthetic-test-token', value => statuses.push(value))
   t.after(dispose)
   await advance(0)
-  const message = async (type, extra = {}) => { listeners.get('message')?.({ data: JSON.stringify({ type, ...extra }) }); await flush() }
+  const message = async (type, extra = {}) => { socket.listeners.get('message')?.({ data: JSON.stringify({ type, ...extra }) }); await flush() }
   const click = async () => { eventHandler?.({ sysEvent: { eventType: 0 } }); await flush() }
   const sleep = async () => { eventHandler?.({ jsonData: { gesture: 'LONG_PRESS' } }); await flush() }
   const scroll = async direction => { eventHandler?.({ textEvent: { eventType: direction > 0 ? 2 : 1 } }); await flush() }
@@ -110,7 +124,9 @@ async function harness(t) {
     await message('assistant_thinking')
     await message('assistant_response', { text: 'It is noon.' })
   }
-  return { audio, controls, pages, statuses, upgrades, message, click, sleep, scroll, reply, advance, dispose,
+  return { audio, controls, pages, statuses, upgrades, pcmFrames, sockets,
+    delayConnection: () => { let release; connectionGate = new Promise(resolve => { release = resolve }); return release },
+    pcm: async pcm => { eventHandler?.({ audioEvent: { audioPcm: pcm } }); await flush() }, message, click, sleep, scroll, reply, advance, dispose,
     disconnect: async () => { socket.close(); await flush() },
     denyAudio: () => { allowAudio = false },
     delayAudio: () => { let release; audioGate = new Promise(resolve => { release = resolve }); return release },
@@ -366,4 +382,146 @@ test('real layouts keep body and status disjoint and preserve all list content',
       assert.ok(body.content.split('\n').length <= 6)
     }
   }
+})
+
+test('server listening captures immediately and keeps audio running between manual turns', async t => {
+  const h = await harness(t, true)
+  assert.equal(h.audio.at(-1), true)
+  assert.ok(h.controls.includes('ambient_start'))
+  assert.equal(h.controls.includes('listening_start'), false)
+  await h.click()
+  assert.ok(h.controls.includes('listening_start'))
+  await h.click()
+  assert.ok(h.controls.includes('conversation_finalize'))
+  assert.equal(h.audio.includes(false), false)
+  await h.message('ambient_candidate', { id: 'ambient-manual' })
+  await h.message('assistant_done', { id: 'ambient-manual' })
+  assert.equal(h.audio.at(-1), true)
+  assert.match(h.pages.at(-1).label, /LISTENING/)
+})
+
+test('server owns follow-up expiry without stopping ambient capture', async t => {
+  const h = await harness(t, true)
+  await h.message('assistant_response', { text: 'It is noon.' })
+  assert.ok(h.controls.includes('ambient_reply_arm'))
+  assert.equal(h.controls.includes('listening_start'), false)
+  await h.advance(30_000)
+  assert.notEqual(h.pages.at(-1).footer, 'Tap to talk')
+  await h.message('conversation_idle')
+  assert.ok(h.controls.includes('ambient_reply_disarm'))
+  assert.equal(h.controls.includes('ambient_stop'), false)
+  assert.equal(h.audio.at(-1), true)
+  assert.equal(h.pages.at(-1).message.body, 'It is noon.')
+  assert.equal(h.pages.at(-1).footer, 'Tap to talk')
+})
+
+test('server listening stops on sleep and resumes on wake', async t => {
+  const h = await harness(t, true)
+  await h.sleep()
+  assert.equal(h.audio.at(-1), false)
+  assert.ok(h.controls.includes('ambient_stop'))
+  await h.advance(751) // Ignore the long-press release click, as on the device.
+  await h.click()
+  assert.equal(h.audio.at(-1), true)
+  assert.equal(h.controls.filter(x => x === 'ambient_start').length, 2)
+})
+
+test('server listener failure stops capture without opening a paid stream', async t => {
+  const h = await harness(t, true)
+  await h.message('listening_stopped', { error: 'Server listening unavailable' })
+  assert.equal(h.audio.at(-1), false)
+  assert.equal(h.controls.includes('listening_start'), false)
+  assert.match(h.pages.at(-1).label, /MIC UNAVAILABLE/)
+})
+
+
+test('server listening forwards copied PCM while the UI is idle', async t => {
+  const h = await harness(t, true)
+  const frame = new Uint8Array([1, 2, 3, 4])
+  await h.pcm(frame)
+  assert.deepEqual(h.pcmFrames, [[1, 2, 3, 4]])
+  assert.deepEqual(Array.from(frame), [1, 2, 3, 4])
+  assert.equal(h.controls.includes('listening_start'), false)
+})
+
+test('failed server capture on wake keeps the microphone error visible', async t => {
+  const h = await harness(t, true)
+  await h.sleep()
+  h.denyAudio()
+  await h.advance(751)
+  await h.click()
+  assert.equal(h.controls.at(-2), 'ambient_stop')
+  assert.match(h.pages.at(-1).label, /MIC UNAVAILABLE/)
+})
+
+test('server tap dismisses a visible answer and closes only the conversation', async t => {
+  const h = await harness(t, true)
+  await h.message('assistant_response', { text: 'It is noon.' })
+  await h.pcm(new Uint8Array([1, 0, 2, 0]))
+  const before = h.controls.length
+  await h.click()
+  assert.deepEqual(h.controls.slice(before, before + 2), ['conversation_stop', 'ambient_reply_disarm'])
+  assert.equal(h.controls.includes('ambient_stop'), false)
+  assert.equal(h.audio.at(-1), true)
+})
+
+test('streaming conversation accepts a keyword trigger and consecutive replies without restarting capture', async t => {
+  const h = await harness(t, true)
+  await h.message('conversation_started')
+  await h.message('user_transcript', { text: 'Glasses what is for dinner?' })
+  await h.message('assistant_thinking')
+  await h.message('assistant_response', { text: 'Try a vegetable curry.' })
+  await h.advance(45_000)
+  await h.message('user_transcript', { text: 'What ingredients do I need?' })
+  await h.message('assistant_thinking')
+  await h.message('assistant_response', { text: 'Chickpeas, vegetables and coconut milk.' })
+  assert.equal(h.audio.filter(Boolean).length, 1)
+  assert.equal(h.audio.includes(false), false)
+  assert.equal(h.controls.includes('conversation_stop'), false)
+  await h.message('conversation_idle')
+  assert.equal(h.pages.at(-1).footer, 'Tap to talk')
+})
+
+
+test('reconnect starts fresh capture and ignores events from the old socket', async t => {
+  const h = await harness(t, true, true)
+  const oldMessage = h.sockets[0].listeners.get('message')
+  await h.message('conversation_started')
+  await h.disconnect()
+  await h.advance(1_000)
+  assert.equal(h.sockets.length, 2)
+  assert.equal(h.controls.filter(x => x === 'ambient_start').length, 2)
+  const pageCount = h.pages.length
+  oldMessage({ data: JSON.stringify({ type: 'assistant_response', text: 'Stale reply' }) })
+  await h.advance(500)
+  assert.equal(h.pages.length, pageCount)
+  assert.equal(h.audio.at(-1), true)
+})
+
+test('teardown closes a socket that finishes connecting late', async t => {
+  const h = await harness(t, true, true)
+  const release = h.delayConnection()
+  await h.disconnect()
+  await h.advance(1_000)
+  await h.dispose()
+  release()
+  await h.advance(0)
+  assert.equal(h.sockets.at(-1).readyState, 3)
+  assert.equal(h.audio.at(-1), false)
+  assert.equal(h.controls.filter(x => x === 'ambient_start').length, 1)
+})
+
+test('server notifications defer answers and acknowledge dismissal without stopping ambient capture', async t => {
+  const h = await harness(t, true)
+  await h.message('assistant_response', { text: 'First answer' })
+  await h.message('notification', { id: 'n1', text: 'Reminder' })
+  await h.message('assistant_response', { text: 'Deferred answer' })
+  assert.equal(h.pages.at(-1).message.body, 'Reminder')
+  await h.click()
+  assert.ok(h.controls.includes('notification_ack'))
+  assert.equal(h.pages.at(-1).message.body, 'Deferred answer')
+  assert.equal(h.controls.includes('ambient_stop'), false)
+  await h.message('conversation_idle')
+  assert.equal(h.audio.at(-1), true)
+  assert.equal(h.pages.at(-1).footer, 'Tap to talk')
 })

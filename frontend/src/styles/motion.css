@@ -1,0 +1,20 @@
+@keyframes fade-rise {
+  from { opacity: 0; transform: translateY(6px); }
+}
+
+@keyframes reveal {
+  from { opacity: 0; transform: translateY(4px); }
+}
+
+@keyframes pulse-ring {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-line); }
+  60% { box-shadow: 0 0 0 7px transparent; }
+}
+
+@keyframes backdrop-in {
+  from { opacity: 0; }
+}
+
+@keyframes sheet-in {
+  from { opacity: 0; transform: translateX(24px); }
+}

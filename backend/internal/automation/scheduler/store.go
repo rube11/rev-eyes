@@ -13,19 +13,18 @@ import (
 const eventLease = 3 * time.Minute
 
 var (
-	ErrDatabaseRequired = errors.New("scheduled event database is required")
-	ErrEventIDRequired  = errors.New("scheduled event ID is required")
+	ErrEventIDRequired = errors.New("scheduled event ID is required")
 )
 
 type Store struct {
 	pool *pgxpool.Pool
 }
 
-func NewStore(pool *pgxpool.Pool) (*Store, error) {
+func NewStore(pool *pgxpool.Pool) *Store {
 	if pool == nil {
-		return nil, ErrDatabaseRequired
+		panic("database pool is required")
 	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool}
 }
 
 func (s *Store) Enqueue(ctx context.Context, event ScheduledEvent) error {

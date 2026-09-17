@@ -12,13 +12,14 @@ const (
 )
 
 var (
-	ErrDatabaseRequired       = errors.New("memory database is required")
 	ErrScopeRequired          = errors.New("memory scope is required")
 	ErrSourceRequired         = errors.New("source utterance ID is required")
 	ErrSourceUnavailable      = errors.New("source utterance is unavailable")
 	ErrCandidateBatchTooLarge = errors.New("memory candidate batch is too large")
 	ErrDuplicateMemoryKey     = errors.New("memory candidate keys must be unique within a batch")
 	ErrMemoryAmbiguous        = errors.New("more than one memory matches the request")
+	ErrMemoryNotFound         = errors.New("memory not found")
+	ErrInvalidMemoryEdit      = errors.New("invalid memory edit")
 )
 
 // Store persists atomic memories and their transcript sources.
@@ -26,9 +27,9 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-func NewStore(pool *pgxpool.Pool) (*Store, error) {
+func NewStore(pool *pgxpool.Pool) *Store {
 	if pool == nil {
-		return nil, ErrDatabaseRequired
+		panic("database pool is required")
 	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool}
 }

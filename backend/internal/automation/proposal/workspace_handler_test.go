@@ -41,6 +41,10 @@ func (s workspaceCommanderStub) DeleteByID(
 func TestWorkspaceHandlerApprovesProposalAndTriggersRegistration(t *testing.T) {
 	t.Parallel()
 
+	var (
+		changedUser string
+		changedKind Kind
+	)
 	triggered := false
 	handler, err := NewWorkspaceHandler(
 		func(_ context.Context, token string) (string, error) {
@@ -76,19 +80,13 @@ func TestWorkspaceHandlerApprovesProposalAndTriggersRegistration(t *testing.T) {
 				return false, nil
 			},
 		},
-		func() { triggered = true },
-	)
+		func() { triggered = true }, func(userID string, kind Kind) {
+			changedUser = userID
+			changedKind = kind
+		})
 	if err != nil {
 		t.Fatalf("NewWorkspaceHandler() error = %v", err)
 	}
-	var (
-		changedUser string
-		changedKind Kind
-	)
-	handler.SetWorkspaceChanged(func(userID string, kind Kind) {
-		changedUser = userID
-		changedKind = kind
-	})
 
 	mux := http.NewServeMux()
 	mux.Handle(
@@ -118,6 +116,10 @@ func TestWorkspaceHandlerApprovesProposalAndTriggersRegistration(t *testing.T) {
 func TestWorkspaceHandlerDeletesAndTriggersCancellation(t *testing.T) {
 	t.Parallel()
 
+	var (
+		changedUser string
+		changedKind Kind
+	)
 	triggered := false
 	handler, err := NewWorkspaceHandler(
 		func(context.Context, string) (string, error) {
@@ -148,19 +150,13 @@ func TestWorkspaceHandlerDeletesAndTriggersCancellation(t *testing.T) {
 				return true, nil
 			},
 		},
-		func() { triggered = true },
-	)
+		func() { triggered = true }, func(userID string, kind Kind) {
+			changedUser = userID
+			changedKind = kind
+		})
 	if err != nil {
 		t.Fatalf("NewWorkspaceHandler() error = %v", err)
 	}
-	var (
-		changedUser string
-		changedKind Kind
-	)
-	handler.SetWorkspaceChanged(func(userID string, kind Kind) {
-		changedUser = userID
-		changedKind = kind
-	})
 
 	mux := http.NewServeMux()
 	mux.Handle(
@@ -228,8 +224,7 @@ func TestWorkspaceHandlerReturnsStableCommandErrors(t *testing.T) {
 						return false, test.commandErr
 					},
 				},
-				func() { t.Fatal("schedule dispatcher was triggered") },
-			)
+				func() { t.Fatal("schedule dispatcher was triggered") }, nil)
 			if err != nil {
 				t.Fatalf("NewWorkspaceHandler() error = %v", err)
 			}
@@ -283,8 +278,7 @@ func TestWorkspaceHandlerRequiresBearerAuthentication(t *testing.T) {
 				return false, nil
 			},
 		},
-		func() { t.Fatal("schedule dispatcher was triggered") },
-	)
+		func() { t.Fatal("schedule dispatcher was triggered") }, nil)
 	if err != nil {
 		t.Fatalf("NewWorkspaceHandler() error = %v", err)
 	}

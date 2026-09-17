@@ -10,6 +10,8 @@ The project is currently in private beta.
 ## What it does
 
 - Streams tap-to-talk audio from the glasses and transcribes it with Deepgram.
+- Listens for keywords with server-side Moonshine, then opens one Deepgram stream
+  for the conversation. See [server listening setup](backend/docs/server-moonshine.md).
 - Routes conversations through OpenAI with relevant user and session context.
 - Builds a bounded memory profile from conversations and supports explicit
   remembering, correcting, reviewing, and forgetting.
@@ -111,7 +113,11 @@ From the repository root, launch both services:
 ```
 
 The launcher reads `backend/.local.env`. You can also start each service in its
-own terminal with `go run .` from `backend/` and `pnpm dev` from `frontend/`.
+own terminal with `bash infra/run-backend.sh` from `backend/` and `pnpm dev` from
+`frontend/`. Server Moonshine is enabled by default; the backend helper prepares
+the native Linux x86_64 runtime and model on first use. To intentionally use the
+old manual mode, set `SERVER_MOONSHINE_ENABLED=false` and
+`VITE_SERVER_LISTENING_ENABLED=false` in their respective environments.
 
 ## Validation
 

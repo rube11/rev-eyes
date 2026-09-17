@@ -3,14 +3,17 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/rube11/rev-eyes/backend/internal/ambient"
 	"github.com/rube11/rev-eyes/backend/internal/assistant"
 	"github.com/rube11/rev-eyes/backend/internal/assistant/openai"
 	"github.com/rube11/rev-eyes/backend/internal/auth"
@@ -19,12 +22,14 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/automation/scheduler"
 	"github.com/rube11/rev-eyes/backend/internal/automation/scheduler/registration"
 	"github.com/rube11/rev-eyes/backend/internal/automation/watch"
+	"github.com/rube11/rev-eyes/backend/internal/candidate"
 	"github.com/rube11/rev-eyes/backend/internal/database"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/notification"
 	"github.com/rube11/rev-eyes/backend/internal/realtime"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
+	"github.com/rube11/rev-eyes/backend/internal/stt/moonshine"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 	"github.com/rube11/rev-eyes/backend/internal/tool/location"
 	"github.com/rube11/rev-eyes/backend/internal/tool/websearch"
@@ -50,38 +55,14 @@ func run() error {
 	}
 	defer databasePool.Close()
 	slog.Info("database connection established")
-	sessionStore, err := session.NewStore(databasePool)
-	if err != nil {
-		return err
-	}
-	memoryStore, err := memory.NewStore(databasePool)
-	if err != nil {
-		return err
-	}
-	reminderStore, err := reminder.NewStore(databasePool)
-	if err != nil {
-		return err
-	}
-	watchStore, err := watch.NewStore(databasePool)
-	if err != nil {
-		return err
-	}
-	proposalStore, err := proposal.NewStore(databasePool)
-	if err != nil {
-		return err
-	}
-	notificationStore, err := notification.NewStore(databasePool)
-	if err != nil {
-		return err
-	}
-	registrationStore, err := registration.NewStore(databasePool)
-	if err != nil {
-		return err
-	}
-	scheduledEventStore, err := scheduler.NewStore(databasePool)
-	if err != nil {
-		return err
-	}
+	sessionStore := session.NewStore(databasePool)
+	memoryStore := memory.NewStore(databasePool)
+	reminderStore := reminder.NewStore(databasePool)
+	watchStore := watch.NewStore(databasePool)
+	proposalStore := proposal.NewStore(databasePool)
+	notificationStore := notification.NewStore(databasePool)
+	registrationStore := registration.NewStore(databasePool)
+	scheduledEventStore := scheduler.NewStore(databasePool)
 	scheduleRegistrar, err := registration.NewClient(
 		os.Getenv("SCHEDULE_REGISTRAR_URL"),
 		&http.Client{Timeout: 10 * time.Second},
@@ -130,19 +111,25 @@ func run() error {
 		tokenVerifier.Verify,
 		proposalStore,
 		registrationDispatcher.Trigger,
-	)
-	if err != nil {
-		return err
-	}
-	workspaceAutomationHandler.SetWorkspaceChanged(
 		func(userID string, kind proposal.Kind) {
 			resource := realtime.WorkspaceWatches
 			if kind == proposal.KindReminder {
 				resource = realtime.WorkspaceTasks
 			}
 			realtimeHub.WorkspaceChanged(userID, resource)
-		},
-	)
+		})
+	if err != nil {
+		return err
+	}
+	workspaceMemoryHandler, err := memory.NewWorkspaceHandler(
+		tokenVerifier.Verify,
+		memoryStore,
+		func(userID string) {
+			realtimeHub.WorkspaceChanged(userID, realtime.WorkspaceMemories)
+		})
+	if err != nil {
+		return err
+	}
 
 	classifier, err := openai.NewClassifier(
 		os.Getenv("OPENAI_API_KEY"),
@@ -165,17 +152,59 @@ func run() error {
 	memoryRecorder, err := memory.NewRecorder(
 		memoryExtractor,
 		memoryStore,
-	)
+		func(userID string) {
+			realtimeHub.WorkspaceChanged(userID, realtime.WorkspaceMemories)
+		})
 	if err != nil {
 		return err
 	}
-	memoryRecorder.SetOnStored(func(userID string) {
-		realtimeHub.WorkspaceChanged(userID, realtime.WorkspaceMemories)
-	})
 
 	transcriber, err := stt.NewDeepgramTranscriber(os.Getenv("DEEPGRAM_API_KEY"))
 	if err != nil {
 		return err
+	}
+	var ambientHandler realtime.AmbientListener
+	var streamingAmbient func(context.Context, <-chan ambient.Input, ambient.Conversation) error
+	var observedAmbient func(context.Context, <-chan ambient.Input, func(ambient.Clip), ambient.Observer) error
+	if serverMoonshineEnabled(os.Getenv("SERVER_MOONSHINE_ENABLED")) {
+		concurrencyValue := strings.TrimSpace(os.Getenv("SERVER_MOONSHINE_MAX_CONCURRENCY"))
+		if concurrencyValue == "" {
+			concurrencyValue = "1"
+		}
+		concurrency, parseErr := parseCandidateAudioConcurrency(concurrencyValue)
+		if parseErr != nil {
+			return fmt.Errorf("SERVER_MOONSHINE_MAX_CONCURRENCY: %w", parseErr)
+		}
+		factory, factoryErr := moonshine.New(os.Getenv("MOONSHINE_MODEL_DIR"), concurrency)
+		if factoryErr != nil {
+			return factoryErr
+		}
+		defer factory.Close()
+		listener := &ambient.Listener{Factory: factory}
+		ambientHandler = listener.Run
+		streamingAmbient = listener.RunStreaming
+		observedAmbient = listener.RunObserved
+	}
+	var candidateAudioHandler realtime.CandidateAudioHandler
+	candidateMaxConcurrent := 0
+	if environmentEnabled(os.Getenv("CANDIDATE_AUDIO_ENABLED")) || ambientHandler != nil {
+		candidateMaxConcurrent, err = parseCandidateAudioConcurrency(
+			os.Getenv("CANDIDATE_AUDIO_MAX_CONCURRENCY"),
+		)
+		if err != nil {
+			return err
+		}
+		candidateService, serviceErr := candidate.NewService(transcriber)
+		if serviceErr != nil {
+			return serviceErr
+		}
+		candidateAudioHandler = candidateService.Process
+		slog.Info("candidate audio enabled", "max_concurrent", candidateMaxConcurrent)
+	}
+	var clientDiagnosticHandler realtime.ClientDiagnosticHandler
+	if environmentEnabled(os.Getenv("CLIENT_DIAGNOSTICS_ENABLED")) {
+		clientDiagnosticHandler = logClientDiagnostic
+		slog.Warn("local client diagnostics enabled; rough transcripts will be logged")
 	}
 	activityRouter := assistant.NewRouter(classifier)
 
@@ -203,15 +232,10 @@ func run() error {
 		}
 	}
 
-	toolExecutor, err := tool.NewExecutor(toolRegistry)
-	if err != nil {
-		return err
-	}
 	agent, err := openai.NewAgent(
 		os.Getenv("OPENAI_API_KEY"),
 		os.Getenv("OPENAI_AGENT_MODEL"),
 		toolRegistry,
-		toolExecutor,
 	)
 	if err != nil {
 		return err
@@ -223,16 +247,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	assistantService, err := assistant.NewService(
+	assistantService := assistant.NewService(
 		activityRouter,
 		agent,
 		memoryStore,
 		conversationManager,
 		proposalConfirmer,
 	)
-	if err != nil {
-		return err
-	}
 
 	notificationService, err := notification.NewService(notificationStore, realtimeHub)
 	if err != nil {
@@ -256,13 +277,13 @@ func run() error {
 			return items, nil
 		}),
 		notificationService,
-	)
+		func(userID string) {
+			realtimeHub.WorkspaceChanged(userID, realtime.WorkspaceWatches)
+		})
 	if err != nil {
 		return err
 	}
-	watchDispatcher.SetWorkspaceChanged(func(userID string) {
-		realtimeHub.WorkspaceChanged(userID, realtime.WorkspaceWatches)
-	})
+
 	scheduledEventDispatcher, err := scheduler.NewDispatcher(
 		scheduledEventStore,
 		reminderDispatcher,
@@ -282,9 +303,15 @@ func run() error {
 	go scheduledEventDispatcher.Run(ctx)
 	go memoryRecorder.Run(ctx)
 	realtimeServer := realtime.NewServerWithHub(transcriber, realtimeHub, realtime.Handlers{
-		Authenticate:   tickets.Consume,
-		PrepareSession: sessionStore.Reopen,
-		CheckOrigin:    origins.Allows,
+		Ambient:                 ambientHandler,
+		CandidateAudio:          candidateAudioHandler,
+		AmbientStreaming:        streamingAmbient,
+		ConversationTranscriber: transcriber,
+		CandidateMaxConcurrent:  candidateMaxConcurrent,
+		ClientDiagnostic:        clientDiagnosticHandler,
+		Authenticate:            tickets.Consume,
+		PrepareSession:          sessionStore.Reopen,
+		CheckOrigin:             origins.Allows,
 		Connect: func(ctx context.Context, scope tool.Scope) error {
 			return notificationService.Flush(ctx, scope.UserID)
 		},
@@ -320,6 +347,8 @@ func run() error {
 	})
 
 	mux := http.NewServeMux()
+	diagnosticsServer := realtimeServer.DiagnosticsServer(observedAmbient)
+	mux.Handle("/ws/moonshine", diagnosticsServer)
 	mux.HandleFunc("GET /health", web.Health)
 	mux.Handle("/auth/ws-ticket", origins.Handler(ticketHandler))
 	textChatAPI := origins.Handler(realtimeServer.TextHandler(tokenVerifier.Verify, sessionStore.Reopen))
@@ -342,6 +371,9 @@ func run() error {
 		"OPTIONS /workspace/automations/{kind}/{resource_id}",
 		workspaceAutomationAPI,
 	)
+	workspaceMemoryAPI := origins.Handler(workspaceMemoryHandler)
+	mux.Handle("PATCH /workspace/memories/{memory_id}", workspaceMemoryAPI)
+	mux.Handle("OPTIONS /workspace/memories/{memory_id}", workspaceMemoryAPI)
 	mux.Handle("/internal/scheduler/run", schedulerHandler)
 	mux.Handle("/", realtimeServer)
 
@@ -369,7 +401,8 @@ func run() error {
 
 		serverErr := server.Shutdown(shutdownCtx)
 		realtimeErr := realtimeServer.Shutdown(shutdownCtx)
-		return errors.Join(serverErr, realtimeErr)
+		diagnosticsErr := diagnosticsServer.Shutdown(shutdownCtx)
+		return errors.Join(serverErr, realtimeErr, diagnosticsErr)
 	}
 }
 
@@ -382,4 +415,29 @@ func listenAddress() string {
 		return port
 	}
 	return ":" + port
+}
+
+func environmentEnabled(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "true")
+}
+
+func serverMoonshineEnabled(value string) bool {
+	return !strings.EqualFold(strings.TrimSpace(value), "false")
+}
+
+const maxCandidateAudioConcurrency = 32
+
+func parseCandidateAudioConcurrency(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 2, nil
+	}
+	concurrency, err := strconv.Atoi(value)
+	if err != nil || concurrency <= 0 || concurrency > maxCandidateAudioConcurrency {
+		return 0, fmt.Errorf(
+			"CANDIDATE_AUDIO_MAX_CONCURRENCY must be between 1 and %d",
+			maxCandidateAudioConcurrency,
+		)
+	}
+	return concurrency, nil
 }

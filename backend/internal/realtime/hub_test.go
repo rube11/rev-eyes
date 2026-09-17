@@ -17,7 +17,7 @@ func TestHubSendsMessageWhileTranscriptionIdle(t *testing.T) {
 	hub := NewHub()
 	server := NewServerWithHub(transcriberFunc(func(
 		context.Context,
-		<-chan []byte,
+		<-chan stt.AudioInput,
 		chan<- string,
 		stt.TranscriptObserver,
 	) error {
@@ -71,7 +71,7 @@ func TestHubSendsWorkspaceChanges(t *testing.T) {
 	hub := NewHub()
 	server := NewServerWithHub(transcriberFunc(func(
 		context.Context,
-		<-chan []byte,
+		<-chan stt.AudioInput,
 		chan<- string,
 		stt.TranscriptObserver,
 	) error {

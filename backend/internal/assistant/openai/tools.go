@@ -98,7 +98,7 @@ func (a *Agent) executeCall(
 	call toolCall,
 ) (json.RawMessage, error) {
 	startedAt := time.Now()
-	result, err := a.executor.Execute(ctx, scope, call.Name, call.Arguments)
+	result, err := a.registry.Execute(ctx, scope, call.Name, call.Arguments)
 	slog.InfoContext(ctx, "tool executed",
 		"name", call.Name,
 		"success", err == nil,

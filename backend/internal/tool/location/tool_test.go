@@ -32,12 +32,8 @@ func TestRegisteredToolReturnsScopedLocation(t *testing.T) {
 	if err := registry.Register(currentLocation); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-	executor, err := tool.NewExecutor(registry)
-	if err != nil {
-		t.Fatalf("NewExecutor() error = %v", err)
-	}
 
-	result, err := executor.Execute(
+	result, err := registry.Execute(
 		context.Background(),
 		scope,
 		"get_current_location",

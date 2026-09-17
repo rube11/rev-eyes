@@ -12,7 +12,7 @@ import (
 
 func TestHandleUtteranceReviewsMemoryConversationally(t *testing.T) {
 	wantLookup := memory.Lookup{Query: "Jolene", Entities: []string{"jolene"}}
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{
 				Action:       ActionMemoryReview,
@@ -50,9 +50,7 @@ func TestHandleUtteranceReviewsMemoryConversationally(t *testing.T) {
 		noConversation,
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
+
 	outcome, err := service.HandleUtterance(
 		context.Background(),
 		tool.Scope{UserID: "user-1", SessionID: "session-1"},
@@ -69,7 +67,7 @@ func TestHandleUtteranceReviewsMemoryConversationally(t *testing.T) {
 }
 
 func TestHandleUtteranceForgetsSingularReviewedMemoryByContext(t *testing.T) {
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{Action: ActionMemoryForget}, nil
 		}),
@@ -112,9 +110,7 @@ func TestHandleUtteranceForgetsSingularReviewedMemoryByContext(t *testing.T) {
 		}),
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
+
 	outcome, err := service.HandleUtterance(
 		context.Background(),
 		tool.Scope{UserID: "user-1", SessionID: "session-1"},
@@ -130,7 +126,7 @@ func TestHandleUtteranceForgetsSingularReviewedMemoryByContext(t *testing.T) {
 }
 
 func TestHandleUtteranceDoesNotForgetStaleReviewedMemory(t *testing.T) {
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{Action: ActionMemoryForget}, nil
 		}),
@@ -166,9 +162,7 @@ func TestHandleUtteranceDoesNotForgetStaleReviewedMemory(t *testing.T) {
 		}),
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
+
 	outcome, err := service.HandleUtterance(
 		context.Background(),
 		tool.Scope{UserID: "user-1", SessionID: "session-1"},
@@ -188,7 +182,7 @@ func TestHandleUtterancePreservesSpecificForgetQueryWithEntity(t *testing.T) {
 		Query:    "Jolene likes pho",
 		Entities: []string{"jolene"},
 	}
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{
 				Action:       ActionMemoryForget,
@@ -223,9 +217,7 @@ func TestHandleUtterancePreservesSpecificForgetQueryWithEntity(t *testing.T) {
 		noConversation,
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
+
 	outcome, err := service.HandleUtterance(
 		context.Background(),
 		tool.Scope{UserID: "user-1", SessionID: "session-1"},
@@ -241,7 +233,7 @@ func TestHandleUtterancePreservesSpecificForgetQueryWithEntity(t *testing.T) {
 }
 
 func TestHandleUtteranceAsksForMissingCorrection(t *testing.T) {
-	service, err := NewService(
+	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{Action: ActionMemoryCorrect}, nil
 		}),
@@ -259,9 +251,7 @@ func TestHandleUtteranceAsksForMissingCorrection(t *testing.T) {
 		noConversation,
 		noProposalConfirmation,
 	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
+
 	outcome, err := service.HandleUtterance(
 		context.Background(),
 		tool.Scope{},

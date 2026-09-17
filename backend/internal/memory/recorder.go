@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/rube11/rev-eyes/backend/internal/tool"
@@ -57,31 +56,22 @@ type Recorder struct {
 	timeout   time.Duration
 	now       func() time.Time
 
-	started atomic.Bool
-	closed  atomic.Bool
+	// stateMu protects admission and the single worker's start/stop state.
+	started bool
+	closed  bool
 	stateMu sync.RWMutex
 
-	callbackMu sync.RWMutex
-	onStored   func(userID string)
+	// Immutable refresh hook; explicit writes report through the utterance result.
+	onStored func(userID string)
 }
 
-// SetOnStored registers a best-effort refresh hook for background writes.
-// Explicit writes are reported by the synchronous utterance result instead.
-func (r *Recorder) SetOnStored(callback func(userID string)) {
-	if r == nil {
-		return
-	}
-	r.callbackMu.Lock()
-	r.onStored = callback
-	r.callbackMu.Unlock()
-}
-
-func NewRecorder(extractor Extractor, writer Writer) (*Recorder, error) {
+func NewRecorder(extractor Extractor, writer Writer, onStored func(string)) (*Recorder, error) {
 	return newRecorder(
 		extractor,
 		writer,
 		defaultRecorderQueueSize,
 		defaultCaptureTimeout,
+		onStored,
 	)
 }
 
@@ -90,6 +80,7 @@ func newRecorder(
 	writer Writer,
 	queueSize int,
 	timeout time.Duration,
+	onStored func(string),
 ) (*Recorder, error) {
 	if extractor == nil {
 		return nil, ErrExtractorRequired
@@ -109,6 +100,7 @@ func newRecorder(
 		jobs:      make(chan captureJob, queueSize),
 		timeout:   timeout,
 		now:       time.Now,
+		onStored:  onStored,
 	}, nil
 }
 
@@ -129,7 +121,7 @@ func (r *Recorder) Capture(scope tool.Scope, sourceID string, text string) bool 
 
 	r.stateMu.RLock()
 	defer r.stateMu.RUnlock()
-	if r.closed.Load() {
+	if r.closed {
 		return false
 	}
 	select {
@@ -170,12 +162,19 @@ func (r *Recorder) RememberExplicit(
 // implementation and bounds model/API concurrency. Additional workers should
 // only be introduced with per-user ordering at the durable queue layer.
 func (r *Recorder) Run(ctx context.Context) {
-	if r == nil || !r.started.CompareAndSwap(false, true) {
+	if r == nil {
 		return
 	}
+	r.stateMu.Lock()
+	if r.started {
+		r.stateMu.Unlock()
+		return
+	}
+	r.started = true
+	r.stateMu.Unlock()
 	defer func() {
 		r.stateMu.Lock()
-		r.closed.Store(true)
+		r.closed = true
 		r.stateMu.Unlock()
 	}()
 
@@ -252,10 +251,7 @@ func (r *Recorder) record(
 }
 
 func (r *Recorder) notifyStored(userID string) {
-	r.callbackMu.RLock()
-	callback := r.onStored
-	r.callbackMu.RUnlock()
-	if callback != nil {
-		callback(userID)
+	if r.onStored != nil {
+		r.onStored(userID)
 	}
 }

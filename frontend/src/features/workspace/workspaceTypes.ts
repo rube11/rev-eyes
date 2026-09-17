@@ -45,6 +45,8 @@ export type MemoryKind =
   | 'goal'
   | 'instruction'
 
+export type MemoryLayer = 'core' | 'recent' | 'detail'
+
 export type MemoryItem = {
   id: string
   title: string
@@ -52,10 +54,25 @@ export type MemoryItem = {
   topics: string[]
   kind: MemoryKind
   status: 'active' | 'superseded' | 'forgotten'
+  /** Effective profile layer: the user's override when set, else what Eyes assigned. */
+  layer: MemoryLayer
+  /** The layer Eyes assigned at extraction time, before any user override. */
+  assignedLayer: MemoryLayer
+  /** True when the user pinned this memory into the core profile. */
+  pinned: boolean
+  memoryKey?: string
   createdAt: string
   updatedAt: string
+  observedAt: string
   expiresAt?: string
+  inactiveAt?: string
+  sourceUtteranceId?: string
+  sourceConversationId?: string
 }
+
+export type MemoryEdit =
+  | { action: 'forget' | 'restore' | 'pin' | 'unpin' }
+  | { action: 'update'; title: string; summary: string }
 
 export type WatchItem = {
   id: string

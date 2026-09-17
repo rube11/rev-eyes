@@ -39,7 +39,7 @@ func TestProfileSuppliedWithoutSearchMatchForChatGlassesAndReview(t *testing.T) 
 					}
 					return "# User profile\n## Core\n- Student.\n- Protein target: 150g.", nil
 				}}
-				service, err := NewService(routerFunc(func(context.Context, string) (Decision, error) {
+				service := NewService(routerFunc(func(context.Context, string) (Decision, error) {
 					return Decision{Action: action, Query: "help me decide"}, nil
 				}),
 					agentFunc(func(_ context.Context, scope tool.Scope, _ string, conversation session.Conversation, cards []memory.Card) (string, error) {
@@ -52,10 +52,8 @@ func TestProfileSuppliedWithoutSearchMatchForChatGlassesAndReview(t *testing.T) 
 						}
 						return "Here is a next step.", nil
 					}), store, noConversation, noProposalConfirmation)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err = service.HandleUtterance(context.Background(), tool.Scope{UserID: "owner", AlwaysRespond: typed}, "turn", "help me decide"); err != nil || loads != 1 {
+
+				if _, err := service.HandleUtterance(context.Background(), tool.Scope{UserID: "owner", AlwaysRespond: typed}, "turn", "help me decide"); err != nil || loads != 1 {
 					t.Fatalf("err=%v loads=%d", err, loads)
 				}
 			}
@@ -77,16 +75,14 @@ func TestProfileEditsAreExplicitScopedAndDoNotCallAgent(t *testing.T) {
 				}
 				return 1, nil
 			}}
-			service, err := NewService(routerFunc(func(context.Context, string) (Decision, error) {
+			service := NewService(routerFunc(func(context.Context, string) (Decision, error) {
 				return Decision{Action: action, Query: "protein target"}, nil
 			}),
 				agentFunc(func(context.Context, tool.Scope, string, session.Conversation, []memory.Card) (string, error) {
 					t.Error("profile edit called agent")
 					return "", nil
 				}), store, noConversation, noProposalConfirmation)
-			if err != nil {
-				t.Fatal(err)
-			}
+
 			out, err := service.HandleUtterance(context.Background(), tool.Scope{UserID: "owner"}, "turn", "profile edit")
 			if err != nil || calls != 1 || out.MemoryChanged == ambiguous || out.Response == "" {
 				t.Fatalf("unexpected result %#v %v", out, err)

@@ -14,7 +14,6 @@ import (
 const resumeWindow = "30 minutes"
 
 var (
-	ErrDatabaseRequired   = errors.New("session database is required")
 	ErrScopeRequired      = errors.New("session scope is required")
 	ErrSpeakerInvalid     = errors.New("transcript speaker is invalid")
 	ErrTextRequired       = errors.New("transcript text is required")
@@ -33,11 +32,11 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-func NewStore(pool *pgxpool.Pool) (*Store, error) {
+func NewStore(pool *pgxpool.Pool) *Store {
 	if pool == nil {
-		return nil, ErrDatabaseRequired
+		panic("database pool is required")
 	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool}
 }
 
 // Resume returns the user's recent active session or creates a new one.

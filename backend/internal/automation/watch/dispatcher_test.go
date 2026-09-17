@@ -62,21 +62,19 @@ func TestDispatcherChecksScheduledWatchAndFlushesUpdate(t *testing.T) {
 		exists: true,
 		notify: true,
 	}
+	var changed string
 	notifier := &notifierStub{}
 	dispatcher, err := NewDispatcher(
 		repository,
 		searcherFunc(func(_ context.Context, query string) ([]Item, error) {
 			return []Item{{Title: query, URL: "https://example.com/first"}}, nil
 		}),
-		notifier,
-	)
+		notifier, func(userID string) {
+			changed = userID
+		})
 	if err != nil {
 		t.Fatalf("NewDispatcher() error = %v", err)
 	}
-	var changed string
-	dispatcher.SetWorkspaceChanged(func(userID string) {
-		changed = userID
-	})
 
 	if err := dispatcher.RunResource(context.Background(), "watch-1"); err != nil {
 		t.Fatalf("RunResource() error = %v", err)
@@ -105,8 +103,7 @@ func TestDispatcherLeavesFailedSearchRetryable(t *testing.T) {
 		searcherFunc(func(context.Context, string) ([]Item, error) {
 			return nil, wantErr
 		}),
-		&notifierStub{},
-	)
+		&notifierStub{}, nil)
 
 	if err := dispatcher.RunResource(context.Background(), "watch-1"); !errors.Is(err, wantErr) {
 		t.Fatalf("RunResource() error = %v", err)
@@ -125,8 +122,7 @@ func TestDispatcherIgnoresInactiveWatch(t *testing.T) {
 			t.Fatal("Search() was called")
 			return nil, nil
 		}),
-		&notifierStub{},
-	)
+		&notifierStub{}, nil)
 	if err := dispatcher.RunResource(context.Background(), "watch-1"); err != nil {
 		t.Fatalf("RunResource() error = %v", err)
 	}
@@ -139,13 +135,13 @@ func TestNewDispatcherRequiresDependencies(t *testing.T) {
 	searcher := searcherFunc(func(context.Context, string) ([]Item, error) { return nil, nil })
 	notifier := &notifierStub{}
 
-	if _, err := NewDispatcher(nil, searcher, notifier); !errors.Is(err, ErrRepositoryRequired) {
+	if _, err := NewDispatcher(nil, searcher, notifier, nil); !errors.Is(err, ErrRepositoryRequired) {
 		t.Fatalf("nil repository error = %v", err)
 	}
-	if _, err := NewDispatcher(repository, nil, notifier); !errors.Is(err, ErrSearcherRequired) {
+	if _, err := NewDispatcher(repository, nil, notifier, nil); !errors.Is(err, ErrSearcherRequired) {
 		t.Fatalf("nil searcher error = %v", err)
 	}
-	if _, err := NewDispatcher(repository, searcher, nil); !errors.Is(err, ErrNotifierRequired) {
+	if _, err := NewDispatcher(repository, searcher, nil, nil); !errors.Is(err, ErrNotifierRequired) {
 		t.Fatalf("nil notifier error = %v", err)
 	}
 }

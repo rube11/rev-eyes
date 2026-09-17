@@ -13,7 +13,6 @@ import (
 const registrationLease = time.Minute
 
 var (
-	ErrDatabaseRequired       = errors.New("schedule registration database is required")
 	ErrRegistrationIDRequired = errors.New("schedule registration ID is required")
 )
 
@@ -27,11 +26,11 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-func NewStore(pool *pgxpool.Pool) (*Store, error) {
+func NewStore(pool *pgxpool.Pool) *Store {
 	if pool == nil {
-		return nil, ErrDatabaseRequired
+		panic("database pool is required")
 	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool}
 }
 
 func (s *Store) Claim(ctx context.Context, limit int) ([]Registration, error) {

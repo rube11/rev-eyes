@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/rube11/rev-eyes/backend/internal/ambient"
+	"github.com/rube11/rev-eyes/backend/internal/stt"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
@@ -46,15 +48,32 @@ type UtteranceHandler func(
 ) (UtteranceResult, error)
 type LocationHandler func(ctx context.Context, scope tool.Scope, update LocationUpdate) error
 type NotificationAckHandler func(ctx context.Context, scope tool.Scope, notificationID string) error
+type CandidateAudioHandler func(
+	ctx context.Context,
+	audio []byte,
+	format stt.AudioFormat,
+) (string, error)
+
+type AmbientListener func(context.Context, <-chan ambient.Input, func(ambient.Clip)) error
+
 type Handlers struct {
-	Authenticate    Authenticator
-	CheckOrigin     func(r *http.Request) bool
-	Connect         func(ctx context.Context, scope tool.Scope) error
-	PrepareSession  func(ctx context.Context, scope tool.Scope) error
-	Utterance       UtteranceHandler
-	Location        LocationHandler
-	NotificationAck NotificationAckHandler
-	Disconnect      func(scope tool.Scope)
+	ConversationTranscriber stt.ConversationTranscriber
+	// Diagnostics is set only on the separate authenticated live-test server.
+	Diagnostics            bool
+	AmbientObserved        func(context.Context, <-chan ambient.Input, func(ambient.Clip), ambient.Observer) error
+	Ambient                AmbientListener
+	AmbientStreaming       func(context.Context, <-chan ambient.Input, ambient.Conversation) error
+	CandidateAudio         CandidateAudioHandler
+	CandidateMaxConcurrent int
+	ClientDiagnostic       ClientDiagnosticHandler
+	Authenticate           Authenticator
+	CheckOrigin            func(r *http.Request) bool
+	Connect                func(ctx context.Context, scope tool.Scope) error
+	PrepareSession         func(ctx context.Context, scope tool.Scope) error
+	Utterance              UtteranceHandler
+	Location               LocationHandler
+	NotificationAck        NotificationAckHandler
+	Disconnect             func(scope tool.Scope)
 }
 
 type LocationUpdate struct {
@@ -64,12 +83,37 @@ type LocationUpdate struct {
 }
 
 type clientMessage struct {
-	Type string `json:"type"`
-	ID   string `json:"id,omitempty"`
+	Type              string           `json:"type"`
+	ID                string           `json:"id,omitempty"`
+	Encoding          string           `json:"encoding,omitempty"`
+	SampleRate        int              `json:"sample_rate,omitempty"`
+	Channels          int              `json:"channels,omitempty"`
+	ByteLength        int              `json:"byte_length,omitempty"`
+	StartSampleOffset int64            `json:"start_sample_offset,omitempty"`
+	EndSampleOffset   int64            `json:"end_sample_offset,omitempty"`
+	GateCategory      string           `json:"gate_category,omitempty"`
+	GateConfidence    float64          `json:"gate_confidence,omitempty"`
+	Diagnostic        ClientDiagnostic `json:"diagnostic,omitempty"`
 	LocationUpdate
 }
 
+func (message clientMessage) candidateHeader() candidateAudioHeader {
+	return candidateAudioHeader{
+		ID:                message.ID,
+		Encoding:          message.Encoding,
+		SampleRate:        message.SampleRate,
+		Channels:          message.Channels,
+		ByteLength:        message.ByteLength,
+		StartSampleOffset: message.StartSampleOffset,
+		EndSampleOffset:   message.EndSampleOffset,
+		GateCategory:      message.GateCategory,
+		GateConfidence:    message.GateConfidence,
+	}
+}
+
 type serverMessage struct {
+	Final                bool                `json:"final,omitempty"`
+	ReceivedBytes        int64               `json:"received_bytes,omitempty"`
 	Type                 string              `json:"type"`
 	ID                   string              `json:"id,omitempty"`
 	Text                 string              `json:"text,omitempty"`
