@@ -78,7 +78,7 @@ func NewServerWithHub(transcriber stt.Transcriber, hub *Hub, handlers Handlers) 
 	return newServer(transcriber, hub, handlers, capacity)
 }
 
-// Main listening and diagnostics share these limits. Retained slots last until
+// Retained slots last until
 // clip PCM is cleared; paid slots cover transcription AND downstream turns.
 type transcriptionCapacity struct {
 	retained        chan struct{}
@@ -146,10 +146,6 @@ func (s *Server) serveConnection(
 	scope tool.Scope,
 ) error {
 	ctx, cancel := context.WithCancel(parent)
-	if s.handlers.Diagnostics {
-		cancel()
-		ctx, cancel = context.WithTimeout(parent, 7*time.Minute)
-	}
 	messages := make(chan incomingMessage)
 	go s.readMessages(ctx, conn, messages)
 	candidateJobs := make(chan candidateJob, 1)
@@ -166,11 +162,7 @@ func (s *Server) serveConnection(
 	legacyCapturing := false
 	var pendingCandidate *candidateAudioHeader
 	audioMode := audioModeUnset
-	if s.handlers.Diagnostics {
-		audioMode = audioModeAmbient
-	}
 	usedCandidateIDs := newCandidateIDWindow()
-	var diagnosticLimiter clientDiagnosticLimiter
 	defer func() {
 		cancel()
 		if transcribing {
@@ -313,20 +305,6 @@ func (s *Server) serveConnection(
 			}
 
 			switch message.Type {
-			case moonshineDiagnosticMessageType:
-				if s.handlers.ClientDiagnostic == nil {
-					continue
-				}
-				diagnostic, err := message.Diagnostic.normalized()
-				if err != nil {
-					slog.DebugContext(ctx, "ignored invalid client diagnostic")
-					continue
-				}
-				if !diagnosticLimiter.allow(time.Now()) {
-					continue
-				}
-				s.handlers.ClientDiagnostic(ctx, diagnostic)
-
 			case candidateAudioMessageType:
 				if s.handlers.CandidateAudio == nil {
 					continue
@@ -402,7 +380,7 @@ func (s *Server) serveConnection(
 				ambientCancel = stopAmbient
 				transcribing = true
 				go func(input <-chan ambient.Input) {
-					if s.handlers.AmbientStreaming != nil && !s.handlers.Diagnostics {
+					if s.handlers.AmbientStreaming != nil {
 						transcription <- s.handlers.AmbientStreaming(ambientCtx, input, func(ctx context.Context, audio <-chan stt.AudioInput, automatic bool) error {
 							return s.runConversation(ctx, scope, conn, audio, automatic)
 						})

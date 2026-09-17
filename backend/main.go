@@ -165,7 +165,7 @@ func run() error {
 	}
 	var ambientHandler realtime.AmbientListener
 	var streamingAmbient func(context.Context, <-chan ambient.Input, ambient.Conversation) error
-	var observedAmbient func(context.Context, <-chan ambient.Input, func(ambient.Clip), ambient.Observer) error
+
 	if serverMoonshineEnabled(os.Getenv("SERVER_MOONSHINE_ENABLED")) {
 		concurrencyValue := strings.TrimSpace(os.Getenv("SERVER_MOONSHINE_MAX_CONCURRENCY"))
 		if concurrencyValue == "" {
@@ -183,7 +183,6 @@ func run() error {
 		listener := &ambient.Listener{Factory: factory}
 		ambientHandler = listener.Run
 		streamingAmbient = listener.RunStreaming
-		observedAmbient = listener.RunObserved
 	}
 	var candidateAudioHandler realtime.CandidateAudioHandler
 	candidateMaxConcurrent := 0
@@ -200,11 +199,6 @@ func run() error {
 		}
 		candidateAudioHandler = candidateService.Process
 		slog.Info("candidate audio enabled", "max_concurrent", candidateMaxConcurrent)
-	}
-	var clientDiagnosticHandler realtime.ClientDiagnosticHandler
-	if environmentEnabled(os.Getenv("CLIENT_DIAGNOSTICS_ENABLED")) {
-		clientDiagnosticHandler = logClientDiagnostic
-		slog.Warn("local client diagnostics enabled; rough transcripts will be logged")
 	}
 	activityRouter := assistant.NewRouter(classifier)
 
@@ -308,7 +302,6 @@ func run() error {
 		AmbientStreaming:        streamingAmbient,
 		ConversationTranscriber: transcriber,
 		CandidateMaxConcurrent:  candidateMaxConcurrent,
-		ClientDiagnostic:        clientDiagnosticHandler,
 		Authenticate:            tickets.Consume,
 		PrepareSession:          sessionStore.Reopen,
 		CheckOrigin:             origins.Allows,
@@ -347,8 +340,6 @@ func run() error {
 	})
 
 	mux := http.NewServeMux()
-	diagnosticsServer := realtimeServer.DiagnosticsServer(observedAmbient)
-	mux.Handle("/ws/moonshine", diagnosticsServer)
 	mux.HandleFunc("GET /health", web.Health)
 	mux.Handle("/auth/ws-ticket", origins.Handler(ticketHandler))
 	textChatAPI := origins.Handler(realtimeServer.TextHandler(tokenVerifier.Verify, sessionStore.Reopen))
@@ -401,8 +392,7 @@ func run() error {
 
 		serverErr := server.Shutdown(shutdownCtx)
 		realtimeErr := realtimeServer.Shutdown(shutdownCtx)
-		diagnosticsErr := diagnosticsServer.Shutdown(shutdownCtx)
-		return errors.Join(serverErr, realtimeErr, diagnosticsErr)
+		return errors.Join(serverErr, realtimeErr)
 	}
 }
 
