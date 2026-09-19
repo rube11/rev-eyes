@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/rube11/rev-eyes/backend/internal/assistant"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
@@ -49,180 +50,6 @@ func (t *recordingTool) Spec() tool.Spec {
 	}
 }
 
-func TestAgentReportsSuccessfulProposalCreation(t *testing.T) {
-	t.Parallel()
-
-	proposal := &recordingTool{
-		name:     proposeTaskToolName,
-		mutating: true,
-		result:   tool.Result{Content: `{"status":"proposed"}`},
-	}
-	requestNumber := 0
-	agent := testAgent(t, proposal, func(w http.ResponseWriter, _ *http.Request) {
-		requestNumber++
-		if requestNumber == 1 {
-			writeJSON(t, w, map[string]any{
-				"output": []any{map[string]any{
-					"type":      "function_call",
-					"call_id":   "call-proposal",
-					"name":      proposeTaskToolName,
-					"arguments": `{"value":"tomorrow"}`,
-				}},
-			})
-			return
-		}
-		writeJSON(t, w, map[string]any{
-			"output": []any{map[string]any{
-				"type": "message",
-				"content": []any{map[string]any{
-					"type": "output_text",
-					"text": "Should I save that?",
-				}},
-			}},
-		})
-	})
-
-	result, err := agent.RespondWithResult(
-		context.Background(),
-		tool.Scope{},
-		"Remind me tomorrow.",
-		session.Conversation{},
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("RespondWithResult() error = %v", err)
-	}
-	if result.Text != "Should I save that?" || !result.ProposalCreated {
-		t.Fatalf("RespondWithResult() = %#v", result)
-	}
-}
-
-func TestAgentDoesNotReportFailedProposalCreation(t *testing.T) {
-	t.Parallel()
-
-	proposal := &recordingTool{
-		name:     proposeTaskToolName,
-		mutating: true,
-		err:      errors.New("proposal unavailable"),
-	}
-	requestNumber := 0
-	agent := testAgent(t, proposal, func(w http.ResponseWriter, _ *http.Request) {
-		requestNumber++
-		if requestNumber == 1 {
-			writeJSON(t, w, map[string]any{
-				"output": []any{map[string]any{
-					"type":      "function_call",
-					"call_id":   "call-proposal",
-					"name":      proposeTaskToolName,
-					"arguments": `{"value":"tomorrow"}`,
-				}},
-			})
-			return
-		}
-		writeJSON(t, w, map[string]any{
-			"output": []any{map[string]any{
-				"type": "message",
-				"content": []any{map[string]any{
-					"type": "output_text",
-					"text": "I couldn't prepare that reminder.",
-				}},
-			}},
-		})
-	})
-
-	result, err := agent.RespondWithResult(
-		context.Background(),
-		tool.Scope{},
-		"Remind me tomorrow.",
-		session.Conversation{},
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("RespondWithResult() error = %v", err)
-	}
-	if result.ProposalCreated {
-		t.Fatalf("RespondWithResult() = %#v, want no proposal metadata", result)
-	}
-}
-
-func TestAgentPreservesProposalCreationWhenFinalResponseFails(t *testing.T) {
-	t.Parallel()
-
-	proposal := &recordingTool{
-		name:     proposeTaskToolName,
-		mutating: true,
-		result:   tool.Result{Content: `{"status":"proposed"}`},
-	}
-	requestNumber := 0
-	agent := testAgent(t, proposal, func(w http.ResponseWriter, _ *http.Request) {
-		requestNumber++
-		if requestNumber == 1 {
-			writeJSON(t, w, map[string]any{
-				"output": []any{map[string]any{
-					"type":      "function_call",
-					"call_id":   "call-proposal",
-					"name":      proposeTaskToolName,
-					"arguments": `{"value":"tomorrow"}`,
-				}},
-			})
-			return
-		}
-		http.Error(w, "unavailable", http.StatusServiceUnavailable)
-	})
-
-	result, err := agent.RespondWithResult(
-		context.Background(),
-		tool.Scope{},
-		"Remind me tomorrow.",
-		session.Conversation{},
-		nil,
-	)
-	if err == nil {
-		t.Fatal("RespondWithResult() error = nil")
-	}
-	if !result.ProposalCreated {
-		t.Fatalf("RespondWithResult() = %#v, want proposal metadata", result)
-	}
-}
-
-func TestAgentPreservesProposalCreationWhenFinalResponseIsEmpty(t *testing.T) {
-	t.Parallel()
-
-	proposal := &recordingTool{
-		name:     proposeTaskToolName,
-		mutating: true,
-		result:   tool.Result{Content: `{"status":"proposed"}`},
-	}
-	requestNumber := 0
-	agent := testAgent(t, proposal, func(w http.ResponseWriter, _ *http.Request) {
-		requestNumber++
-		output := []any{}
-		if requestNumber == 1 {
-			output = []any{map[string]any{
-				"type":      "function_call",
-				"call_id":   "call-proposal",
-				"name":      proposeTaskToolName,
-				"arguments": `{"value":"tomorrow"}`,
-			}}
-		}
-		writeJSON(t, w, map[string]any{"output": output})
-	})
-
-	result, err := agent.RespondWithResult(
-		context.Background(),
-		tool.Scope{},
-		"Remind me tomorrow.",
-		session.Conversation{},
-		nil,
-	)
-	if err == nil {
-		t.Fatal("RespondWithResult() error = nil")
-	}
-	if !result.ProposalCreated {
-		t.Fatalf("RespondWithResult() = %#v, want proposal metadata", result)
-	}
-}
-
 func (t *recordingTool) Execute(
 	ctx context.Context,
 	scope tool.Scope,
@@ -248,258 +75,151 @@ func (t *recordingTool) Execute(
 	return result, err
 }
 
-func TestAgentExecutesAndReplaysToolCalls(t *testing.T) {
-	t.Parallel()
+type toolRunnerFunc func(context.Context, tool.Scope, assistant.ResponseContext) (assistant.ToolRunResult, error)
 
-	lookup := &recordingTool{result: tool.Result{Content: `{"answer":"found"}`}}
-	var requests []createRequest
-	var mu sync.Mutex
+func (f toolRunnerFunc) Run(ctx context.Context, scope tool.Scope, state assistant.ResponseContext) (assistant.ToolRunResult, error) {
+	return f(ctx, scope, state)
+}
 
-	agent := testAgent(t, lookup, func(w http.ResponseWriter, r *http.Request) {
-		var request createRequest
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Errorf("decode request: %v", err)
-		}
+type fixedToolClassifier struct{ names []string }
 
-		mu.Lock()
-		requests = append(requests, request)
-		number := len(requests)
-		mu.Unlock()
+func (f fixedToolClassifier) Select(_ context.Context, state assistant.ToolState, _ []tool.Spec) ([]string, error) {
+	if len(state.Results) > 0 {
+		return nil, nil
+	}
+	return f.names, nil
+}
 
-		if number == 1 {
-			writeJSON(t, w, map[string]any{
-				"output": []any{
-					map[string]any{
-						"type":      "function_call",
-						"call_id":   "call-1",
-						"name":      "lookup",
-						"arguments": `{"value":"cafes"}`,
-					},
-					map[string]any{
-						"type":      "function_call",
-						"call_id":   "call-2",
-						"name":      "lookup",
-						"arguments": `{"value":"parks"}`,
-					},
-				},
-			})
-			return
-		}
+type fixedToolArguments map[string]assistant.PreparedToolArguments
 
-		writeJSON(t, w, map[string]any{
-			"output": []any{
-				map[string]any{
-					"type": "message",
-					"content": []any{
-						map[string]any{
-							"type": "output_text",
-							"text": "I found both.",
-						},
-					},
-				},
-			},
-		})
-	})
+func (f fixedToolArguments) Build(_ context.Context, _ assistant.ToolState, _ []tool.Spec) (map[string]assistant.PreparedToolArguments, error) {
+	return f, nil
+}
 
-	scope := tool.Scope{UserID: "user-123", SessionID: "session-456"}
-	response, err := agent.Respond(
-		context.Background(),
-		scope,
-		"What is nearby?",
-		session.Conversation{},
-		nil,
-	)
+func attachTestWorkflow(t *testing.T, agent *Agent, registered tool.Tool, args string) {
+	t.Helper()
+	registry := tool.NewRegistry()
+	if err := registry.Register(registered); err != nil {
+		t.Fatal(err)
+	}
+	name := registered.Spec().Name
+	workflow, err := assistant.NewToolWorkflow(registry, fixedToolClassifier{names: []string{name}}, fixedToolArguments{name: {Arguments: json.RawMessage(args)}})
 	if err != nil {
-		t.Fatalf("Respond() error = %v", err)
+		t.Fatal(err)
 	}
-	if response != "I found both." {
-		t.Fatalf("Respond() = %q", response)
-	}
-
-	lookup.mu.Lock()
-	defer lookup.mu.Unlock()
-	if len(lookup.scopes) != 2 ||
-		lookup.scopes[0] != scope ||
-		lookup.scopes[1] != scope {
-		t.Fatalf("tool scopes = %#v", lookup.scopes)
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(requests) != 2 || len(requests[1].Input) != 5 {
-		t.Fatalf("requests = %#v", requests)
-	}
-	for index, callID := range []string{"call-1", "call-2"} {
-		var output toolOutput
-		if err := json.Unmarshal(requests[1].Input[index+3], &output); err != nil {
-			t.Fatalf("decode tool output: %v", err)
-		}
-		if output.CallID != callID || output.Output != `{"answer":"found"}` {
-			t.Fatalf("tool output = %#v", output)
-		}
-	}
+	agent.workflow = workflow
 }
 
-func TestAgentExecutesReadOnlyToolCallsConcurrently(t *testing.T) {
-	t.Parallel()
-
-	started := make(chan struct{}, 2)
-	release := make(chan struct{})
-	lookup := &recordingTool{
-		result:  tool.Result{Content: `{"answer":"found"}`},
-		started: started,
-		release: release,
-	}
-	agent := testAgent(t, lookup, func(http.ResponseWriter, *http.Request) {})
-	calls := []toolCall{
-		{CallID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"value":"cafes"}`)},
-		{CallID: "call-2", Name: "lookup", Arguments: json.RawMessage(`{"value":"parks"}`)},
-	}
-
-	type executionResult struct {
-		outputs []json.RawMessage
-		err     error
-	}
-	done := make(chan executionResult, 1)
-	go func() {
-		outputs, err := agent.executeCalls(context.Background(), tool.Scope{}, calls)
-		done <- executionResult{outputs: outputs, err: err}
-	}()
-
-	timer := time.NewTimer(time.Second)
-	defer timer.Stop()
-	for range calls {
-		select {
-		case <-started:
-		case <-timer.C:
-			close(release)
-			t.Fatal("tool calls did not start concurrently")
-		}
-	}
-	close(release)
-
-	result := <-done
-	if result.err != nil {
-		t.Fatalf("executeCalls() error = %v", result.err)
-	}
-	for index, call := range calls {
-		var output toolOutput
-		if err := json.Unmarshal(result.outputs[index], &output); err != nil {
-			t.Fatalf("decode output: %v", err)
-		}
-		if output.CallID != call.CallID {
-			t.Fatalf("output call ID = %q, want %q", output.CallID, call.CallID)
-		}
-	}
-}
-
-func TestAgentDoesNotParallelizeMutatingToolCalls(t *testing.T) {
-	t.Parallel()
-
-	lookup := &recordingTool{mutating: true}
-	agent := testAgent(t, lookup, func(http.ResponseWriter, *http.Request) {})
-	calls := []toolCall{
-		{CallID: "call-1", Name: "lookup"},
-		{CallID: "call-2", Name: "lookup"},
-	}
-
-	if agent.canRunInParallel(calls) {
-		t.Fatal("canRunInParallel() = true for mutating tool")
-	}
-}
-
-func TestAgentReturnsToolErrorsToModel(t *testing.T) {
-	t.Parallel()
-
-	lookup := &recordingTool{err: errors.New("location unavailable")}
-	requestNumber := 0
-	agent := testAgent(t, lookup, func(w http.ResponseWriter, r *http.Request) {
-		requestNumber++
-		var request createRequest
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Errorf("decode request: %v", err)
-		}
-
-		if requestNumber == 1 {
-			writeJSON(t, w, map[string]any{
-				"output": []any{
-					map[string]any{
-						"type":      "function_call",
-						"call_id":   "call-error",
-						"name":      "lookup",
-						"arguments": `{"value":"location"}`,
-					},
-				},
+func TestAgentComposesOneFinalResponseAfterTools(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		t.Run(map[bool]string{false: "success", true: "tool failure"}[failure], func(t *testing.T) {
+			lookup := &recordingTool{result: tool.Result{Content: `{"answer":"found"}`}}
+			if failure {
+				lookup.err = errors.New("location unavailable")
+			}
+			requests := 0
+			scope := tool.Scope{UserID: "user", SessionID: "session"}
+			agent := testAgent(t, func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				var request map[string]json.RawMessage
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				if _, ok := request["tools"]; ok {
+					t.Fatal("final model was given tools")
+				}
+				if len(lookup.scopes) != 1 || lookup.scopes[0] != scope {
+					t.Fatal("tools must run first with trusted scope")
+				}
+				want := "found"
+				if failure {
+					want = "location unavailable"
+				}
+				if !strings.Contains(string(request["input"]), want) {
+					t.Fatalf("missing tool result: %s", request["input"])
+				}
+				writeJSON(t, w, map[string]any{"output": []any{map[string]any{"type": "message", "content": []any{map[string]any{"type": "output_text", "text": "A final response."}}}}})
 			})
-			return
-		}
-
-		var output toolOutput
-		if err := json.Unmarshal(request.Input[len(request.Input)-1], &output); err != nil {
-			t.Errorf("decode tool output: %v", err)
-		}
-		if !strings.Contains(output.Output, "location unavailable") {
-			t.Errorf("tool output = %q", output.Output)
-		}
-		writeJSON(t, w, map[string]any{
-			"output": []any{
-				map[string]any{
-					"type": "message",
-					"content": []any{
-						map[string]any{
-							"type": "output_text",
-							"text": "I cannot access your location yet.",
-						},
-					},
-				},
-			},
+			attachTestWorkflow(t, agent, lookup, `{"value":"cafes"}`)
+			response, err := agent.Respond(context.Background(), scope, "What's nearby?", session.Conversation{}, nil)
+			if err != nil || response != "A final response." || requests != 1 {
+				t.Fatalf("response=%q requests=%d err=%v", response, requests, err)
+			}
 		})
-	})
-
-	response, err := agent.Respond(
-		context.Background(),
-		tool.Scope{},
-		"Where am I?",
-		session.Conversation{},
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("Respond() error = %v", err)
-	}
-	if response != "I cannot access your location yet." {
-		t.Fatalf("Respond() = %q", response)
 	}
 }
 
-func TestAgentStopsAtRoundLimit(t *testing.T) {
-	t.Parallel()
-
-	requestNumber := 0
-	agent := testAgent(t, &recordingTool{}, func(w http.ResponseWriter, _ *http.Request) {
-		requestNumber++
-		writeJSON(t, w, map[string]any{
-			"output": []any{
-				map[string]any{
-					"type":      "function_call",
-					"call_id":   fmt.Sprintf("call-%d", requestNumber),
-					"name":      "lookup",
-					"arguments": `{"value":"again"}`,
-				},
-			},
+func TestAgentPreservesActualProposalStatus(t *testing.T) {
+	for _, ending := range []string{"success", "api error", "empty", "unexpected tool", "proposal error"} {
+		t.Run(ending, func(t *testing.T) {
+			proposal := &recordingTool{name: "propose_task", mutating: true, result: tool.Result{Content: `{"status":"proposed"}`}}
+			if ending == "proposal error" {
+				proposal.err = errors.New("unavailable")
+			}
+			agent := testAgent(t, func(w http.ResponseWriter, r *http.Request) {
+				switch ending {
+				case "api error":
+					http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				case "empty":
+					writeJSON(t, w, map[string]any{"output": []any{}})
+				case "unexpected tool":
+					writeJSON(t, w, map[string]any{"output": []any{map[string]any{"type": "function_call", "name": "propose_task", "call_id": "bad", "arguments": "{}"}}})
+				default:
+					writeJSON(t, w, map[string]any{"output": []any{map[string]any{"type": "message", "content": []any{map[string]any{"type": "output_text", "text": "Should I save it?"}}}}})
+				}
+			})
+			attachTestWorkflow(t, agent, proposal, `{"value":"tomorrow"}`)
+			result, err := agent.RespondWithResult(context.Background(), tool.Scope{}, "Remind me tomorrow", session.Conversation{}, nil)
+			if result.ProposalCreated != (ending != "proposal error") {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			wantError := ending == "api error" || ending == "empty" || ending == "unexpected tool"
+			if (err != nil) != wantError {
+				t.Fatalf("err=%v want error=%v", err, wantError)
+			}
+			if len(proposal.scopes) != 1 {
+				t.Fatalf("executed %d proposals", len(proposal.scopes))
+			}
 		})
-	})
-	agent.maxToolRounds = 2
-
-	if _, err := agent.Respond(
-		context.Background(),
-		tool.Scope{},
-		"keep looking",
-		session.Conversation{},
-		nil,
-	); !errors.Is(err, ErrToolRoundLimit) {
-		t.Fatalf("Respond() error = %v", err)
 	}
-	if requestNumber != 3 {
-		t.Fatalf("request count = %d", requestNumber)
+}
+
+func TestAgentUsesOneSharedContextAndSkipsWorkflowForMemoryReview(t *testing.T) {
+	for _, review := range []bool{false, true} {
+		t.Run(map[bool]string{false: "normal", true: "memory review"}[review], func(t *testing.T) {
+			conversation := session.Conversation{Profile: "User profile: prefers quiet cafes", Summary: "Planning lunch", Messages: []session.Message{{Speaker: session.SpeakerUser, Text: "Near work please"}}}
+			scope := tool.Scope{UserID: "private-id", TimeZone: "America/Los_Angeles", AlwaysRespond: true, MemoryReview: review}
+			now := time.Date(2026, 9, 19, 18, 0, 0, 0, time.UTC)
+			want, err := assistant.NewResponseContext(scope, "Find lunch", conversation, nil, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			agent := testAgent(t, func(w http.ResponseWriter, r *http.Request) {
+				var request createRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				input, err := responseInput(want, nil)
+				if err != nil || !reflect.DeepEqual(input, request.Input) || request.Instructions != responseInstructions(want) {
+					t.Fatal("final model received different context")
+				}
+				writeJSON(t, w, map[string]any{"output": []any{map[string]any{"type": "message", "content": []any{map[string]any{"type": "output_text", "text": "Okay."}}}}})
+			})
+			agent.now = func() time.Time { return now }
+			agent.workflow = toolRunnerFunc(func(_ context.Context, gotScope tool.Scope, got assistant.ResponseContext) (assistant.ToolRunResult, error) {
+				calls++
+				if !reflect.DeepEqual(got, want) || gotScope != scope {
+					t.Fatalf("workflow context=%+v", got)
+				}
+				return assistant.ToolRunResult{}, nil
+			})
+			if _, err := agent.Respond(context.Background(), scope, "Find lunch", conversation, nil); err != nil {
+				t.Fatal(err)
+			}
+			if calls != map[bool]int{true: 0, false: 1}[review] {
+				t.Fatalf("workflow calls=%d", calls)
+			}
+		})
 	}
 }
