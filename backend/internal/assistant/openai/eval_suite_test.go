@@ -246,18 +246,10 @@ func TestWebFailureEvaluationScenariosReachAgent(t *testing.T) {
 		scenario := scenario
 		t.Run(scenario.name, func(t *testing.T) {
 			search := newUnavailableEvaluationSearch(t)
-			requestNumber := 0
-			agent := testAgent(t, search, func(w http.ResponseWriter, r *http.Request) {
-				requestNumber++
+			agent := testAgent(t, func(w http.ResponseWriter, r *http.Request) {
 				var request createRequest
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 					t.Errorf("decode agent request: %v", err)
-				}
-				if requestNumber == 1 {
-					writeJSON(t, w, map[string]any{"output": []any{map[string]any{
-						"type": "function_call", "call_id": "eval-search", "name": "search_web", "arguments": scenario.searchArguments,
-					}}})
-					return
 				}
 				encodedInput, _ := json.Marshal(request.Input)
 				if !strings.Contains(string(encodedInput), evaluationSearchFailure) {
@@ -267,7 +259,7 @@ func TestWebFailureEvaluationScenariosReachAgent(t *testing.T) {
 					"type": "message", "content": []any{map[string]any{"type": "output_text", "text": scenario.sampleResponse}},
 				}}})
 			})
-
+			attachTestWorkflow(t, agent, search, scenario.searchArguments)
 			response, err := agent.Respond(context.Background(), tool.Scope{}, scenario.routedQuery, session.Conversation{}, scenario.memories)
 			if err != nil {
 				t.Fatalf("Respond() error = %v", err)
@@ -282,7 +274,7 @@ func TestWebFailureEvaluationScenariosReachAgent(t *testing.T) {
 
 func TestLiveWebFailureEvaluationScenarios(t *testing.T) {
 	if os.Getenv("RUN_LIVE_ASSISTANT_TEST") != "1" {
-		t.Skip("set RUN_LIVE_ASSISTANT_TEST=1 to call the live OpenAI API")
+		t.Skip("set RUN_LIVE_ASSISTANT_TEST=1 to call Jev and OpenAI")
 	}
 	apiKey := requiredLiveEnv(t, "OPENAI_API_KEY")
 	classify, err := NewClassifier(apiKey, requiredLiveEnv(t, "OPENAI_ROUTER_MODEL"))
@@ -300,7 +292,7 @@ func TestLiveWebFailureEvaluationScenarios(t *testing.T) {
 				t.Fatalf("Register(search_web) error = %v", err)
 			}
 
-			agent, err := NewAgent(apiKey, requiredLiveEnv(t, "OPENAI_AGENT_MODEL"), registry)
+			agent, err := NewAgent(apiKey, requiredLiveEnv(t, "OPENAI_AGENT_MODEL"), liveToolWorkflow(t, registry))
 			if err != nil {
 				t.Fatalf("NewAgent() error = %v", err)
 			}

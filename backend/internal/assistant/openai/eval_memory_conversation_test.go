@@ -16,15 +16,15 @@ func TestMemoryReviewDisablesToolsAndUsesConversationalInstructions(t *testing.T
 	for _, toolCall := range []bool{false, true} {
 		t.Run(map[bool]string{false: "answer", true: "unexpected tool blocked"}[toolCall], func(t *testing.T) {
 			registered := &recordingTool{name: "propose_task", mutating: true}
-			agent := testAgent(t, registered, func(w http.ResponseWriter, r *http.Request) {
-				var request createRequest
+			agent := testAgent(t, func(w http.ResponseWriter, r *http.Request) {
+				var request observedRequest
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 					t.Fatal(err)
 				}
 				if len(request.Tools) != 0 {
 					t.Fatal("review exposed tools")
 				}
-				for _, want := range []string{"You are Eyes", "read-only memory question", "not that no memories exist", "one practical next step", "do not end every reply with a question", "Keep ownership of facts explicit", "Do not invent deadlines"} {
+				for _, want := range []string{"You are Eyes", "read-only memory question", "not that no memories exist", "do not automatically turn a completed activity into advice", "do not end every reply with a question", "Keep ownership of facts explicit", "Do not invent deadlines"} {
 					if !strings.Contains(request.Instructions, want) {
 						t.Errorf("instructions missing %q", want)
 					}

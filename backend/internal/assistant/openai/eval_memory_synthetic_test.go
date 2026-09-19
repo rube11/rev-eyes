@@ -35,7 +35,7 @@ func TestSyntheticMemoryScenariosReachAgent(t *testing.T) {
 			}
 
 			var request createRequest
-			agent := testAgent(t, nil, func(w http.ResponseWriter, r *http.Request) {
+			agent := testAgent(t, func(w http.ResponseWriter, r *http.Request) {
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 					t.Errorf("decode agent request: %v", err)
 				}

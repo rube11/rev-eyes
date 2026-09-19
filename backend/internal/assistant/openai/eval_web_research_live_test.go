@@ -23,7 +23,7 @@ import (
 // It is intentionally opt-in because it spends OpenAI and Tavily credits.
 func TestLiveEyesWebResearchScenarios(t *testing.T) {
 	if os.Getenv("RUN_LIVE_WEB_RESEARCH_EVAL") != "1" {
-		t.Skip("set RUN_LIVE_WEB_RESEARCH_EVAL=1 to call OpenAI and Tavily")
+		t.Skip("set RUN_LIVE_WEB_RESEARCH_EVAL=1 to call Jev, OpenAI, and Tavily")
 	}
 
 	openAIKey := requiredLiveEnv(t, "OPENAI_API_KEY")
@@ -51,7 +51,7 @@ func TestLiveEyesWebResearchScenarios(t *testing.T) {
 			agent, err := NewAgent(
 				openAIKey,
 				requiredLiveEnv(t, "OPENAI_AGENT_MODEL"),
-				registry,
+				liveToolWorkflow(t, registry),
 			)
 			if err != nil {
 				t.Fatalf("NewAgent() error = %v", err)

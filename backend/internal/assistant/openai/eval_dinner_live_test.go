@@ -29,12 +29,10 @@ func TestLiveSyntheticMemoryScenarios(t *testing.T) {
 		t.Fatalf("NewClassifier() error = %v", err)
 	}
 
-	registry := tool.NewRegistry()
-
 	agent, err := NewAgent(
 		apiKey,
 		requiredLiveEnv(t, "OPENAI_AGENT_MODEL"),
-		registry,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("NewAgent() error = %v", err)
