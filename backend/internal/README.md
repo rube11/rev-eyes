@@ -25,6 +25,34 @@ Automation is grouped by workflow:
 Keep interfaces beside the code that consumes them, and keep storage, transport,
 and tool implementations with the feature whose state they own.
 
+## Crowded package map
+
+`assistant/openai` is organized by model responsibility:
+
+- root: final response composition, conversation compaction, tonality, and the
+  legacy OpenAI router retained for comparison evaluations;
+- `extraction`: finalized-utterance to memory-candidate extraction;
+- `responses`: shared Responses API transport and output parsing;
+- `routing`: retrieval enrichment after Jev has fixed the action;
+- `tooling`: argument preparation after Jev has fixed the tool selection.
+
+Files beginning with `eval_` are opt-in or synthetic behavior evaluations, not
+production wiring. `compatibility.go` only keeps those evaluations compatible
+with the focused packages; `main.go` imports the focused packages directly.
+
+The larger cohesive packages use filename families instead of nested packages:
+
+- `realtime`: `server` owns connection lifetime, `protocol` owns wire shapes,
+  `*_handler` files own entry points, `candidate_*` owns admitted audio work,
+  and `turn_coordinator` serializes assistant turns;
+- `memory`: `card` and `candidate` own domain values, `store` and `*_store` own
+  persistence, `lookup` and `profile` own reads, `management` owns mutations,
+  `recorder` owns asynchronous learning, and `workspace*` owns the HTTP editor.
+
+These remain single packages because their implementations share core types and
+lifecycle state; splitting them further would create forwarding APIs without a
+real dependency boundary.
+
 ## Default server-listening flow
 
 The frontend sends `ambient_start` and forwards PCM while awake and connected.
@@ -42,6 +70,10 @@ tap-to-talk lifecycle. Neither mode silently substitutes for a failed listener.
 - `realtime/server.go` owns the connection and streaming lifecycle.
 - `realtime/utterance_handler.go` delivers transcripts and assistant responses.
 - `assistant/service.go` coordinates routing, context, and agent execution.
+- `assistant/response_context.go` shares the retrieved context across Jev tool
+  selection, argument preparation, and final response generation.
+- `assistant/tool_workflow.go` executes Jev-selected tools before the final model
+  is invoked.
 - `assistant/memory_management.go` handles memory review and removal responses.
 - Root `utterance.go` persists transcripts and handles explicit/background memory
   recording. Both remembering and correcting use the same persistence path.
@@ -52,9 +84,51 @@ a separate concept from audio candidates.
 
 Frontend `RealtimeConnection` owns socket setup, adoption, listeners, and retries;
 the glasses runtime serializes UI transitions and owns microphone interaction.
-See [the refactor report](../docs/simplification-refactor.md) for behavior
-boundaries and validation, and [server Moonshine](../docs/server-moonshine.md)
-for runtime setup.
+See [server Moonshine](../docs/server-moonshine.md) for runtime setup.
 
-Run `go test ./...` for offline coverage. Live model and database integration
-tests are opt-in; an offline pass does not verify deployed provider behavior.
+## Jev routing and tool workflow
+
+Each assistant turn first uses Jev to choose the utterance action. Tool-bearing
+requests route as ordinary responses; tool choice happens only in the workflow.
+Open-ended route fields are enriched separately, then the service loads the saved profile,
+retrieves relevant memories, and prepares recent conversation context. The
+resulting `assistant.ResponseContext` contains the routed query, profile,
+retrieved memories, conversation summary and messages, local time, time zone,
+and turn flags. Authentication remains in the trusted `tool.Scope`.
+
+For response turns, `JevToolClassifier` asks one independent Noul question for
+each currently available tool. Answers above the explicit 0.5 policy threshold
+select tools; selecting zero or several tools is valid. Code owns a bounded loop
+of at most eight selection rounds and passes completed observations back to Jev.
+This allows evidence from location or search to make a later action ready while
+keeping tool output as data rather than authorization.
+
+The provider client lives in `assistant/jev`; OpenAI-specific enrichment,
+argument preparation, and response composition live in `assistant/openai`.
+
+Execution limits are deterministic:
+
+- `search_web` may execute once per turn and is never retried.
+- Every other tool may be attempted once per turn.
+- Location results or errors return to Jev before dependent tools run.
+- Read-only tools execute before a proposal selected in the same round; Jev must
+  reconsider the proposal against the resulting evidence.
+- Reminder and watch tools create inactive proposals only. Existing confirmation
+  code must activate them, and a proposal is never repeated after failure.
+
+The OpenAI argument builder receives exactly the tools Jev selected and a strict
+schema containing only their argument objects. It may fill open-ended search
+queries and dates, but it cannot add, remove, skip, or execute tools. The workflow
+and each tool validate the arguments before effects. A malformed structured
+answer gets one formatting retry.
+
+After the loop ends, `OPENAI_AGENT_MODEL` receives the shared context and recorded
+tool results once. It has no tool definitions or execution authority and only
+composes the user-facing response. Memory-review turns bypass the workflow.
+
+The integration requires `JEV_API_KEY`, `OPENAI_API_KEY`,
+`OPENAI_ROUTER_MODEL`, and `OPENAI_AGENT_MODEL`, plus credentials required by
+registered production tools. Offline coverage runs with `go test ./...`; live Jev
+selection and pipeline checks are opt-in via `RUN_LIVE_JEV_TOOL_TEST=1`. Other
+live model and database tests are also opt-in; offline success does not verify
+deployed provider behavior.
