@@ -12,8 +12,8 @@ import (
 func TestAgentCompactsConversationWithoutTools(t *testing.T) {
 	t.Parallel()
 
-	var request createRequest
-	agent := testAgent(t, nil, func(w http.ResponseWriter, r *http.Request) {
+	var request observedRequest
+	agent := testAgent(t, func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
