@@ -112,6 +112,13 @@ func (r *Router) route(ctx context.Context, utterance, classifierInput string) (
 		return fallback, err
 	}
 
+	decision = normalizeDecision(decision)
+	slog.InfoContext(ctx, "router decision", "action", decision.Action)
+
+	return decision, nil
+}
+
+func normalizeDecision(decision Decision) Decision {
 	decision.Query = strings.TrimSpace(decision.Query)
 	decision = validateDecision(decision)
 	if decision.Action == ActionMemoryReview && decision.MemoryReviewAll {
@@ -132,9 +139,7 @@ func (r *Router) route(ctx context.Context, utterance, classifierInput string) (
 	} else {
 		decision.MemoryLookup = memory.Lookup{}
 	}
-	slog.InfoContext(ctx, "router decision", "action", decision.Action)
-
-	return decision, nil
+	return decision
 }
 
 func validateDecision(decision Decision) Decision {
