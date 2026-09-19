@@ -9,12 +9,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rube11/rev-eyes/backend/internal/assistant/openai/responses"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
+
+type inputMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type createRequest struct {
+	Model           string            `json:"model"`
+	Instructions    string            `json:"instructions"`
+	Input           []json.RawMessage `json:"input"`
+	Text            map[string]any    `json:"text,omitempty"`
+	MaxOutputTokens int               `json:"max_output_tokens,omitempty"`
+	Store           bool              `json:"store"`
+	Include         []string          `json:"include,omitempty"`
+}
+
+// Capture forbidden fields too, so tests detect accidental tool exposure.
+type observedRequest struct {
+	createRequest
+	Tools             []json.RawMessage `json:"tools"`
+	ParallelToolCalls bool              `json:"parallel_tool_calls"`
+}
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
@@ -23,8 +46,8 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 func TestAgentReturnsText(t *testing.T) {
 	t.Parallel()
 
-	var request createRequest
-	agent := testAgent(t, &recordingTool{}, func(w http.ResponseWriter, r *http.Request) {
+	var request observedRequest
+	agent := testAgent(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-key" {
 			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
 		}
@@ -59,27 +82,20 @@ func TestAgentReturnsText(t *testing.T) {
 	if response != "A concise response." {
 		t.Fatalf("Respond() = %q", response)
 	}
-	if request.Model != "test-model" || len(request.Tools) != 1 {
+	if request.Model != "test-model" || len(request.Tools) != 0 {
 		t.Fatalf("request = %#v", request)
 	}
-	if !strings.Contains(request.Instructions, "call search_web before answering") {
+	if !strings.Contains(request.Instructions, "You only compose the final response") {
 		t.Fatalf("instructions = %q", request.Instructions)
 	}
-	if !strings.Contains(request.Instructions, "budgets, preferences") ||
-		!strings.Contains(request.Instructions, "Use research mode for recommendations") ||
-		!strings.Contains(request.Instructions, "authoritative domain filters") ||
-		!strings.Contains(request.Instructions, "real bare hostname containing a dot") ||
-		!strings.Contains(request.Instructions, "one well-formed research search") {
-		t.Fatalf("search instructions = %q", request.Instructions)
+	if !strings.Contains(request.Instructions, "# Eyes tonality guide") ||
+		!strings.Contains(request.Instructions, "Have a sense of humor") ||
+		!strings.Contains(request.Instructions, "Suppress humor entirely") {
+		t.Fatalf("instructions missing embedded tonality guide = %q", request.Instructions)
 	}
-	if !strings.Contains(request.Instructions, "Use propose_watch once") {
-		t.Fatalf("instructions = %q", request.Instructions)
-	}
-	if !strings.Contains(request.Instructions, "explicitly asks to create a reminder") {
-		t.Fatalf("instructions = %q", request.Instructions)
-	}
-	if strings.Contains(request.Instructions, "explicit reminder commands") {
-		t.Fatalf("instructions still exclude explicit reminders = %q", request.Instructions)
+	if !strings.Contains(request.Instructions, "pending proposal") ||
+		!strings.Contains(request.Instructions, "could not verify") {
+		t.Fatalf("tool result instructions = %q", request.Instructions)
 	}
 	if !strings.Contains(request.Instructions, "the glasses can render each result separately") {
 		t.Fatalf("instructions = %q", request.Instructions)
@@ -95,8 +111,8 @@ func TestAgentReturnsText(t *testing.T) {
 	if !strings.Contains(request.Instructions, "within 420 characters") {
 		t.Fatalf("response length instructions = %q", request.Instructions)
 	}
-	if !request.Tools[0].Strict || request.Store {
-		t.Fatalf("tool strict = %v, store = %v", request.Tools[0].Strict, request.Store)
+	if request.Store {
+		t.Fatal("response must not be stored")
 	}
 	if len(request.Include) != 1 ||
 		request.Include[0] != "reasoning.encrypted_content" {
@@ -108,7 +124,7 @@ func TestAgentIncludesCurrentLocalTime(t *testing.T) {
 	t.Parallel()
 
 	var request createRequest
-	agent := testAgent(t, nil, func(w http.ResponseWriter, r *http.Request) {
+	agent := testAgent(t, func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
@@ -146,7 +162,7 @@ func TestAgentIncludesRelevantMemoriesAsUserData(t *testing.T) {
 	t.Parallel()
 
 	var request createRequest
-	agent := testAgent(t, nil, func(w http.ResponseWriter, r *http.Request) {
+	agent := testAgent(t, func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
@@ -201,7 +217,7 @@ func TestAgentIncludesConversationBeforeCurrentQuery(t *testing.T) {
 	t.Parallel()
 
 	var request createRequest
-	agent := testAgent(t, nil, func(w http.ResponseWriter, r *http.Request) {
+	agent := testAgent(t, func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
@@ -257,7 +273,7 @@ func TestAgentIncludesConversationBeforeCurrentQuery(t *testing.T) {
 func TestAgentReportsAPIError(t *testing.T) {
 	t.Parallel()
 
-	agent := testAgent(t, nil, func(w http.ResponseWriter, _ *http.Request) {
+	agent := testAgent(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		writeJSON(t, w, map[string]any{
 			"error": map[string]string{"message": "invalid request"},
@@ -278,29 +294,25 @@ func TestAgentReportsAPIError(t *testing.T) {
 
 func testAgent(
 	t *testing.T,
-	registered tool.Tool,
 	handler http.HandlerFunc,
 ) *Agent {
 	t.Helper()
 
-	registry := tool.NewRegistry()
-	if registered != nil {
-		if err := registry.Register(registered); err != nil {
-			t.Fatalf("Register() error = %v", err)
-		}
-	}
-
-	agent, err := NewAgent("test-key", "test-model", registry)
+	agent, err := NewAgent("test-key", "test-model", nil)
 	if err != nil {
 		t.Fatalf("NewAgent() error = %v", err)
 	}
 
-	agent.client = &http.Client{
+	httpClient := &http.Client{
 		Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 			recorder := httptest.NewRecorder()
 			handler.ServeHTTP(recorder, request)
 			return recorder.Result(), nil
 		}),
+	}
+	agent.client, err = responses.New("test-key", "test-model", responses.Config{HTTPClient: httpClient})
+	if err != nil {
+		t.Fatalf("configure test agent: %v", err)
 	}
 	return agent
 }
