@@ -1,4 +1,4 @@
-package openai
+package extraction
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/rube11/rev-eyes/backend/internal/assistant/openai/responses"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 )
 
@@ -19,14 +20,13 @@ func TestProfileMetadataMismatchPreservesValidFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"output": []any{map[string]any{"content": []any{map[string]any{"type": "output_text", "text": string(output)}}}}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"output": []any{map[string]any{"type": "message", "content": []any{map[string]any{"type": "output_text", "text": string(output)}}}}})
 	}))
 	defer server.Close()
-	extractor, err := NewMemoryExtractor("synthetic-key", "test-model")
+	extractor, err := NewMemoryExtractor("synthetic-key", "test-model", responses.Config{HTTPClient: server.Client(), Endpoint: server.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
-	extractor.endpoint = server.URL
 	got, err := extractor.Extract(context.Background(), "I'm a student and I just left the gym.")
 	if err != nil || len(got) != 2 {
 		t.Fatalf("valid facts discarded with mismatched profile metadata: candidates=%d error=%v", len(got), err)

@@ -1,4 +1,4 @@
-package openai
+package extraction
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rube11/rev-eyes/backend/internal/assistant/openai/responses"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 )
 
@@ -40,8 +41,13 @@ func TestMemoryExtractorDecodesAtomicWorkoutCandidates(t *testing.T) {
 			http.Error(w, handlerErr.Error(), http.StatusBadRequest)
 			return
 		}
+		if body["instructions"] != memoryExtractorPrompt {
+			handlerErr = fmt.Errorf("instructions were not supplied")
+			http.Error(w, handlerErr.Error(), http.StatusBadRequest)
+			return
+		}
 		input := body["input"].([]any)
-		user := input[1].(map[string]any)
+		user := input[0].(map[string]any)
 		if user["content"] != workoutMemoryUtterance {
 			handlerErr = fmt.Errorf("user content = %#v", user["content"])
 			http.Error(w, handlerErr.Error(), http.StatusBadRequest)
@@ -59,11 +65,10 @@ func TestMemoryExtractorDecodesAtomicWorkoutCandidates(t *testing.T) {
 	}))
 	defer server.Close()
 
-	extractor, err := NewMemoryExtractor("test-key", "test-model")
+	extractor, err := NewMemoryExtractor("test-key", "test-model", responses.Config{HTTPClient: server.Client(), Endpoint: server.URL})
 	if err != nil {
 		t.Fatalf("NewMemoryExtractor() error = %v", err)
 	}
-	extractor.endpoint = server.URL
 	candidates, err := extractor.Extract(context.Background(), workoutMemoryUtterance)
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
@@ -233,7 +238,6 @@ func TestMemoryExtractorSkipsCredentialUtterancesBeforeModelCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMemoryExtractor() error = %v", err)
 	}
-	extractor.endpoint = "http://127.0.0.1:1/should-not-be-called"
 	candidates, err := extractor.Extract(
 		context.Background(),
 		"Remember that my password is hunter2.",
@@ -244,4 +248,13 @@ func TestMemoryExtractorSkipsCredentialUtterancesBeforeModelCall(t *testing.T) {
 	if len(candidates) != 0 {
 		t.Fatalf("candidates = %#v, want none", candidates)
 	}
+}
+
+func requiredLiveEnv(t *testing.T, name string) string {
+	t.Helper()
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		t.Fatalf("%s is required", name)
+	}
+	return value
 }
