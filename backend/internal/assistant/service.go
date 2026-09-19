@@ -217,7 +217,9 @@ func (s *Service) HandleUtterance(
 		slog.WarnContext(ctx, "conversation context failed", "error", conversationErr)
 	}
 
-	result, err := s.agent.RespondWithResult(ctx, turnScope, query, conversation, cards)
+	// Retrieval uses the enriched query; the response and tool workflow need the
+	// user's actual wording, including self-corrections, tone, and constraints.
+	result, err := s.agent.RespondWithResult(ctx, turnScope, strings.TrimSpace(utterance), conversation, cards)
 	outcome.ProposalCreated = result.ProposalCreated
 	if err != nil && outcome.ProposalCreated && ctx.Err() == nil {
 		slog.WarnContext(

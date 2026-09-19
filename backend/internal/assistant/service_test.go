@@ -239,7 +239,7 @@ func TestHandleUtteranceRespondsToMeaningfulStateTransition(t *testing.T) {
 			_ session.Conversation,
 			cards []memory.Card,
 		) (string, error) {
-			if query != "The user just left the gym; suggest one timely next step." ||
+			if query != "I just left the gym." ||
 				!reflect.DeepEqual(cards, wantCards) {
 				t.Fatalf("Respond(%q, %#v)", query, cards)
 			}
@@ -307,7 +307,7 @@ func TestHandleUtteranceFallsBackAfterProposalResponseFailure(t *testing.T) {
 	}
 }
 
-func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
+func TestHandleUtterancePreservesSpeechWithEnrichedRetrievalAndTrustedScope(t *testing.T) {
 	t.Parallel()
 
 	wantScope := tool.Scope{UserID: "user-123", SessionID: "session-456"}
@@ -352,7 +352,7 @@ func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
 			if scope != wantAgentScope {
 				t.Fatalf("Respond() scope = %#v, want %#v", scope, wantAgentScope)
 			}
-			if query != "What is nearby?" {
+			if query != "what's around here" {
 				t.Fatalf("Respond() query = %q", query)
 			}
 			if !reflect.DeepEqual(conversation, wantConversation) {
