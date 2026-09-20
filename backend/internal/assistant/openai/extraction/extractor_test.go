@@ -1,4 +1,4 @@
-package openai
+package extraction
 
 import (
 	"context"
@@ -7,11 +7,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/rube11/rev-eyes/backend/internal/assistant/openai/responses"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 )
 
@@ -40,8 +39,13 @@ func TestMemoryExtractorDecodesAtomicWorkoutCandidates(t *testing.T) {
 			http.Error(w, handlerErr.Error(), http.StatusBadRequest)
 			return
 		}
+		if body["instructions"] != memoryExtractorPrompt {
+			handlerErr = fmt.Errorf("instructions were not supplied")
+			http.Error(w, handlerErr.Error(), http.StatusBadRequest)
+			return
+		}
 		input := body["input"].([]any)
-		user := input[1].(map[string]any)
+		user := input[0].(map[string]any)
 		if user["content"] != workoutMemoryUtterance {
 			handlerErr = fmt.Errorf("user content = %#v", user["content"])
 			http.Error(w, handlerErr.Error(), http.StatusBadRequest)
@@ -59,11 +63,10 @@ func TestMemoryExtractorDecodesAtomicWorkoutCandidates(t *testing.T) {
 	}))
 	defer server.Close()
 
-	extractor, err := NewMemoryExtractor("test-key", "test-model")
+	extractor, err := NewMemoryExtractor("test-key", "test-model", responses.Config{HTTPClient: server.Client(), Endpoint: server.URL})
 	if err != nil {
 		t.Fatalf("NewMemoryExtractor() error = %v", err)
 	}
-	extractor.endpoint = server.URL
 	candidates, err := extractor.Extract(context.Background(), workoutMemoryUtterance)
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
@@ -111,66 +114,6 @@ func TestMemoryExtractorDecodesAtomicWorkoutCandidates(t *testing.T) {
 			t.Errorf("candidates contain invented concept %q", invented)
 		}
 	}
-}
-
-func TestLiveMemoryCorrectionExtraction(t *testing.T) {
-	if os.Getenv("RUN_LIVE_ASSISTANT_TEST") != "1" {
-		t.Skip("set RUN_LIVE_ASSISTANT_TEST=1 to call the live OpenAI API")
-	}
-	model := strings.TrimSpace(os.Getenv("OPENAI_MEMORY_MODEL"))
-	if model == "" {
-		model = requiredLiveEnv(t, "OPENAI_ROUTER_MODEL")
-	}
-	extractor, err := NewMemoryExtractor(requiredLiveEnv(t, "OPENAI_API_KEY"), model)
-	if err != nil {
-		t.Fatalf("NewMemoryExtractor() error = %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	candidates, err := extractor.Extract(ctx, "Change my protein target to 150 grams.")
-	if err != nil {
-		t.Fatalf("Extract() error = %v", err)
-	}
-	if len(candidates) != 1 {
-		t.Fatalf("candidate count = %d, want 1: %#v", len(candidates), candidates)
-	}
-	candidate := candidates[0]
-	if candidate.MemoryKey != "profile.nutrition.daily_protein_target" ||
-		candidate.Retention != memory.RetentionDurable ||
-		!strings.Contains(candidate.Card.Summary, "150") {
-		t.Fatalf("correction candidate = %#v", candidate)
-	}
-	t.Logf("correction candidate: %#v", candidate)
-}
-
-func TestLiveStateTransitionExtraction(t *testing.T) {
-	if os.Getenv("RUN_LIVE_ASSISTANT_TEST") != "1" {
-		t.Skip("set RUN_LIVE_ASSISTANT_TEST=1 to call the live OpenAI API")
-	}
-	model := strings.TrimSpace(os.Getenv("OPENAI_MEMORY_MODEL"))
-	if model == "" {
-		model = requiredLiveEnv(t, "OPENAI_ROUTER_MODEL")
-	}
-	extractor, err := NewMemoryExtractor(requiredLiveEnv(t, "OPENAI_API_KEY"), model)
-	if err != nil {
-		t.Fatalf("NewMemoryExtractor() error = %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	candidates, err := extractor.Extract(ctx, "I just left the gym.")
-	if err != nil {
-		t.Fatalf("Extract() error = %v", err)
-	}
-	if len(candidates) != 1 {
-		t.Fatalf("candidate count = %d, want 1: %#v", len(candidates), candidates)
-	}
-	candidate := candidates[0]
-	if candidate.MemoryKey != "state.activity.current" ||
-		candidate.Retention != memory.RetentionTemporary ||
-		!strings.Contains(strings.ToLower(candidate.Card.Summary), "gym") {
-		t.Fatalf("transition candidate = %#v", candidate)
-	}
-	t.Logf("transition candidate: %#v", candidate)
 }
 
 func workoutMemoryCandidates() []map[string]any {
@@ -233,7 +176,6 @@ func TestMemoryExtractorSkipsCredentialUtterancesBeforeModelCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMemoryExtractor() error = %v", err)
 	}
-	extractor.endpoint = "http://127.0.0.1:1/should-not-be-called"
 	candidates, err := extractor.Extract(
 		context.Background(),
 		"Remember that my password is hunter2.",

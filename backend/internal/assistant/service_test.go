@@ -178,7 +178,7 @@ var noProposalConfirmation = proposalConfirmerFunc(func(
 func TestHandleUtteranceUsesActualProposalResult(t *testing.T) {
 	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
-			return Decision{Action: ActionProposeTask, Query: "tomorrow after class"}, nil
+			return Decision{Action: ActionRespond, Query: "tomorrow after class"}, nil
 		}),
 		proposalAwareAgentFunc(func(
 			context.Context,
@@ -239,7 +239,7 @@ func TestHandleUtteranceRespondsToMeaningfulStateTransition(t *testing.T) {
 			_ session.Conversation,
 			cards []memory.Card,
 		) (string, error) {
-			if query != "The user just left the gym; suggest one timely next step." ||
+			if query != "I just left the gym." ||
 				!reflect.DeepEqual(cards, wantCards) {
 				t.Fatalf("Respond(%q, %#v)", query, cards)
 			}
@@ -277,7 +277,7 @@ func TestHandleUtteranceRespondsToMeaningfulStateTransition(t *testing.T) {
 func TestHandleUtteranceFallsBackAfterProposalResponseFailure(t *testing.T) {
 	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
-			return Decision{Action: ActionProposeTask}, nil
+			return Decision{Action: ActionRespond}, nil
 		}),
 		proposalAwareAgentFunc(func(
 			context.Context,
@@ -286,7 +286,7 @@ func TestHandleUtteranceFallsBackAfterProposalResponseFailure(t *testing.T) {
 			session.Conversation,
 			[]memory.Card,
 		) (AgentResult, error) {
-			return AgentResult{ProposalCreated: true}, errors.New("response unavailable")
+			return AgentResult{ProposalCreated: true, ProposalKinds: []ProposalKind{ProposalTask}}, errors.New("response unavailable")
 		}),
 		noMemories,
 		noConversation,
@@ -302,12 +302,13 @@ func TestHandleUtteranceFallsBackAfterProposalResponseFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleUtterance() error = %v", err)
 	}
-	if outcome.Response != proposalResponseFallback || !outcome.ProposalCreated {
+	if outcome.Response != proposalResponseFallback || !outcome.ProposalCreated ||
+		!reflect.DeepEqual(outcome.ProposalKinds, []ProposalKind{ProposalTask}) {
 		t.Fatalf("outcome = %#v", outcome)
 	}
 }
 
-func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
+func TestHandleUtterancePreservesSpeechWithEnrichedRetrievalAndTrustedScope(t *testing.T) {
 	t.Parallel()
 
 	wantScope := tool.Scope{UserID: "user-123", SessionID: "session-456"}
@@ -352,7 +353,7 @@ func TestHandleUtteranceRespondsWithRoutedQueryAndTrustedScope(t *testing.T) {
 			if scope != wantAgentScope {
 				t.Fatalf("Respond() scope = %#v, want %#v", scope, wantAgentScope)
 			}
-			if query != "What is nearby?" {
+			if query != "what's around here" {
 				t.Fatalf("Respond() query = %q", query)
 			}
 			if !reflect.DeepEqual(conversation, wantConversation) {

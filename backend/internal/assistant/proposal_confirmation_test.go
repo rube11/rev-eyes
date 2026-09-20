@@ -10,50 +10,6 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
-func TestHandleUtteranceRoutesTaskCandidateToAgent(t *testing.T) {
-	t.Parallel()
-
-	agentCalled := false
-	service := NewService(
-		routerFunc(func(context.Context, string) (Decision, error) {
-			return Decision{
-				Action: ActionProposeTask,
-				Query:  "I should call my dentist tomorrow.",
-			}, nil
-		}),
-		agentFunc(func(
-			context.Context,
-			tool.Scope,
-			string,
-			session.Conversation,
-			[]memory.Card,
-		) (string, error) {
-			agentCalled = true
-			return "Want me to save that reminder?", nil
-		}),
-		noMemories,
-		noConversation,
-		noProposalConfirmation,
-	)
-
-	outcome, err := service.HandleUtterance(
-		context.Background(),
-		tool.Scope{},
-		"utterance-1",
-		"I should call my dentist tomorrow.",
-	)
-	if err != nil {
-		t.Fatalf("HandleUtterance() error = %v", err)
-	}
-	if !agentCalled {
-		t.Fatal("Respond() was not called")
-	}
-	if outcome.Decision.Action != ActionProposeTask ||
-		outcome.Response != "Want me to save that reminder?" {
-		t.Fatalf("outcome = %#v", outcome)
-	}
-}
-
 func TestHandleUtteranceResolvesTaskBeforeRouting(t *testing.T) {
 	t.Parallel()
 

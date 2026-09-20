@@ -15,7 +15,11 @@ import (
 
 	"github.com/rube11/rev-eyes/backend/internal/ambient"
 	"github.com/rube11/rev-eyes/backend/internal/assistant"
+	"github.com/rube11/rev-eyes/backend/internal/assistant/jev"
 	"github.com/rube11/rev-eyes/backend/internal/assistant/openai"
+	openaiextraction "github.com/rube11/rev-eyes/backend/internal/assistant/openai/extraction"
+	openairouting "github.com/rube11/rev-eyes/backend/internal/assistant/openai/routing"
+	openaitooling "github.com/rube11/rev-eyes/backend/internal/assistant/openai/tooling"
 	"github.com/rube11/rev-eyes/backend/internal/auth"
 	"github.com/rube11/rev-eyes/backend/internal/automation/proposal"
 	"github.com/rube11/rev-eyes/backend/internal/automation/reminder"
@@ -131,10 +135,14 @@ func run() error {
 		return err
 	}
 
-	classifier, err := openai.NewClassifier(
+	routerEnricher, err := openairouting.New(
 		os.Getenv("OPENAI_API_KEY"),
 		os.Getenv("OPENAI_ROUTER_MODEL"),
 	)
+	if err != nil {
+		return err
+	}
+	jevClient, err := jev.New(os.Getenv("JEV_API_KEY"))
 	if err != nil {
 		return err
 	}
@@ -142,7 +150,7 @@ func run() error {
 	if memoryModel == "" {
 		memoryModel = os.Getenv("OPENAI_ROUTER_MODEL")
 	}
-	memoryExtractor, err := openai.NewMemoryExtractor(
+	memoryExtractor, err := openaiextraction.NewMemoryExtractor(
 		os.Getenv("OPENAI_API_KEY"),
 		memoryModel,
 	)
@@ -200,7 +208,13 @@ func run() error {
 		candidateAudioHandler = candidateService.Process
 		slog.Info("candidate audio enabled", "max_concurrent", candidateMaxConcurrent)
 	}
-	activityRouter := assistant.NewRouter(classifier)
+	activityRouter, err := assistant.NewJevRouter(
+		jevClient,
+		routerEnricher,
+	)
+	if err != nil {
+		return err
+	}
 
 	toolRegistry := tool.NewRegistry()
 	locationStore := location.NewStore()
@@ -226,10 +240,25 @@ func run() error {
 		}
 	}
 
+	toolClassifier, err := assistant.NewJevToolClassifier(jevClient)
+	if err != nil {
+		return err
+	}
+	toolArguments, err := openaitooling.NewArgumentBuilder(
+		os.Getenv("OPENAI_API_KEY"),
+		os.Getenv("OPENAI_ROUTER_MODEL"),
+	)
+	if err != nil {
+		return err
+	}
+	toolWorkflow, err := assistant.NewToolWorkflow(toolRegistry, toolClassifier, toolArguments)
+	if err != nil {
+		return err
+	}
 	agent, err := openai.NewAgent(
 		os.Getenv("OPENAI_API_KEY"),
 		os.Getenv("OPENAI_AGENT_MODEL"),
-		toolRegistry,
+		toolWorkflow,
 	)
 	if err != nil {
 		return err

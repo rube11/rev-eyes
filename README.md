@@ -12,7 +12,8 @@ The project is currently in private beta.
 - Streams tap-to-talk audio from the glasses and transcribes it with Deepgram.
 - Listens for keywords with server-side Moonshine, then opens one Deepgram stream
   for the conversation. See [server listening setup](backend/docs/server-moonshine.md).
-- Routes conversations through OpenAI with relevant user and session context.
+- Uses Jev to select actions and tools with relevant user and session context;
+  OpenAI prepares arguments and composes the final response.
 - Builds a bounded memory profile from conversations and supports explicit
   remembering, correcting, reviewing, and forgetting.
 - Creates reminders and watches through a confirmation flow before scheduling
@@ -47,6 +48,7 @@ and dispatches scheduled reminders and watches.
 - Go 1.22
 - PostgreSQL and Supabase Auth
 - OpenAI Responses API
+- TypeSafe Jev intent and tool classification
 - Deepgram streaming speech-to-text
 - Tavily web search
 - AWS CloudFormation and EventBridge Scheduler
@@ -72,7 +74,7 @@ and dispatches scheduled reminders and watches.
 - Node.js and pnpm
 - A PostgreSQL database
 - Supabase project configuration
-- OpenAI, Deepgram, and Tavily API credentials
+- OpenAI, TypeSafe Jev, Deepgram, and Tavily API credentials
 - An HTTPS scheduler registrar endpoint
 
 ### Configure the backend

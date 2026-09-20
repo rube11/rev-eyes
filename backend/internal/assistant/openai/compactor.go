@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/rube11/rev-eyes/backend/internal/assistant/openai/responses"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 )
 
@@ -22,7 +23,7 @@ Return only the updated summary.`
 func (a *Agent) Compact(ctx context.Context, conversation session.Conversation) (string, error) {
 	input := make([]json.RawMessage, 0, len(conversation.Messages)+1)
 	if conversation.Summary != "" {
-		summary, err := encodeInputMessage(
+		summary, err := responses.Message(
 			"user",
 			"Existing conversation summary:\n"+conversation.Summary,
 		)
@@ -32,7 +33,7 @@ func (a *Agent) Compact(ctx context.Context, conversation session.Conversation) 
 		input = append(input, summary)
 	}
 	for _, message := range conversation.Messages {
-		encoded, err := encodeInputMessage(string(message.Speaker), message.Text)
+		encoded, err := responses.Message(string(message.Speaker), message.Text)
 		if err != nil {
 			return "", fmt.Errorf("encode conversation for compaction: %w", err)
 		}
@@ -42,14 +43,14 @@ func (a *Agent) Compact(ctx context.Context, conversation session.Conversation) 
 		return "", errors.New("conversation to compact is empty")
 	}
 
-	response, err := a.createResponse(ctx, input, responseOptions{
-		instructions:    compactionInstructions,
-		maxOutputTokens: maxCompactionOutputTokens,
+	response, err := a.client.Create(ctx, input, responses.Options{
+		Instructions:    compactionInstructions,
+		MaxOutputTokens: maxCompactionOutputTokens,
 	})
 	if err != nil {
 		return "", err
 	}
-	_, text, err := parseOutput(response.Output)
+	_, text, err := responses.ParseOutput(response.Output)
 	if err != nil {
 		return "", err
 	}

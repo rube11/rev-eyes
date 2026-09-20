@@ -1,22 +1,19 @@
-package openai
+// Package extraction turns finalized user utterances into private, atomic
+// memory candidates. It is independent from response routing and composition.
+package extraction
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
-	"time"
 
+	"github.com/rube11/rev-eyes/backend/internal/assistant/openai/responses"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 )
 
-const (
-	maxExtractedMemories = 12
-)
+const maxExtractedMemories = 12
 
 const memoryExtractorPrompt = `You are the private memory-learning pass for a wearable assistant. Read one finalized USER utterance and extract only personal context that will genuinely improve future help.
 
@@ -59,27 +56,15 @@ Write concise standalone cards. Do not respond to the user and do not include re
 // MemoryExtractor turns a finalized user utterance into atomic memory
 // candidates. It is intentionally independent of response routing.
 type MemoryExtractor struct {
-	apiKey   string
-	model    string
-	endpoint string
-	client   *http.Client
+	client responses.Client
 }
 
-func NewMemoryExtractor(apiKey, model string) (*MemoryExtractor, error) {
-	apiKey = strings.TrimSpace(apiKey)
-	model = strings.TrimSpace(model)
-	if apiKey == "" {
-		return nil, errors.New("OpenAI API key is required")
+func NewMemoryExtractor(apiKey, model string, config ...responses.Config) (*MemoryExtractor, error) {
+	client, err := responses.New(apiKey, model, config...)
+	if err != nil {
+		return nil, err
 	}
-	if model == "" {
-		return nil, errors.New("OpenAI memory model is required")
-	}
-	return &MemoryExtractor{
-		apiKey:   apiKey,
-		model:    model,
-		endpoint: responsesURL,
-		client:   &http.Client{Timeout: 15 * time.Second},
-	}, nil
+	return &MemoryExtractor{client: client}, nil
 }
 
 func (e *MemoryExtractor) Extract(
@@ -93,50 +78,24 @@ func (e *MemoryExtractor) Extract(
 	if containsBlockedSecret(utterance) {
 		return nil, memory.ErrUnsafeMemory
 	}
-	body, err := json.Marshal(memoryExtractorRequest(e.model, utterance))
+	input, err := responses.Message("user", utterance)
 	if err != nil {
-		return nil, fmt.Errorf("encode memory extraction request: %w", err)
+		return nil, fmt.Errorf("encode memory extraction input: %w", err)
 	}
-	request, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		e.endpoint,
-		bytes.NewReader(body),
-	)
+	response, err := e.client.Create(ctx, []json.RawMessage{input}, responses.Options{
+		Instructions:    memoryExtractorPrompt,
+		Text:            memoryExtractorTextFormat(),
+		MaxOutputTokens: 2400,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("create memory extraction request: %w", err)
+		return nil, err
 	}
-	request.Header.Set("Authorization", "Bearer "+e.apiKey)
-	request.Header.Set("Content-Type", "application/json")
-
-	response, err := e.client.Do(request)
+	calls, outputText, err := responses.ParseOutput(response.Output)
 	if err != nil {
-		return nil, fmt.Errorf("send memory extraction request: %w", err)
+		return nil, err
 	}
-	defer response.Body.Close()
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBodySize))
-	if err != nil {
-		return nil, fmt.Errorf("read memory extraction response: %w", err)
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, classifierStatusError(response.StatusCode, responseBody)
-	}
-
-	var result classifierResponse
-	if err := json.Unmarshal(responseBody, &result); err != nil {
-		return nil, fmt.Errorf("decode memory extraction response: %w", err)
-	}
-	var outputText string
-	for _, output := range result.Output {
-		for _, content := range output.Content {
-			if content.Refusal != "" {
-				return nil, fmt.Errorf("OpenAI refused memory extraction: %s", content.Refusal)
-			}
-			if content.Type == "output_text" && strings.TrimSpace(content.Text) != "" {
-				outputText = content.Text
-				break
-			}
-		}
+	if len(calls) > 0 {
+		return nil, errors.New("memory extractor cannot execute tools")
 	}
 	if strings.TrimSpace(outputText) == "" {
 		return nil, errors.New("OpenAI response contained no memory extraction")
@@ -215,32 +174,23 @@ func containsBlockedSecret(text string) bool {
 	return false
 }
 
-func memoryExtractorRequest(model, utterance string) map[string]any {
+func memoryExtractorTextFormat() map[string]any {
 	return map[string]any{
-		"model": model,
-		"input": []map[string]string{
-			{"role": "system", "content": memoryExtractorPrompt},
-			{"role": "user", "content": utterance},
-		},
-		"max_output_tokens": 2400,
-		"store":             false,
-		"text": map[string]any{
-			"format": map[string]any{
-				"type":   "json_schema",
-				"name":   "memory_candidates",
-				"strict": true,
-				"schema": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"memories": map[string]any{
-							"type":     "array",
-							"maxItems": maxExtractedMemories,
-							"items":    memoryCandidateSchema(),
-						},
+		"format": map[string]any{
+			"type":   "json_schema",
+			"name":   "memory_candidates",
+			"strict": true,
+			"schema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"memories": map[string]any{
+						"type":     "array",
+						"maxItems": maxExtractedMemories,
+						"items":    memoryCandidateSchema(),
 					},
-					"required":             []string{"memories"},
-					"additionalProperties": false,
 				},
+				"required":             []string{"memories"},
+				"additionalProperties": false,
 			},
 		},
 	}
@@ -320,4 +270,12 @@ func memoryCardSchema() map[string]any {
 		},
 		"additionalProperties": false,
 	}
+}
+
+func stringArraySchema(values []string) map[string]any {
+	items := map[string]any{"type": "string"}
+	if len(values) > 0 {
+		items["enum"] = values
+	}
+	return map[string]any{"type": "array", "items": items}
 }

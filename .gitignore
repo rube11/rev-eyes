@@ -1,2 +1,4 @@
 .nvimlog
 AGENTS.md
+.agents/
+skills-lock.json

@@ -42,8 +42,8 @@ func TestTextRespondsWhereAudioStaysSilent(t *testing.T) {
 	}
 }
 
-func TestTextKeepsSpecializedRoutes(t *testing.T) {
-	for _, action := range []Action{ActionRemember, ActionMemoryCorrect, ActionProposeTask, ActionProposeWatch} {
+func TestTextKeepsMemoryRoutes(t *testing.T) {
+	for _, action := range []Action{ActionRemember, ActionMemoryCorrect} {
 		service := NewService(routerFunc(func(context.Context, string) (Decision, error) {
 			return Decision{Action: action, Query: "original request"}, nil
 		}),
@@ -58,9 +58,6 @@ func TestTextKeepsSpecializedRoutes(t *testing.T) {
 		}
 		if result.Decision.Action != action {
 			t.Fatalf("lost specialized route %s", action)
-		}
-		if (action == ActionProposeTask || action == ActionProposeWatch) && !result.ProposalCreated {
-			t.Fatal("lost approval state")
 		}
 	}
 }
