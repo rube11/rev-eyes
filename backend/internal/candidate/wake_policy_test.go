@@ -9,6 +9,8 @@ func TestMatchWakePhraseRecognizesApprovedFamilies(t *testing.T) {
 	}{
 		{"Hey, Glasses, what time is it?", WakeAssistantRequest},
 		{"Glasses, what time is it?", WakeAssistantRequest},
+		{"Hey, just headed out from the gym—what's next?", WakeAssistantRequest},
+		{"What time is the meeting?", WakeAssistantRequest},
 		{"My glasses are on the table.", WakeAssistantRequest},
 		{"Remember that Maya is my manager.", WakeAssistantRequest},
 		{"Please remember this preference.", WakeAssistantRequest},
@@ -42,7 +44,7 @@ func TestMatchWakePhraseRejectsUnapprovedSpeech(t *testing.T) {
 		"",
 		"The meeting starts at three.",
 		"Could you find the nearest coffee shop?",
-		"What time is the meeting?",
+		"Whatever works for me.",
 		"Please help me with this.",
 		"I really love window seats.",
 		"I will call the dentist tomorrow.",

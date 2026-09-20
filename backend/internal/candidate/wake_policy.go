@@ -36,6 +36,7 @@ var wakeRules = []wakeRule{
 		reason: WakeAssistantRequest,
 		patterns: []*regexp.Regexp{
 			regexp.MustCompile(`\bglasses\b`),
+			regexp.MustCompile(`\bwhat\b`),
 			regexp.MustCompile(`^(?:please\s+)?remember\b`),
 			regexp.MustCompile(`\b(?:show\s+(?:that|it)\s+again|repeat\s+that)\b`),
 		},
