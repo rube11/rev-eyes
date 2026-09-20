@@ -10,6 +10,7 @@ import (
 
 	"github.com/rube11/rev-eyes/backend/internal/assistant"
 	"github.com/rube11/rev-eyes/backend/internal/assistant/jev"
+	"github.com/rube11/rev-eyes/backend/internal/assistant/openai/routing"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
@@ -23,7 +24,7 @@ func TestLiveJevRoutingScenarios(t *testing.T) {
 	}
 
 	openAIKey := requiredLiveEnv(t, "OPENAI_API_KEY")
-	enricher, err := NewRouterEnricher(openAIKey, requiredLiveEnv(t, "OPENAI_ROUTER_MODEL"))
+	enricher, err := routing.New(openAIKey, requiredLiveEnv(t, "OPENAI_ROUTER_MODEL"))
 	if err != nil {
 		t.Fatalf("NewRouterEnricher: %v", err)
 	}
@@ -141,7 +142,7 @@ func TestLiveJevAmbiguousScenarios(t *testing.T) {
 	}
 
 	openAIKey := requiredLiveEnv(t, "OPENAI_API_KEY")
-	enricher, err := NewRouterEnricher(openAIKey, requiredLiveEnv(t, "OPENAI_ROUTER_MODEL"))
+	enricher, err := routing.New(openAIKey, requiredLiveEnv(t, "OPENAI_ROUTER_MODEL"))
 	if err != nil {
 		t.Fatalf("NewRouterEnricher: %v", err)
 	}

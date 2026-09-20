@@ -11,6 +11,7 @@ import (
 
 	"github.com/rube11/rev-eyes/backend/internal/assistant"
 	"github.com/rube11/rev-eyes/backend/internal/assistant/jev"
+	"github.com/rube11/rev-eyes/backend/internal/assistant/openai/tooling"
 	"github.com/rube11/rev-eyes/backend/internal/automation/reminder"
 	"github.com/rube11/rev-eyes/backend/internal/automation/watch"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
@@ -30,7 +31,7 @@ func liveToolWorkflow(t *testing.T, registry *tool.Registry) *assistant.ToolWork
 	if err != nil {
 		t.Fatal(err)
 	}
-	builder, err := NewToolArgumentBuilder(requiredLiveEnv(t, "OPENAI_API_KEY"), requiredLiveEnv(t, "OPENAI_ROUTER_MODEL"))
+	builder, err := tooling.NewArgumentBuilder(requiredLiveEnv(t, "OPENAI_API_KEY"), requiredLiveEnv(t, "OPENAI_ROUTER_MODEL"))
 	if err != nil {
 		t.Fatal(err)
 	}
