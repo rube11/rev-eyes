@@ -310,7 +310,9 @@ func TestToolWorkflowCancellationPreventsFurtherEffectsAndPreservesProposal(t *t
 		return map[string]PreparedToolArguments{"propose_task": {Arguments: json.RawMessage(`{}`)}, "propose_watch": {Arguments: json.RawMessage(`{}`)}}, nil
 	})
 	result, err := w.Run(ctx, tool.Scope{}, ResponseContext{})
-	if !errors.Is(err, context.Canceled) || !result.ProposalCreated || len(result.Results) != 1 {
+	if !errors.Is(err, context.Canceled) || !result.ProposalCreated ||
+		!reflect.DeepEqual(result.ProposalKinds, []ProposalKind{ProposalTask}) ||
+		len(result.Results) != 1 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }

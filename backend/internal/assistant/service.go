@@ -29,7 +29,15 @@ type Agent interface {
 type AgentResult struct {
 	Text            string
 	ProposalCreated bool
+	ProposalKinds   []ProposalKind
 }
+
+type ProposalKind string
+
+const (
+	ProposalTask  ProposalKind = "task"
+	ProposalWatch ProposalKind = "watch"
+)
 
 // MemoryManager retrieves and manages memories within the trusted user scope.
 type MemoryManager interface {
@@ -54,6 +62,7 @@ type Outcome struct {
 	Decision        Decision
 	Response        string
 	ProposalCreated bool
+	ProposalKinds   []ProposalKind
 	MemoryChanged   bool
 }
 
@@ -162,9 +171,7 @@ func (s *Service) HandleUtterance(
 		return outcome, nil
 	}
 	if decision.Action != ActionRespond &&
-		decision.Action != ActionStateTransition &&
-		decision.Action != ActionProposeTask &&
-		decision.Action != ActionProposeWatch {
+		decision.Action != ActionStateTransition {
 		return outcome, nil
 	}
 
@@ -221,6 +228,7 @@ func (s *Service) HandleUtterance(
 	// user's actual wording, including self-corrections, tone, and constraints.
 	result, err := s.agent.RespondWithResult(ctx, turnScope, strings.TrimSpace(utterance), conversation, cards)
 	outcome.ProposalCreated = result.ProposalCreated
+	outcome.ProposalKinds = result.ProposalKinds
 	if err != nil && outcome.ProposalCreated && ctx.Err() == nil {
 		slog.WarnContext(
 			ctx,

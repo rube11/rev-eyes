@@ -72,10 +72,10 @@ func (a *Agent) RespondWithResult(ctx context.Context, scope tool.Scope, query s
 	if a.workflow != nil && !turn.MemoryReview {
 		tools, err = a.workflow.Run(ctx, scope, turn)
 		if err != nil {
-			return assistant.AgentResult{ProposalCreated: tools.ProposalCreated}, err
+			return assistant.AgentResult{ProposalCreated: tools.ProposalCreated, ProposalKinds: tools.ProposalKinds}, err
 		}
 	}
-	result := assistant.AgentResult{ProposalCreated: tools.ProposalCreated}
+	result := assistant.AgentResult{ProposalCreated: tools.ProposalCreated, ProposalKinds: tools.ProposalKinds}
 	input, err := responseInput(turn, tools.Results)
 	if err != nil {
 		return result, err

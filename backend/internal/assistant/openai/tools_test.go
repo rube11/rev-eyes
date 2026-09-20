@@ -173,6 +173,9 @@ func TestAgentPreservesActualProposalStatus(t *testing.T) {
 			if result.ProposalCreated != (ending != "proposal error") {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
+			if result.ProposalCreated && !reflect.DeepEqual(result.ProposalKinds, []assistant.ProposalKind{assistant.ProposalTask}) {
+				t.Fatalf("proposal kinds=%v", result.ProposalKinds)
+			}
 			wantError := ending == "api error" || ending == "empty" || ending == "unexpected tool"
 			if (err != nil) != wantError {
 				t.Fatalf("err=%v want error=%v", err, wantError)

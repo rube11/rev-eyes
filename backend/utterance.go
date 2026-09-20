@@ -57,21 +57,21 @@ func handleUtterance(
 			slog.WarnContext(ctx, "memory learning queue unavailable")
 		}
 	}
-	switch outcome.Decision.Action {
-	case assistant.ActionProposeTask:
-		if outcome.ProposalCreated {
+	for _, kind := range outcome.ProposalKinds {
+		switch kind {
+		case assistant.ProposalTask:
 			result.WorkspaceResources = append(
 				result.WorkspaceResources,
 				realtime.WorkspaceTasks,
 			)
-		}
-	case assistant.ActionProposeWatch:
-		if outcome.ProposalCreated {
+		case assistant.ProposalWatch:
 			result.WorkspaceResources = append(
 				result.WorkspaceResources,
 				realtime.WorkspaceWatches,
 			)
 		}
+	}
+	switch outcome.Decision.Action {
 	case assistant.ActionResolveProposal:
 		result.WorkspaceResources = append(
 			result.WorkspaceResources,

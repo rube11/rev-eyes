@@ -345,11 +345,14 @@ func TestHandleUtterancePersistsFinalizedTranscriptInOrder(t *testing.T) {
 }
 
 func TestHandleUtteranceMarksProposalsAwaitingConfirmation(t *testing.T) {
-	for _, action := range []assistant.Action{
-		assistant.ActionProposeTask,
-		assistant.ActionProposeWatch,
+	for _, testCase := range []struct {
+		kind     assistant.ProposalKind
+		resource realtime.WorkspaceResource
+	}{
+		{assistant.ProposalTask, realtime.WorkspaceTasks},
+		{assistant.ProposalWatch, realtime.WorkspaceWatches},
 	} {
-		t.Run(string(action), func(t *testing.T) {
+		t.Run(string(testCase.kind), func(t *testing.T) {
 			transcripts := fakeTranscriptStore{
 				append: func(
 					context.Context,
@@ -368,9 +371,10 @@ func TestHandleUtteranceMarksProposalsAwaitingConfirmation(t *testing.T) {
 					string,
 				) (assistant.Outcome, error) {
 					return assistant.Outcome{
-						Decision:        assistant.Decision{Action: action},
+						Decision:        assistant.Decision{Action: assistant.ActionRespond},
 						Response:        "Should I do that?",
 						ProposalCreated: true,
+						ProposalKinds:   []assistant.ProposalKind{testCase.kind},
 					}, nil
 				},
 			}
@@ -388,15 +392,11 @@ func TestHandleUtteranceMarksProposalsAwaitingConfirmation(t *testing.T) {
 			if response.Text != "Should I do that?" || !response.AwaitingConfirmation {
 				t.Fatalf("response = %+v", response)
 			}
-			wantResource := realtime.WorkspaceTasks
-			if action == assistant.ActionProposeWatch {
-				wantResource = realtime.WorkspaceWatches
-			}
 			if !reflect.DeepEqual(
 				response.WorkspaceResources,
 				[]realtime.WorkspaceResource{
 					realtime.WorkspaceConversations,
-					wantResource,
+					testCase.resource,
 				},
 			) {
 				t.Fatalf("workspace resources = %#v", response.WorkspaceResources)
@@ -424,7 +424,7 @@ func TestHandleUtteranceDoesNotPredictConfirmationFromRouterAction(t *testing.T)
 			string,
 		) (assistant.Outcome, error) {
 			return assistant.Outcome{
-				Decision: assistant.Decision{Action: assistant.ActionProposeTask},
+				Decision: assistant.Decision{Action: assistant.ActionRespond},
 				Response: "What time does class end?",
 			}, nil
 		},

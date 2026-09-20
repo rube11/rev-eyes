@@ -178,7 +178,7 @@ var noProposalConfirmation = proposalConfirmerFunc(func(
 func TestHandleUtteranceUsesActualProposalResult(t *testing.T) {
 	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
-			return Decision{Action: ActionProposeTask, Query: "tomorrow after class"}, nil
+			return Decision{Action: ActionRespond, Query: "tomorrow after class"}, nil
 		}),
 		proposalAwareAgentFunc(func(
 			context.Context,
@@ -277,7 +277,7 @@ func TestHandleUtteranceRespondsToMeaningfulStateTransition(t *testing.T) {
 func TestHandleUtteranceFallsBackAfterProposalResponseFailure(t *testing.T) {
 	service := NewService(
 		routerFunc(func(context.Context, string) (Decision, error) {
-			return Decision{Action: ActionProposeTask}, nil
+			return Decision{Action: ActionRespond}, nil
 		}),
 		proposalAwareAgentFunc(func(
 			context.Context,
@@ -286,7 +286,7 @@ func TestHandleUtteranceFallsBackAfterProposalResponseFailure(t *testing.T) {
 			session.Conversation,
 			[]memory.Card,
 		) (AgentResult, error) {
-			return AgentResult{ProposalCreated: true}, errors.New("response unavailable")
+			return AgentResult{ProposalCreated: true, ProposalKinds: []ProposalKind{ProposalTask}}, errors.New("response unavailable")
 		}),
 		noMemories,
 		noConversation,
@@ -302,7 +302,8 @@ func TestHandleUtteranceFallsBackAfterProposalResponseFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleUtterance() error = %v", err)
 	}
-	if outcome.Response != proposalResponseFallback || !outcome.ProposalCreated {
+	if outcome.Response != proposalResponseFallback || !outcome.ProposalCreated ||
+		!reflect.DeepEqual(outcome.ProposalKinds, []ProposalKind{ProposalTask}) {
 		t.Fatalf("outcome = %#v", outcome)
 	}
 }

@@ -40,6 +40,7 @@ type ToolArgumentBuilder interface {
 type ToolRunResult struct {
 	Results         []ToolObservation
 	ProposalCreated bool
+	ProposalKinds   []ProposalKind
 }
 
 type ToolRunner interface {
@@ -219,6 +220,11 @@ func (w *ToolWorkflow) runBatch(ctx context.Context, scope tool.Scope, state Too
 			}
 			if json.Unmarshal([]byte(observation.Content), &status) == nil && status.Status == "proposed" {
 				result.ProposalCreated = true
+				kind := ProposalTask
+				if observation.Name == watchToolName {
+					kind = ProposalWatch
+				}
+				result.ProposalKinds = append(result.ProposalKinds, kind)
 			}
 		}
 	}
