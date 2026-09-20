@@ -144,16 +144,16 @@ func TestJevRouterClassifiesExactSpecializedActionWithContext(t *testing.T) {
 	if _, exists := criteria["specialized_action"]; exists {
 		t.Fatal("Jev criteria still contain specialized_action")
 	}
-	if _, exists := criteria[string(ActionProposeTask)]; exists {
+	if _, exists := criteria["propose_task"]; exists {
 		t.Fatal("top-level router still owns reminder tool intent")
 	}
-	if _, exists := criteria[string(ActionProposeWatch)]; exists {
+	if _, exists := criteria["propose_watch"]; exists {
 		t.Fatal("top-level router still owns watch tool intent")
 	}
 }
 
 func TestJevRouterRejectsUnknownRoute(t *testing.T) {
-	for _, action := range []Action{"specialized_action", ActionProposeTask, ActionProposeWatch} {
+	for _, action := range []Action{"specialized_action", "propose_task", "propose_watch"} {
 		evaluator := &fakeJevEvaluator{response: jev.Response{Answers: map[string]jev.Answer{
 			jevRouteQuestion: {Choice: string(action)},
 		}}}

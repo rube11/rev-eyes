@@ -100,7 +100,7 @@ func (r *JevRouter) RouteWithContext(
 }
 
 func isRoutableAction(action Action) bool {
-	if action == ActionProposeTask || action == ActionProposeWatch {
+	if action == "propose_task" || action == "propose_watch" {
 		return false
 	}
 	return validateDecision(Decision{Action: action}).Action == action
