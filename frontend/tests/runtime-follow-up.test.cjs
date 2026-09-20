@@ -20,6 +20,7 @@ async function harness(t, serverListeningEnabled = false, reconnect = false) {
   const pages = []
   const statuses = []
   const upgrades = []
+  let nextRenderGate
   let connectionGate
   const sockets = []
   function newSocket() {
@@ -54,7 +55,13 @@ async function harness(t, serverListeningEnabled = false, reconnect = false) {
     },
     './glasses-page-host': {
       getEvenBridge: async () => bridge, resumeGlassesPage: () => {},
-      renderGlassesPage: async page => pages.push(page),
+      resetGlassesPageHost: () => {},
+      renderGlassesPage: async page => {
+        const gate = nextRenderGate
+        nextRenderGate = undefined
+        if (gate) await gate.promise
+        pages.push(page)
+      },
       upgradeTranscriptText: async text => { upgrades.push(text); pages.at(-1).transcript = text; return true },
       upgradeMessageStatus: async footer => { upgrades.push(footer); pages.at(-1).footer = footer; return true },
     },
@@ -130,6 +137,12 @@ async function harness(t, serverListeningEnabled = false, reconnect = false) {
     disconnect: async () => { socket.close(); await flush() },
     denyAudio: () => { allowAudio = false },
     delayAudio: () => { let release; audioGate = new Promise(resolve => { release = resolve }); return release },
+    delayNextRender: () => {
+      let release
+      const promise = new Promise(resolve => { release = resolve })
+      nextRenderGate = { promise, release }
+      return release
+    },
   }
 }
 
@@ -480,6 +493,21 @@ test('streaming conversation accepts a keyword trigger and consecutive replies w
   assert.equal(h.controls.includes('conversation_stop'), false)
   await h.message('conversation_idle')
   assert.equal(h.pages.at(-1).footer, 'Tap to talk')
+})
+
+test('a hung transcript render cannot block the assistant response forever', async t => {
+  const h = await harness(t, true)
+  await h.message('conversation_started')
+  const release = h.delayNextRender()
+  await h.message('user_transcript', { text: 'Hey glasses, what time is it?' })
+  await h.advance(250)
+  await h.message('assistant_thinking')
+  await h.message('assistant_response', { text: 'It is noon.' })
+  await h.advance(5_000)
+  const recovered = h.pages.some(page => page.message?.body === 'It is noon.')
+  release()
+  await h.advance(0)
+  assert.equal(recovered, true)
 })
 
 

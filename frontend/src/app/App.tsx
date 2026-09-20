@@ -4,7 +4,7 @@ import type { FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 
 import { initializeEvenExperience } from '../even/runtime'
-import { showEvenMessage } from '../even/glasses-page-host'
+import { resetGlassesPageHost, showEvenMessage } from '../even/glasses-page-host'
 import {
   createDemoWorkspaceData,
   deleteWorkspaceAutomation,
@@ -439,6 +439,7 @@ function App() {
 
   const reconnectGlasses = () => {
     if (isDemoMode || !accessToken || reconnectPending.current) return
+    resetGlassesPageHost()
     reconnectPending.current = true
     setReconnecting(true)
     setGlassesStatus('Reconnecting')

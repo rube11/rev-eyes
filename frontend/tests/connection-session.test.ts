@@ -95,3 +95,15 @@ test('a failed cleanup prevents the next runtime from starting until cleanup suc
   assert.equal(starts, 1)
   await session.stop()
 })
+
+test('a hung cleanup cannot permanently block a replacement runtime', async () => {
+  const session = new ConnectionSession(20)
+  await session.start(async () => async () => { await new Promise(() => undefined) })
+  let restarted = false
+  await session.start(async () => {
+    restarted = true
+    return () => undefined
+  })
+  assert.equal(restarted, true)
+  await session.stop()
+})
