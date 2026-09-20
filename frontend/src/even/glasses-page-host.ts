@@ -9,47 +9,18 @@ import type { RebuildPageContainer } from "@evenrealities/even_hub_sdk"
 
 import { buildCompactPage } from "./glasses-ui"
 
-type EvenBridge = Awaited<ReturnType<typeof waitForEvenAppBridge>>
-
-const NATIVE_OPERATION_TIMEOUT_MS = 2_000
-
-let bridgePromise: Promise<EvenBridge> | undefined
+let bridgePromise: ReturnType<typeof waitForEvenAppBridge> | undefined
 let startup: Promise<void> | undefined
-let stopExitEvents: (() => void) | undefined
+let exitEventsRegistered = false
 let pageMutationTail: Promise<void> = Promise.resolve()
 let pageSuspended = false
-let hostGeneration = 0
-
-function withNativeTimeout<T>(operation: Promise<T>, name: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`${name} timed out`)),
-      NATIVE_OPERATION_TIMEOUT_MS,
-    )
-    operation.then(
-      value => { clearTimeout(timer); resolve(value) },
-      error => { clearTimeout(timer); reject(error) },
-    )
-  })
-}
-
-export function resetGlassesPageHost(): void {
-  hostGeneration += 1
-  try { stopExitEvents?.() } catch { /* The old bridge may already be gone. */ }
-  stopExitEvents = undefined
-  bridgePromise = undefined
-  startup = undefined
-  pageMutationTail = Promise.resolve()
-  pageSuspended = false
-}
 
 export function getEvenBridge() {
   if (!bridgePromise) {
-    const generation = hostGeneration
-    const attempt = withNativeTimeout(waitForEvenAppBridge(), "Even bridge connection")
+    const attempt = waitForEvenAppBridge()
     bridgePromise = attempt
     void attempt.catch(() => {
-      if (hostGeneration === generation && bridgePromise === attempt) {
+      if (bridgePromise === attempt) {
         bridgePromise = undefined
       }
     })
@@ -66,14 +37,7 @@ export function resumeGlassesPage(): void {
 }
 
 function serializePageMutation<T>(mutation: () => Promise<T>): Promise<T> {
-  const generation = hostGeneration
-  const run = () => {
-    if (generation !== hostGeneration) {
-      throw new Error("Glasses page operation was superseded")
-    }
-    return mutation()
-  }
-  const result = pageMutationTail.then(run, run)
+  const result = pageMutationTail.then(mutation, mutation)
   pageMutationTail = result.then(
     () => undefined,
     () => undefined,
@@ -86,14 +50,13 @@ async function ensurePage() {
 
   startup ??= (async () => {
     const initialPage = buildCompactPage("SIGN IN ON PHONE")
-    const result = await withNativeTimeout(
-      bridge.createStartUpPageContainer(new CreateStartUpPageContainer({
+    const result = await bridge.createStartUpPageContainer(
+      new CreateStartUpPageContainer({
         containerTotalNum: initialPage.containerTotalNum,
         listObject: initialPage.listObject,
         textObject: initialPage.textObject,
         imageObject: initialPage.imageObject,
-      })),
-      "Create glasses page",
+      }),
     )
     if (result !== StartUpPageCreateResult.success) {
       throw new Error(`Glasses page failed (${result})`)
@@ -104,8 +67,8 @@ async function ensurePage() {
   })
 
   await startup
-  if (!stopExitEvents) {
-    stopExitEvents = bridge.onEvenHubEvent((event) => {
+  if (!exitEventsRegistered) {
+    bridge.onEvenHubEvent((event) => {
       const eventType =
         event.listEvent?.eventType ??
         event.textEvent?.eventType ??
@@ -113,16 +76,14 @@ async function ensurePage() {
       if (eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
         pageSuspended = true
         void serializePageMutation(async () => {
-          const stopped = await withNativeTimeout(
-            bridge.shutDownPageContainer(0),
-            "Shut down glasses page",
-          )
+          const stopped = await bridge.shutDownPageContainer(0)
           if (stopped) {
             startup = undefined
           }
         }).catch(() => undefined)
       }
     })
+    exitEventsRegistered = true
   }
 
   return bridge
@@ -131,6 +92,11 @@ async function ensurePage() {
 export async function renderGlassesPage(
   page: RebuildPageContainer,
 ): Promise<void> {
+  for (const container of page.textObject ?? []) {
+    if (!container.containerName || container.containerName.length > 16) {
+      throw new Error("Glasses container names must contain 1–16 characters")
+    }
+  }
   if (pageSuspended) {
     return
   }
@@ -139,18 +105,10 @@ export async function renderGlassesPage(
       return
     }
     const bridge = await ensurePage()
-    try {
-      const rebuilt = await withNativeTimeout(
-        bridge.rebuildPageContainer(page),
-        "Render glasses page",
-      )
-      if (!rebuilt) {
-        throw new Error("Glasses display update failed")
-      }
-    } catch (error) {
-      // A disconnect can drop the native page. Let the next attempt create it again.
-      startup = undefined
-      throw error
+    const rebuilt = await bridge.rebuildPageContainer(page)
+    if (!rebuilt) {
+      // Rejection does not destroy the native page; startup is created once.
+      throw new Error("Glasses display update rejected")
     }
   })
 }
@@ -164,11 +122,11 @@ export async function upgradeTranscriptText(content: string): Promise<boolean> {
       return false
     }
     const bridge = await ensurePage()
-    return withNativeTimeout(bridge.textContainerUpgrade(new TextContainerUpgrade({
+    return bridge.textContainerUpgrade(new TextContainerUpgrade({
       containerID: 1,
       containerName: "live-transcript",
       content,
-    })), "Update glasses transcript")
+    }))
   })
 }
 
@@ -182,8 +140,8 @@ export async function upgradeMessageStatus(content: string): Promise<boolean> {
   return serializePageMutation(async () => {
     if (pageSuspended) return false
     const bridge = await ensurePage()
-    return withNativeTimeout(bridge.textContainerUpgrade(new TextContainerUpgrade({
+    return bridge.textContainerUpgrade(new TextContainerUpgrade({
       containerID: 2, containerName: "message-status", content,
-    })), "Update glasses message status")
+    }))
   })
 }

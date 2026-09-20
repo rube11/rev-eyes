@@ -26,7 +26,6 @@ import { AssistantResponseLifecycle } from "./assistant-response-lifecycle"
 import {
   getEvenBridge,
   renderGlassesPage,
-  resetGlassesPageHost,
   resumeGlassesPage,
   upgradeTranscriptText,
   upgradeMessageStatus,
@@ -50,15 +49,7 @@ type NotificationPresentation = {
   id: string
   message: GlassesMessage
 }
-type PendingAssistantDelivery = {
-  accessToken: string
-  presentation: GlassesMessage
-}
-
-let pendingAssistantDelivery: PendingAssistantDelivery | undefined
-
 const TRANSCRIPT_UPDATE_MS = 250
-const DISPLAY_TRANSITION_TIMEOUT_MS = 2_500
 const RELEASE_CLICK_SUPPRESSION_MS = 750
 
 function sendLocation(socket: WebSocket | undefined, location: AppLocation) {
@@ -185,25 +176,11 @@ export async function initializeEvenExperience(
   function enqueueTransition(transition: () => Promise<void>): Promise<void> {
     const result = transitionTail.then(async () => {
       if (active) {
-        let timer: ReturnType<typeof setTimeout> | undefined
-        try {
-          await Promise.race([
-            transition(),
-            new Promise<void>((_, reject) => {
-              timer = setTimeout(
-                () => reject(new Error("Glasses transition timed out")),
-                DISPLAY_TRANSITION_TIMEOUT_MS,
-              )
-            }),
-          ])
-        } finally {
-          if (timer !== undefined) clearTimeout(timer)
-        }
+        await transition()
       }
     })
-    transitionTail = result.catch(() => {
-      resetGlassesPageHost()
-      reportStatus("Glasses command failed")
+    transitionTail = result.catch((error: unknown) => {
+      reportStatus(error instanceof Error ? error.message : "Glasses command failed")
     })
     return transitionTail
   }
@@ -401,9 +378,6 @@ export async function initializeEvenExperience(
         buildMessagePage(presentation, "Opening mic", messagePageIndex),
         "message",
       )
-      if (pendingAssistantDelivery?.presentation === presentation) {
-        pendingAssistantDelivery = undefined
-      }
     } catch (error) {
       cancelAssistantResponseWindow()
       throw error
@@ -683,9 +657,13 @@ export async function initializeEvenExperience(
         return
       }
       const pending = takePendingTranscript()
+      if (pending) {
+        void enqueueTransition(async () => {
+          if (connection.current === nextSocket) await handleServerMessage(pending)
+        })
+      }
       void enqueueTransition(async () => {
         if (connection.current === nextSocket) {
-          if (pending) await handleServerMessage(pending)
           await handleServerMessage(message)
         }
       })
@@ -736,11 +714,7 @@ export async function initializeEvenExperience(
         await showAssistantPresentation(visibleAssistant)
       } else if (visibleAssistant) {
         await showAssistantPresentation(visibleAssistant)
-      } else if (pendingAssistantDelivery?.accessToken === accessToken) {
-        visibleAssistant = pendingAssistantDelivery.presentation
-        await showAssistantPresentation(visibleAssistant)
       } else {
-        if (pendingAssistantDelivery) pendingAssistantDelivery = undefined
         await showReady()
       }
     }
@@ -910,7 +884,6 @@ export async function initializeEvenExperience(
           return
         }
         const presentation = presentGlassesMessage(responseText)
-        pendingAssistantDelivery = { accessToken, presentation }
         lastAssistant = presentation
         await displayAssistantPresentation(presentation)
         return

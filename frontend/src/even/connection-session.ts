@@ -1,18 +1,10 @@
 type Cleanup = () => void | Promise<void>
 
-const DEFAULT_CLEANUP_TIMEOUT_MS = 2_000
-
-// A new runtime waits for ordinary cleanup, but a lost native bridge cannot
-// permanently prevent a replacement runtime from starting.
+// A new runtime must wait for pending setup and cleanup of the previous one.
 export class ConnectionSession {
   private generation = 0
   private tail: Promise<unknown> = Promise.resolve()
   private cleanup: Cleanup | undefined
-  private readonly cleanupTimeoutMs: number
-
-  constructor(cleanupTimeoutMs = DEFAULT_CLEANUP_TIMEOUT_MS) {
-    this.cleanupTimeoutMs = cleanupTimeoutMs
-  }
 
   start(initialize: () => Promise<Cleanup>): Promise<void> {
     const generation = ++this.generation
@@ -37,24 +29,7 @@ export class ConnectionSession {
   private async clear(): Promise<void> {
     const cleanup = this.cleanup
     // Retain a failed cleanup so a subsequent start cannot silently bypass it.
-    if (!cleanup) return
-    const attempt = Promise.resolve().then(cleanup)
-    let timedOut = false
-    let timer: ReturnType<typeof setTimeout> | undefined
-    try {
-      await Promise.race([
-        attempt,
-        new Promise<void>((resolve) => {
-          timer = setTimeout(() => {
-            timedOut = true
-            resolve()
-          }, this.cleanupTimeoutMs)
-        }),
-      ])
-    } finally {
-      if (timer !== undefined) clearTimeout(timer)
-    }
-    if (timedOut) void attempt.catch(() => undefined)
+    await cleanup?.()
     this.cleanup = undefined
   }
 }

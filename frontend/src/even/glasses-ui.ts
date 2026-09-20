@@ -77,7 +77,7 @@ export function buildTranscriptPage(content: string, thinking = false): RebuildP
       containerID: 1, containerName: "live-transcript",
       content: buildTranscriptContent(content), isEventCapture: 1,
     }),
-    status(thinking ? "Thinking" : "Listening", "transcript-status"),
+    status(thinking ? "Thinking" : "Listening", "speech-status"),
   ])
 }
 

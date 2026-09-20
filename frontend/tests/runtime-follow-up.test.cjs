@@ -7,7 +7,7 @@ const ts = require('typescript')
 
 // Exercise the real runtime, lifecycle and audio controller with fake SDK/socket
 // boundaries. No hardware microphone, network requests, or model calls.
-async function harness(t, serverListeningEnabled = false, reconnect = false) {
+async function harness(t, serverListeningEnabled = false, reconnect = false, realDisplay = false) {
   let now = 0
   let eventHandler
   let allowAudio = true
@@ -20,7 +20,10 @@ async function harness(t, serverListeningEnabled = false, reconnect = false) {
   const pages = []
   const statuses = []
   const upgrades = []
-  let nextRenderGate
+  const nativeCalls = []
+  let nativePage
+  let failedNativeRenders = 0
+  let nativePageCreated = false
   let connectionGate
   const sockets = []
   function newSocket() {
@@ -55,13 +58,7 @@ async function harness(t, serverListeningEnabled = false, reconnect = false) {
     },
     './glasses-page-host': {
       getEvenBridge: async () => bridge, resumeGlassesPage: () => {},
-      resetGlassesPageHost: () => {},
-      renderGlassesPage: async page => {
-        const gate = nextRenderGate
-        nextRenderGate = undefined
-        if (gate) await gate.promise
-        pages.push(page)
-      },
+      renderGlassesPage: async page => pages.push(page),
       upgradeTranscriptText: async text => { upgrades.push(text); pages.at(-1).transcript = text; return true },
       upgradeMessageStatus: async footer => { upgrades.push(footer); pages.at(-1).footer = footer; return true },
     },
@@ -80,6 +77,46 @@ async function harness(t, serverListeningEnabled = false, reconnect = false) {
       if (connectionGate) await connectionGate
       return opened
     } },
+  }
+  if (realDisplay) {
+    const sdkContext = vm.createContext({ console, exports: {}, setTimeout, clearTimeout })
+    vm.runInContext(fs.readFileSync(require.resolve('@evenrealities/even_hub_sdk'), 'utf8'), sdkContext)
+    sdkContext.window = {}
+    const sdk = sdkContext.exports
+    const nativeBridge = Object.create(sdk.EvenAppBridge.prototype)
+    nativeBridge.callEvenApp = async (method, params) => {
+      nativeCalls.push(method)
+      // The native protocol limits names to 16 characters; SDK 0.0.12 does
+      // not validate this before forwarding the page to the host.
+      if (params?.textObject?.some(item => item.containerName.length > 16)) {
+        return method === 'createStartUpPageContainer' ? sdk.StartUpPageCreateResult.invalid : false
+      }
+      if (method === 'createStartUpPageContainer') {
+        if (nativePageCreated) return sdk.StartUpPageCreateResult.invalid
+        nativePageCreated = true
+        nativePage = structuredClone(params)
+        return sdk.StartUpPageCreateResult.success
+      }
+      if (method === 'rebuildPageContainer' || method === 'textContainerUpgrade') {
+        if (failedNativeRenders > 0) { failedNativeRenders -= 1; return false }
+        if (method === 'rebuildPageContainer') nativePage = structuredClone(params)
+        else {
+          const target = nativePage.textObject.find(item => item.containerID === params.containerID && item.containerName === params.containerName)
+          if (!target) return false
+          target.content = params.content
+        }
+        return true
+      }
+      throw new Error('Unexpected native method: ' + method)
+    }
+    Object.assign(bridge, {
+      createStartUpPageContainer: nativeBridge.createStartUpPageContainer.bind(nativeBridge),
+      rebuildPageContainer: nativeBridge.rebuildPageContainer.bind(nativeBridge),
+      textContainerUpgrade: nativeBridge.textContainerUpgrade.bind(nativeBridge),
+    })
+    mocks['@evenrealities/even_hub_sdk'] = { ...sdk, waitForEvenAppBridge: async () => bridge }
+    delete mocks['./glasses-page-host']
+    delete mocks['./glasses-ui']
   }
   const context = vm.createContext({
     console, AbortController, Uint8Array, WebSocket: { OPEN: 1 },
@@ -132,19 +169,50 @@ async function harness(t, serverListeningEnabled = false, reconnect = false) {
     await message('assistant_response', { text: 'It is noon.' })
   }
   return { audio, controls, pages, statuses, upgrades, pcmFrames, sockets,
+    nativeCalls, nativeText: () => nativePage?.textObject.map(item => item.content).join('\n'),
+    failNativeRender: (count = 1) => { failedNativeRenders = count },
     delayConnection: () => { let release; connectionGate = new Promise(resolve => { release = resolve }); return release },
     pcm: async pcm => { eventHandler?.({ audioEvent: { audioPcm: pcm } }); await flush() }, message, click, sleep, scroll, reply, advance, dispose,
     disconnect: async () => { socket.close(); await flush() },
     denyAudio: () => { allowAudio = false },
     delayAudio: () => { let release; audioGate = new Promise(resolve => { release = resolve }); return release },
-    delayNextRender: () => {
-      let release
-      const promise = new Promise(resolve => { release = resolve })
-      nextRenderGate = { promise, release }
-      return release
-    },
   }
 }
+
+test('real display host delivers a Moonshine conversation reply through the installed SDK', async t => {
+  const h = await harness(t, true, false, true)
+  await h.message('conversation_started')
+  await h.message('user_transcript', { text: 'Hey glasses, what time is it?' })
+  await h.message('assistant_thinking')
+  await h.message('assistant_response', { text: 'It is noon.' })
+  assert.match(h.nativeText(), /It is noon\./)
+  assert.equal(h.audio.filter(Boolean).length, 1)
+  assert.equal(h.audio.includes(false), false)
+})
+
+test('a rejected transcript write cannot consume the following assistant response', async t => {
+  const h = await harness(t, true, false, true)
+  await h.message('conversation_started')
+  h.failNativeRender()
+  await h.message('user_transcript', { text: 'Hey glasses, what time is it?' })
+  await h.message('assistant_response', { text: 'It is noon.' })
+  await h.advance(5_000)
+  assert.match(h.nativeText(), /It is noon\./)
+  assert.equal(h.nativeCalls.filter(method => method === 'createStartUpPageContainer').length, 1)
+})
+
+
+
+
+test('native rejection reports the failure without retries or startup recreation', async t => {
+  const h = await harness(t, true, false, true)
+  const before = h.nativeCalls.length
+  h.failNativeRender(100)
+  await h.message('assistant_response', { text: 'It is noon.' })
+  await h.advance(30_000)
+  assert.equal(h.nativeCalls.length - before, 1)
+  assert.equal(h.statuses.at(-1), 'Glasses display update rejected')
+})
 
 test('a reply restarts the mic after stop acknowledgement and listens for exactly 30 seconds', async t => {
   const h = await harness(t)
@@ -383,6 +451,7 @@ test('real layouts keep body and status disjoint and preserve all list content',
   for (const page of pages) {
     assert.equal(page.textObject.filter(box => box.isEventCapture === 1).length, 1)
     for (const box of page.textObject) {
+      assert.ok(box.containerName.length <= 16, box.containerName)
       assert.equal(box.borderWidth, 0)
       assert.equal(box.paddingLength, 0)
       assert.ok(box.xPosition >= 0 && box.xPosition + box.width <= 576)
@@ -493,21 +562,6 @@ test('streaming conversation accepts a keyword trigger and consecutive replies w
   assert.equal(h.controls.includes('conversation_stop'), false)
   await h.message('conversation_idle')
   assert.equal(h.pages.at(-1).footer, 'Tap to talk')
-})
-
-test('a hung transcript render cannot block the assistant response forever', async t => {
-  const h = await harness(t, true)
-  await h.message('conversation_started')
-  const release = h.delayNextRender()
-  await h.message('user_transcript', { text: 'Hey glasses, what time is it?' })
-  await h.advance(250)
-  await h.message('assistant_thinking')
-  await h.message('assistant_response', { text: 'It is noon.' })
-  await h.advance(5_000)
-  const recovered = h.pages.some(page => page.message?.body === 'It is noon.')
-  release()
-  await h.advance(0)
-  assert.equal(recovered, true)
 })
 
 
