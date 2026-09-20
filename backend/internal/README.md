@@ -29,16 +29,15 @@ and tool implementations with the feature whose state they own.
 
 `assistant/openai` is organized by model responsibility:
 
-- root: final response composition, conversation compaction, tonality, and the
-  legacy OpenAI router retained for comparison evaluations;
+- root: final response composition, conversation compaction, and tonality;
 - `extraction`: finalized-utterance to memory-candidate extraction;
 - `responses`: shared Responses API transport and output parsing;
 - `routing`: retrieval enrichment after Jev has fixed the action;
 - `tooling`: argument preparation after Jev has fixed the tool selection.
 
-Files beginning with `eval_` are opt-in or synthetic behavior evaluations, not
-production wiring. `compatibility.go` only keeps those evaluations compatible
-with the focused packages; `main.go` imports the focused packages directly.
+The two files beginning with `eval_jev_` are opt-in end-to-end checks for the
+current routing and tool workflow. Production wiring imports each focused
+package directly.
 
 The larger cohesive packages use filename families instead of nested packages:
 
