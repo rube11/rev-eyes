@@ -25,6 +25,9 @@ Manual Deepgram mode remains available when the server-listening flag is off.
   remaining PCM and asks Deepgram to finalize the utterance while keeping the
   connection open. Tapping a displayed answer dismisses the conversation.
 - The same Deepgram connection handles subsequent replies without a keyword.
+  A pause ends the turn through either Deepgram's acoustic endpoint or its
+  finalized-word gap event, so steady ambient noise cannot leave the glasses
+  stuck on the listening screen.
   The server closes it after 30 seconds without transcript activity or an
   assistant completion; an in-flight assistant turn has its own 60-second limit.
   Phone timers do not own this deadline. Idle returns to native keyword listening.

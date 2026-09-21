@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	websocket "github.com/deepgram/deepgram-go-sdk/v3/pkg/api/listen/v1/websocket"
 	msginterfaces "github.com/deepgram/deepgram-go-sdk/v3/pkg/api/listen/v1/websocket/interfaces"
 )
 
@@ -24,6 +25,71 @@ func TestPersistentDeepgramEndpointsKeepAcceptingUtterances(t *testing.T) {
 			t.Fatal("persistent utterance requested connection closure")
 		default:
 		}
+	}
+}
+
+func TestPersistentDeepgramCompletesOnUtteranceEndWhenNoiseBlocksSpeechFinal(t *testing.T) {
+	completed := make(chan string, 1)
+	handler := newDeepgramHandler(context.Background(), completed, func(string) error { return nil }, true)
+	if err := handler.Message(deepgramMessage("hey glasses what is next", true, false, false)); err != nil {
+		t.Fatal(err)
+	}
+	assertNoCompletedUtterance(t, completed)
+	if err := handler.UtteranceEnd(&msginterfaces.UtteranceEndResponse{LastWordEnd: 2.4}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case utterance := <-completed:
+		if utterance != "hey glasses what is next" {
+			t.Fatalf("completed utterance = %q", utterance)
+		}
+	default:
+		t.Fatal("UtteranceEnd did not complete the paused utterance")
+	}
+}
+
+func TestDeepgramOptionsEnableBothEndOfTurnSignals(t *testing.T) {
+	options := liveTranscriptionOptions()
+	if options.Endpointing != speechEndpointSilence {
+		t.Fatalf("Endpointing = %q", options.Endpointing)
+	}
+	if options.UtteranceEndMs != utteranceEndSilence || !options.VadEvents || !options.InterimResults {
+		t.Fatalf("UtteranceEnd options = %+v", options)
+	}
+}
+
+func TestDeepgramIgnoresStaleUtteranceEnd(t *testing.T) {
+	completed := make(chan string, 1)
+	handler := newDeepgramHandler(context.Background(), completed, func(string) error { return nil }, true)
+	if err := handler.Message(deepgramMessage("hey glasses", true, false, false)); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.UtteranceEnd(&msginterfaces.UtteranceEndResponse{LastWordEnd: -1}); err != nil {
+		t.Fatal(err)
+	}
+	assertNoCompletedUtterance(t, completed)
+	if got := handler.Transcript(); got != "hey glasses" {
+		t.Fatalf("transcript = %q", got)
+	}
+}
+
+func TestDeepgramRouterDispatchesRawUtteranceEndToHandler(t *testing.T) {
+	completed := make(chan string, 1)
+	handler := newDeepgramHandler(context.Background(), completed, func(string) error { return nil }, true)
+	if err := handler.Message(deepgramMessage("hey glasses", true, false, false)); err != nil {
+		t.Fatal(err)
+	}
+	router := websocket.NewCallbackRouter(handler)
+	if err := router.Message([]byte(`{"type":"UtteranceEnd","channel":[0,1],"last_word_end":2.4}`)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case utterance := <-completed:
+		if utterance != "hey glasses" {
+			t.Fatalf("completed utterance = %q", utterance)
+		}
+	default:
+		t.Fatal("raw UtteranceEnd event was not dispatched")
 	}
 }
 

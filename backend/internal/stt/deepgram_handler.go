@@ -106,6 +106,29 @@ func (h *deepgramHandler) Message(message *msginterfaces.MessageResponse) error 
 	return nil
 }
 
+// UtteranceEnd is Deepgram's transcript-gap fallback for cases where ambient
+// noise prevents the acoustic endpoint from producing speech_final.
+func (h *deepgramHandler) UtteranceEnd(event *msginterfaces.UtteranceEndResponse) error {
+	if event == nil || event.LastWordEnd < 0 {
+		return nil
+	}
+	h.mu.Lock()
+	utterance := h.transcript
+	h.transcript = ""
+	if utterance != "" {
+		h.lastUpdate = ""
+	}
+	h.mu.Unlock()
+	if utterance == "" {
+		return nil
+	}
+	select {
+	case h.completed <- utterance:
+	case <-h.ctx.Done():
+	}
+	return nil
+}
+
 func (h *deepgramHandler) Endpointed() <-chan struct{} {
 	return h.endpointed
 }

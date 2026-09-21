@@ -16,6 +16,7 @@ var initDeepgram sync.Once
 
 const finalizeTimeout = 3 * time.Second
 const speechEndpointSilence = "800"
+const utteranceEndSilence = "1200"
 
 type deepgramTranscriber struct {
 	deepgramKey string
@@ -62,17 +63,7 @@ func (dg *deepgramTranscriber) transcribe(ctx context.Context, audio <-chan Audi
 	clientOptions := &interfaces.ClientOptions{
 		EnableKeepAlive: true,
 	}
-	transcriptionOptions := &interfaces.LiveTranscriptionOptions{
-		Model:          "nova-3",
-		Language:       "en-US",
-		Encoding:       "linear16",
-		Channels:       1,
-		SampleRate:     16000,
-		Punctuate:      true,
-		SmartFormat:    true,
-		InterimResults: true,
-		Endpointing:    speechEndpointSilence,
-	}
+	transcriptionOptions := liveTranscriptionOptions()
 
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -132,6 +123,25 @@ func (dg *deepgramTranscriber) transcribe(ctx context.Context, audio <-chan Audi
 				return fmt.Errorf("write audio to Deepgram: %w", err)
 			}
 		}
+	}
+}
+
+func liveTranscriptionOptions() *interfaces.LiveTranscriptionOptions {
+	return &interfaces.LiveTranscriptionOptions{
+		Model:          "nova-3",
+		Language:       "en-US",
+		Encoding:       "linear16",
+		Channels:       1,
+		SampleRate:     16000,
+		Punctuate:      true,
+		SmartFormat:    true,
+		InterimResults: true,
+		Endpointing:    speechEndpointSilence,
+		// Endpointing relies on acoustic silence and can remain open in ambient
+		// noise. UtteranceEnd uses finalized word gaps as the second end-of-turn
+		// signal, which is better suited to a wearable microphone.
+		UtteranceEndMs: utteranceEndSilence,
+		VadEvents:      true,
 	}
 }
 
