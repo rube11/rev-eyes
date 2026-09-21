@@ -141,7 +141,6 @@ func liveTranscriptionOptions() *interfaces.LiveTranscriptionOptions {
 		// noise. UtteranceEnd uses finalized word gaps as the second end-of-turn
 		// signal, which is better suited to a wearable microphone.
 		UtteranceEndMs: utteranceEndSilence,
-		VadEvents:      true,
 	}
 }
 

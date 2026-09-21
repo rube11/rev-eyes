@@ -12,8 +12,12 @@ import (
 
 func TestPersistentDeepgramEndpointsKeepAcceptingUtterances(t *testing.T) {
 	completed := make(chan string, 2)
-	handler := newDeepgramHandler(context.Background(), completed, func(string) error { return nil }, true)
-	for _, text := range []string{"glasses hello", "and tomorrow"} {
+	var updates []string
+	handler := newDeepgramHandler(context.Background(), completed, func(text string) error {
+		updates = append(updates, text)
+		return nil
+	}, true)
+	for _, text := range []string{"glasses hello", "glasses hello"} {
 		if err := handler.Message(deepgramMessage(text, true, true, false)); err != nil {
 			t.Fatal(err)
 		}
@@ -25,6 +29,9 @@ func TestPersistentDeepgramEndpointsKeepAcceptingUtterances(t *testing.T) {
 			t.Fatal("persistent utterance requested connection closure")
 		default:
 		}
+	}
+	if want := []string{"glasses hello", "glasses hello"}; !reflect.DeepEqual(updates, want) {
+		t.Fatalf("updates = %#v, want %#v", updates, want)
 	}
 }
 
@@ -53,8 +60,11 @@ func TestDeepgramOptionsEnableBothEndOfTurnSignals(t *testing.T) {
 	if options.Endpointing != speechEndpointSilence {
 		t.Fatalf("Endpointing = %q", options.Endpointing)
 	}
-	if options.UtteranceEndMs != utteranceEndSilence || !options.VadEvents || !options.InterimResults {
+	if options.UtteranceEndMs != utteranceEndSilence || !options.InterimResults {
 		t.Fatalf("UtteranceEnd options = %+v", options)
+	}
+	if options.VadEvents {
+		t.Fatal("unused VAD events should stay disabled")
 	}
 }
 

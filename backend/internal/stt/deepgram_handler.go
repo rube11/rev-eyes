@@ -68,19 +68,15 @@ func (h *deepgramHandler) Message(message *msginterfaces.MessageResponse) error 
 		update = strings.TrimSpace(h.transcript + " " + text)
 	}
 
-	// SpeechFinal is Deepgram's endpoint after the configured silence window.
-	// Explicit finalization remains as the manual-stop and disconnect fallback.
-	if (message.SpeechFinal || message.FromFinalize) && h.transcript != "" {
-		utterance = h.transcript
-		h.transcript = ""
-	}
 	if update == h.lastUpdate {
 		update = ""
 	} else if update != "" {
 		h.lastUpdate = update
 	}
-	if utterance != "" {
-		h.lastUpdate = ""
+	// SpeechFinal is Deepgram's endpoint after the configured silence window.
+	// Explicit finalization remains as the manual-stop and disconnect fallback.
+	if (message.SpeechFinal || message.FromFinalize) && h.transcript != "" {
+		utterance = h.takeTranscriptLocked()
 	}
 	h.mu.Unlock()
 
@@ -89,12 +85,7 @@ func (h *deepgramHandler) Message(message *msginterfaces.MessageResponse) error 
 			return err
 		}
 	}
-	if utterance != "" {
-		select {
-		case h.completed <- utterance:
-		case <-h.ctx.Done():
-		}
-	}
+	h.complete(utterance)
 	if !h.persistent && message.SpeechFinal && utterance != "" {
 		h.endpoint.Do(func() { close(h.endpointed) })
 	}
@@ -113,20 +104,31 @@ func (h *deepgramHandler) UtteranceEnd(event *msginterfaces.UtteranceEndResponse
 		return nil
 	}
 	h.mu.Lock()
+	utterance := h.takeTranscriptLocked()
+	h.mu.Unlock()
+	h.complete(utterance)
+	return nil
+}
+
+// takeTranscriptLocked starts a fresh utterance after any end-of-turn signal.
+// The caller must hold h.mu.
+func (h *deepgramHandler) takeTranscriptLocked() string {
 	utterance := h.transcript
 	h.transcript = ""
 	if utterance != "" {
 		h.lastUpdate = ""
 	}
-	h.mu.Unlock()
+	return utterance
+}
+
+func (h *deepgramHandler) complete(utterance string) {
 	if utterance == "" {
-		return nil
+		return
 	}
 	select {
 	case h.completed <- utterance:
 	case <-h.ctx.Done():
 	}
-	return nil
 }
 
 func (h *deepgramHandler) Endpointed() <-chan struct{} {
