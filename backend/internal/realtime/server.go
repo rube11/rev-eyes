@@ -12,6 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/rube11/rev-eyes/backend/internal/ambient"
+	"github.com/rube11/rev-eyes/backend/internal/speech"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
@@ -153,6 +154,7 @@ func (s *Server) serveConnection(
 	go s.runCandidateWorker(ctx, scope, conn, candidateJobs, candidateWorkerDone)
 
 	var ambientActive bool
+	var audioEncoding string
 	var ambientCancel context.CancelFunc
 	var ambientInputs chan ambient.Input
 	var audio chan stt.AudioInput
@@ -270,12 +272,18 @@ func (s *Server) serveConnection(
 					}
 					continue
 				}
+				pcm, role, frameErr := decodeAudioFrame(incoming.data, audioEncoding)
+				if frameErr != nil {
+					clear(incoming.data)
+					return frameErr
+				}
+				incoming.data = pcm
 				if ambientActive {
 					if len(incoming.data) > 32000 {
 						clear(incoming.data)
 						return errors.New("ambient audio frame exceeds one second")
 					}
-					if err := enqueueAmbient(ctx, ambientInputs, ambient.Input{PCM: incoming.data}); err != nil {
+					if err := enqueueAmbient(ctx, ambientInputs, ambient.Input{PCM: incoming.data, Role: role}); err != nil {
 						clear(incoming.data)
 						return err
 					}
@@ -287,7 +295,7 @@ func (s *Server) serveConnection(
 				}
 
 				select {
-				case audio <- stt.AudioInput{PCM: incoming.data}:
+				case audio <- stt.AudioInput{PCM: incoming.data, Speakers: []speech.Span{{End: int64(len(incoming.data) / 2), Role: role}}}:
 				case transcriptionErr := <-transcription:
 					if err := finishTranscription(transcriptionErr); err != nil {
 						return err
@@ -364,6 +372,7 @@ func (s *Server) serveConnection(
 				if transcribing {
 					continue
 				}
+				audioEncoding = message.Encoding
 				if audioMode == audioModeUnset {
 					audioMode = audioModeAmbient
 				}
@@ -425,6 +434,7 @@ func (s *Server) serveConnection(
 					continue
 				}
 				audioMode = audioModeLegacy
+				audioEncoding = message.Encoding
 				audio = make(chan stt.AudioInput, 100)
 				legacyCapturing = true
 				transcribing = true

@@ -114,6 +114,10 @@ func TestServerProcessesCandidateWithoutPublishingRoughTranscript(t *testing.T) 
 			scope tool.Scope,
 			utterance string,
 		) (UtteranceResult, error) {
+			if scope.Speech == nil || scope.Speech.PersonalMemory() {
+				t.Error("unattributed candidate treated as personal speech")
+			}
+			scope.Speech = nil
 			if scope != expectedScope {
 				t.Fatalf("scope = %+v", scope)
 			}

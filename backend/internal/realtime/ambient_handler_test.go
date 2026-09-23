@@ -16,7 +16,7 @@ import (
 func TestAmbientProtocolKeepsManualStopInLocalListener(t *testing.T) {
 	controlsSeen := make(chan string, 2)
 	listenerStopped := make(chan struct{})
-	s := NewServer(transcriberFunc(func(context.Context, <-chan stt.AudioInput, chan<- string, stt.TranscriptObserver) error {
+	s := NewServer(transcriberFunc(func(context.Context, <-chan stt.AudioInput, chan<- stt.Utterance, stt.TranscriptObserver) error {
 		t.Error("paid streaming invoked")
 		return nil
 	}), Handlers{
@@ -89,7 +89,7 @@ func TestAmbientProtocolKeepsManualStopInLocalListener(t *testing.T) {
 }
 func TestUnavailableAmbientDoesNotFallBackToPaidStreaming(t *testing.T) {
 	paid := make(chan struct{}, 1)
-	s := NewServer(transcriberFunc(func(context.Context, <-chan stt.AudioInput, chan<- string, stt.TranscriptObserver) error {
+	s := NewServer(transcriberFunc(func(context.Context, <-chan stt.AudioInput, chan<- stt.Utterance, stt.TranscriptObserver) error {
 		paid <- struct{}{}
 		return nil
 	}), Handlers{Authenticate: func(string) (tool.Scope, error) { return tool.Scope{UserID: "u", SessionID: "s"}, nil }})

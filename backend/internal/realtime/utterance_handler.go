@@ -25,7 +25,7 @@ func (s *Server) transcribeConnection(
 ) error {
 	transcriptionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	completed := make(chan string, completedUtteranceBuffer)
+	completed := make(chan stt.Utterance, completedUtteranceBuffer)
 	done := make(chan error, 1)
 
 	go func() {
@@ -52,11 +52,13 @@ func (s *Server) transcribeConnection(
 	}()
 
 	for utterance := range completed {
+		turnScope := scope
+		turnScope.Speech = &utterance
 		if err := s.handleCompletedUtterance(
 			transcriptionCtx,
-			scope,
+			turnScope,
 			writer,
-			utterance,
+			utterance.Text,
 		); err != nil {
 			return err
 		}
@@ -79,7 +81,7 @@ func (s *Server) handleCompletedUtterance(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if isRepeatRequest(utterance) {
+	if !scope.Speech.ContextOnly() && isRepeatRequest(utterance) {
 		return writer.WriteJSON(serverMessage{
 			Type: assistantRepeatMessageType,
 			ID:   delivery.messageID,
@@ -109,6 +111,10 @@ func (s *Server) handleCompletedUtterance(
 		if err := writer.WriteJSON(serverMessage{Type: assistantThinkingMessageType, ID: delivery.messageID}); err != nil {
 			return fmt.Errorf("write assistant thinking state: %w", err)
 		}
+	}
+	// Candidate clients have no labels, but are still audio, not intentional text.
+	if scope.Speech == nil {
+		scope.Speech = &stt.Utterance{Text: utterance}
 	}
 	result, err := s.handlers.Utterance(ctx, scope, utterance)
 	if len(result.WorkspaceResources) > 0 {

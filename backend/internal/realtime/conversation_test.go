@@ -7,20 +7,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rube11/rev-eyes/backend/internal/speech"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
 type conversationTranscriber struct {
 	calls   atomic.Int32
-	words   chan string
+	words   chan stt.Utterance
 	stopped chan struct{}
 }
 
-func (*conversationTranscriber) Transcribe(context.Context, <-chan stt.AudioInput, chan<- string, stt.TranscriptObserver) error {
+func (*conversationTranscriber) Transcribe(context.Context, <-chan stt.AudioInput, chan<- stt.Utterance, stt.TranscriptObserver) error {
 	return errors.New("opened per-turn transcription")
 }
-func (f *conversationTranscriber) TranscribeConversation(ctx context.Context, _ <-chan stt.AudioInput, completed chan<- string, observe stt.TranscriptObserver) error {
+func (f *conversationTranscriber) TranscribeConversation(ctx context.Context, _ <-chan stt.AudioInput, completed chan<- stt.Utterance, observe stt.TranscriptObserver) error {
 	f.calls.Add(1)
 	defer close(f.stopped)
 	for {
@@ -28,7 +29,7 @@ func (f *conversationTranscriber) TranscribeConversation(ctx context.Context, _ 
 		case <-ctx.Done():
 			return ctx.Err()
 		case text := <-f.words:
-			if err := observe(text); err != nil {
+			if err := observe(text.Text); err != nil {
 				return err
 			}
 			select {
@@ -42,10 +43,48 @@ func (f *conversationTranscriber) TranscribeConversation(ctx context.Context, _ 
 
 type conversationWriter struct{ messages chan serverMessage }
 
+func TestConversationKeepsAttributionAcrossSpeakerChanges(t *testing.T) {
+	fake := &conversationTranscriber{words: make(chan stt.Utterance, 4), stopped: make(chan struct{})}
+	turns := make(chan *speech.Utterance, 4)
+	s := NewServer(fake, Handlers{ConversationTranscriber: fake, Utterance: func(_ context.Context, scope tool.Scope, _ string) (UtteranceResult, error) {
+		turns <- scope.Speech
+		return UtteranceResult{}, nil
+	}})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- s.runConversation(ctx, tool.Scope{}, conversationWriter{messages: make(chan serverMessage, 30)}, nil, true)
+	}()
+	for _, u := range []stt.Utterance{
+		{Text: "glasses stranger", Segments: []speech.Segment{{Role: speech.Other, Text: "glasses stranger"}}},
+		{Text: "glasses wearer", Segments: []speech.Segment{{Role: speech.Self, Text: "glasses wearer"}}},
+		{Text: "yes confirm", Segments: []speech.Segment{{Role: speech.Other, Text: "yes confirm"}}},
+		{Text: "my next question", Segments: []speech.Segment{{Role: speech.Self, Text: "my next question"}}},
+	} {
+		fake.words <- u
+	}
+	for i, want := range []speech.Role{speech.Self, speech.Other, speech.Self} {
+		select {
+		case got := <-turns:
+			if got == nil || len(got.Segments) != 1 || got.Segments[0].Role != want {
+				t.Fatalf("turn %d: %+v", i, got)
+			}
+		case <-ctx.Done():
+			t.Fatal("speaker change interrupted conversation")
+		}
+	}
+	if fake.calls.Load() != 1 {
+		t.Fatal("speaker change reopened transcription")
+	}
+	cancel()
+	<-done
+}
+
 func (w conversationWriter) WriteJSON(v any) error { w.messages <- v.(serverMessage); return nil }
 
 func TestConversationReusesConnectionAcrossTurnsAndExpiresAfterResponse(t *testing.T) {
-	fake := &conversationTranscriber{words: make(chan string, 4), stopped: make(chan struct{})}
+	fake := &conversationTranscriber{words: make(chan stt.Utterance, 4), stopped: make(chan struct{})}
 	turns := make(chan string, 4)
 	release := make(chan struct{})
 	s := NewServer(fake, Handlers{ConversationTranscriber: fake, Utterance: func(ctx context.Context, _ tool.Scope, text string) (UtteranceResult, error) {
@@ -65,8 +104,8 @@ func TestConversationReusesConnectionAcrossTurnsAndExpiresAfterResponse(t *testi
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- s.runConversation(ctx, tool.Scope{UserID: "u", SessionID: "s"}, writer, nil, true) }()
-	fake.words <- "background television"
-	fake.words <- "glasses hello"
+	fake.words <- stt.Utterance{Text: "background television"}
+	fake.words <- stt.Utterance{Text: "glasses hello"}
 	select {
 	case text := <-turns:
 		if text != "glasses hello" {
@@ -82,7 +121,7 @@ func TestConversationReusesConnectionAcrossTurnsAndExpiresAfterResponse(t *testi
 	case <-time.After(2 * s.conversationIdle):
 	}
 	close(release)
-	fake.words <- "and tomorrow?"
+	fake.words <- stt.Utterance{Text: "and tomorrow?"}
 	select {
 	case text := <-turns:
 		if text != "and tomorrow?" {
@@ -123,7 +162,7 @@ func TestConversationReusesConnectionAcrossTurnsAndExpiresAfterResponse(t *testi
 }
 
 func TestConversationCancellationJoinsStreamAndReleasesAdmission(t *testing.T) {
-	fake := &conversationTranscriber{words: make(chan string), stopped: make(chan struct{})}
+	fake := &conversationTranscriber{words: make(chan stt.Utterance), stopped: make(chan struct{})}
 	s := NewServer(fake, Handlers{ConversationTranscriber: fake, CandidateAudio: func(context.Context, []byte, stt.AudioFormat) (string, error) { return "", nil }})
 	writer := conversationWriter{messages: make(chan serverMessage, 4)}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -157,7 +196,7 @@ func TestConversationCancellationJoinsStreamAndReleasesAdmission(t *testing.T) {
 func TestConversationWakeAuthorizationAndIdleDelivery(t *testing.T) {
 	for _, automatic := range []bool{true, false} {
 		t.Run(map[bool]string{true: "automatic", false: "manual"}[automatic], func(t *testing.T) {
-			fake := &conversationTranscriber{words: make(chan string, 1), stopped: make(chan struct{})}
+			fake := &conversationTranscriber{words: make(chan stt.Utterance, 1), stopped: make(chan struct{})}
 			turns := make(chan string, 1)
 			s := NewServer(fake, Handlers{ConversationTranscriber: fake, Utterance: func(_ context.Context, _ tool.Scope, text string) (UtteranceResult, error) {
 				turns <- text
@@ -169,7 +208,7 @@ func TestConversationWakeAuthorizationAndIdleDelivery(t *testing.T) {
 			defer cancel()
 			done := make(chan error, 1)
 			go func() { done <- s.runConversation(ctx, tool.Scope{}, writer, nil, automatic) }()
-			fake.words <- "The weather is nice."
+			fake.words <- stt.Utterance{Text: "The weather is nice."}
 			if err := <-done; err != nil {
 				t.Fatal(err)
 			}

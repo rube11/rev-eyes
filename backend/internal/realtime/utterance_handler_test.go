@@ -60,10 +60,10 @@ func TestTranscribeConnectionCancelsStreamWhenMessageDeliveryFails(t *testing.T)
 	server := NewServer(transcriberFunc(func(
 		ctx context.Context,
 		_ <-chan stt.AudioInput,
-		completed chan<- string,
+		completed chan<- stt.Utterance,
 		_ stt.TranscriptObserver,
 	) error {
-		completed <- "hello"
+		completed <- stt.Utterance{Text: "hello"}
 		<-ctx.Done()
 		close(streamCanceled)
 		return ctx.Err()

@@ -34,17 +34,17 @@ func NewDeepgramTranscriber(apiKey string) (*deepgramTranscriber, error) {
 func (dg *deepgramTranscriber) Transcribe(
 	ctx context.Context,
 	audio <-chan AudioInput,
-	completed chan<- string,
+	completed chan<- Utterance,
 	observe TranscriptObserver,
 ) error {
 	return dg.transcribe(ctx, audio, completed, observe, false)
 }
 
-func (dg *deepgramTranscriber) TranscribeConversation(ctx context.Context, audio <-chan AudioInput, completed chan<- string, observe TranscriptObserver) error {
+func (dg *deepgramTranscriber) TranscribeConversation(ctx context.Context, audio <-chan AudioInput, completed chan<- Utterance, observe TranscriptObserver) error {
 	return dg.transcribe(ctx, audio, completed, observe, true)
 }
 
-func (dg *deepgramTranscriber) transcribe(ctx context.Context, audio <-chan AudioInput, completed chan<- string, observe TranscriptObserver, persistent bool) error {
+func (dg *deepgramTranscriber) transcribe(ctx context.Context, audio <-chan AudioInput, completed chan<- Utterance, observe TranscriptObserver, persistent bool) error {
 	if dg.deepgramKey == "" {
 		return errors.New("deepgram API key is required")
 	}
@@ -115,6 +115,7 @@ func (dg *deepgramTranscriber) transcribe(ctx context.Context, audio <-chan Audi
 				continue
 			}
 
+			handler.recordAudio(input)
 			_, err := dgClient.Write(chunk)
 			if persistent {
 				clear(chunk)

@@ -1,6 +1,11 @@
 package stt
 
-import "context"
+import (
+	"context"
+	"github.com/rube11/rev-eyes/backend/internal/speech"
+)
+
+type Utterance = speech.Utterance
 
 type TranscriptObserver func(text string) error
 
@@ -8,12 +13,13 @@ type TranscriptObserver func(text string) error
 // The producer transfers ownership of PCM to the transcription worker.
 type AudioInput struct {
 	PCM      []byte
+	Speakers []speech.Span
 	Finalize bool
 }
 
 // ConversationTranscriber keeps one connection across utterance endpoints.
 type ConversationTranscriber interface {
-	TranscribeConversation(context.Context, <-chan AudioInput, chan<- string, TranscriptObserver) error
+	TranscribeConversation(context.Context, <-chan AudioInput, chan<- Utterance, TranscriptObserver) error
 }
 
 type Transcriber interface {
@@ -23,7 +29,7 @@ type Transcriber interface {
 	Transcribe(
 		ctx context.Context,
 		audio <-chan AudioInput,
-		completed chan<- string,
+		completed chan<- Utterance,
 		observe TranscriptObserver,
 	) error
 }

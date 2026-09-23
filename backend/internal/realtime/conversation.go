@@ -47,7 +47,7 @@ func (s *Server) runConversation(ctx context.Context, scope tool.Scope, writer j
 		}
 	}
 	touch()
-	completed := make(chan string, completedUtteranceBuffer)
+	completed := make(chan stt.Utterance, completedUtteranceBuffer)
 	sttDone := make(chan error, 1)
 	workerDone := make(chan error, 1)
 	go func() {
@@ -69,7 +69,7 @@ func (s *Server) runConversation(ctx context.Context, scope tool.Scope, writer j
 				return
 			}
 			if !authorized {
-				if _, matched := candidate.MatchWakePhrase(text); !matched {
+				if _, matched := candidate.MatchWakePhrase(text.Text); !matched || text.ContextOnly() {
 					continue
 				}
 				authorized = true
@@ -77,7 +77,9 @@ func (s *Server) runConversation(ctx context.Context, scope tool.Scope, writer j
 			busy.Store(true)
 			touch()
 			turnCtx, stop := context.WithTimeout(streamCtx, defaultCandidateProcessingTimeout)
-			err := s.handleCompletedUtterance(turnCtx, scope, writer, text)
+			turnScope := scope
+			turnScope.Speech = &text
+			err := s.handleCompletedUtterance(turnCtx, turnScope, writer, text.Text)
 			stop()
 			touch()
 			busy.Store(false)

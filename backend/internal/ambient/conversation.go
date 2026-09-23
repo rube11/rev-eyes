@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rube11/rev-eyes/backend/internal/candidate"
+	"github.com/rube11/rev-eyes/backend/internal/speech"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
 )
 
@@ -39,6 +40,7 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 	}
 	defer stream.Close()
 	ring := make([]byte, retention*2)
+	roles := make([]speech.Role, retention)
 	defer clear(ring)
 	block := make([]float32, 0, step)
 	defer clear(block[:cap(block)])
@@ -63,14 +65,22 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 		floor = end
 		block = block[:0]
 		clear(ring)
+		clear(roles)
 		return stream.Reset()
 	}
-	snapshot := func(start int64) []byte {
+	snapshot := func(start int64) stt.AudioInput {
 		pcm := make([]byte, (end-start)*2)
+		var spans []speech.Span
 		for i := start; i < end; i++ {
 			copy(pcm[(i-start)*2:], ring[(i%retention)*2:(i%retention)*2+2])
+			role := roles[i%retention]
+			if len(spans) == 0 || spans[len(spans)-1].Role != role {
+				spans = append(spans, speech.Span{Start: i - start, End: i - start + 1, Role: role})
+			} else {
+				spans[len(spans)-1].End++
+			}
 		}
-		return pcm
+		return stt.AudioInput{PCM: pcm, Speakers: spans}
 	}
 	start := func(offset int64, automatic bool) error {
 		conversationCtx, cancel := context.WithCancel(ctx)
@@ -79,7 +89,7 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 			finished <- converse(conversationCtx, audio, automatic)
 		}(active.audio)
 		if offset < end {
-			return active.send(ctx, stt.AudioInput{PCM: snapshot(offset)})
+			return active.send(ctx, snapshot(offset))
 		}
 		return nil
 	}
@@ -113,7 +123,7 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 				case "conversation_finalize":
 					if active != nil {
 						if len(block) > 0 {
-							if err := active.send(ctx, stt.AudioInput{PCM: snapshot(end - int64(len(block)))}); err != nil {
+							if err := active.send(ctx, snapshot(end-int64(len(block)))); err != nil {
 								return err
 							}
 							clear(block)
@@ -144,13 +154,14 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 					return err
 				}
 				copy(ring[(end%retention)*2:], event.PCM[i:i+2])
+				roles[end%retention] = event.Role
 				end++
 				block = append(block, float32(int16(binary.LittleEndian.Uint16(event.PCM[i:])))/32768)
 				if len(block) != step {
 					continue
 				}
 				if active != nil {
-					err = active.send(ctx, stt.AudioInput{PCM: snapshot(end - step)})
+					err = active.send(ctx, snapshot(end-step))
 				} else {
 					err = stream.Add(block)
 					if err == nil {
@@ -161,6 +172,23 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 								continue
 							}
 							if _, matched := candidate.MatchWakePhrase(line.Text); matched {
+								// A clearly other-only rough line cannot wake the assistant.
+								// Keep all PCM in the buffer for later conversation context.
+								lineStart := max(end-retention, base+int64(line.Start*SampleRate))
+								lineEnd := end
+								if line.Duration > 0 && !math.IsInf(line.Duration, 0) {
+									lineEnd = min(end, lineStart+int64(line.Duration*SampleRate))
+								}
+								otherOnly := lineStart < lineEnd
+								for i := max(int64(0), lineStart); i < lineEnd; i++ {
+									if roles[i%retention] != speech.Other {
+										otherOnly = false
+										break
+									}
+								}
+								if otherOnly {
+									continue
+								}
 								offset := max(floor, max(end-retention, base+int64(line.Start*SampleRate)-preRoll))
 								if offset > end {
 									continue

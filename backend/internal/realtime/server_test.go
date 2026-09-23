@@ -20,7 +20,7 @@ type echoTranscriber struct{}
 func (echoTranscriber) Transcribe(
 	ctx context.Context,
 	audio <-chan stt.AudioInput,
-	completed chan<- string,
+	completed chan<- stt.Utterance,
 	observe stt.TranscriptObserver,
 ) error {
 	for {
@@ -35,7 +35,7 @@ func (echoTranscriber) Transcribe(
 				return err
 			}
 			select {
-			case completed <- string(chunk.PCM):
+			case completed <- stt.Utterance{Text: string(chunk.PCM)}:
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -222,7 +222,12 @@ func TestServerExchangesScopedLocationAndAssistantMessages(t *testing.T) {
 		location.update.AccuracyMeters != 8 {
 		t.Fatalf("location = %+v", location)
 	}
-	if scope := receive(t, utteranceScopes); scope != expectedScope {
+	scope := receive(t, utteranceScopes)
+	if scope.Speech == nil || scope.Speech.Text != "where am I" {
+		t.Fatalf("missing speech attribution: %+v", scope)
+	}
+	scope.Speech = nil
+	if scope != expectedScope {
 		t.Fatalf("utterance scope = %+v, want %+v", scope, expectedScope)
 	}
 	if err := conn.WriteJSON(map[string]string{"type": listeningStopMessageType}); err != nil {
@@ -414,7 +419,7 @@ func TestServerControlsTranscriptionLifecycle(t *testing.T) {
 	server := NewServer(transcriberFunc(func(
 		ctx context.Context,
 		audio <-chan stt.AudioInput,
-		completed chan<- string,
+		completed chan<- stt.Utterance,
 		observe stt.TranscriptObserver,
 	) error {
 		started <- struct{}{}
@@ -496,7 +501,7 @@ func TestServerRestartsAfterSpeechEndpoint(t *testing.T) {
 	server := NewServer(transcriberFunc(func(
 		ctx context.Context,
 		audio <-chan stt.AudioInput,
-		completed chan<- string,
+		completed chan<- stt.Utterance,
 		observe stt.TranscriptObserver,
 	) error {
 		select {
@@ -504,7 +509,7 @@ func TestServerRestartsAfterSpeechEndpoint(t *testing.T) {
 			if err := observe(string(chunk.PCM)); err != nil {
 				return err
 			}
-			completed <- string(chunk.PCM)
+			completed <- stt.Utterance{Text: string(chunk.PCM)}
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -550,14 +555,14 @@ func (discardJSONWriter) WriteJSON(any) error {
 type transcriberFunc func(
 	context.Context,
 	<-chan stt.AudioInput,
-	chan<- string,
+	chan<- stt.Utterance,
 	stt.TranscriptObserver,
 ) error
 
 func (f transcriberFunc) Transcribe(
 	ctx context.Context,
 	audio <-chan stt.AudioInput,
-	completed chan<- string,
+	completed chan<- stt.Utterance,
 	observe stt.TranscriptObserver,
 ) error {
 	return f(ctx, audio, completed, observe)

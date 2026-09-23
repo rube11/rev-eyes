@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"github.com/rube11/rev-eyes/backend/internal/speech"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
 	"testing"
 	"time"
@@ -34,6 +35,23 @@ func (s *conversationStream) Reset() error {
 }
 func (*conversationStream) Close() {}
 
+func TestKnownOtherWakeDoesNotOpenConversationOrRestartMoonshine(t *testing.T) {
+	stream := &conversationStream{reset: make(chan struct{}, 1)}
+	l := Listener{Factory: conversationFactory{stream}}
+	input := make(chan Input, 20)
+	for i := 0; i < 20; i++ {
+		input <- Input{PCM: make([]byte, SampleRate*2), Role: speech.Other}
+	}
+	close(input)
+	err := l.RunStreaming(context.Background(), input, func(context.Context, <-chan stt.AudioInput, bool) error {
+		t.Error("other speaker opened Deepgram")
+		return nil
+	})
+	if err != nil || stream.samples != 20*SampleRate || len(stream.reset) != 0 {
+		t.Fatalf("err=%v samples=%d resets=%d", err, stream.samples, len(stream.reset))
+	}
+}
+
 func TestStreamingHandoffReplaysOnceAndContinuesPastClipLimit(t *testing.T) {
 	stream := &conversationStream{}
 	listener := Listener{Factory: conversationFactory{stream}}
@@ -53,6 +71,15 @@ func TestStreamingHandoffReplaysOnceAndContinuesPastClipLimit(t *testing.T) {
 				case <-ctx.Done():
 					return ctx.Err()
 				case pcm := <-audio:
+					for _, span := range pcm.Speakers {
+						for n := span.Start; n < span.End; n++ {
+							second := (9*SampleRate + len(all)/2 + int(n)) / SampleRate
+							if span.Role != speech.Role(second%3) {
+								t.Errorf("replayed speaker drift at %d", second)
+								break
+							}
+						}
+					}
 					all = append(all, pcm.PCM...)
 					clear(pcm.PCM)
 					if len(all) == 56*SampleRate*2 {
@@ -68,7 +95,7 @@ func TestStreamingHandoffReplaysOnceAndContinuesPastClipLimit(t *testing.T) {
 			binary.LittleEndian.PutUint16(pcm[i*2:], uint16((second*SampleRate+i)%30000))
 		}
 		select {
-		case input <- Input{PCM: pcm}:
+		case input <- Input{PCM: pcm, Role: speech.Role(second % 3)}:
 		case <-ctx.Done():
 			t.Fatal("listener stalled")
 		}

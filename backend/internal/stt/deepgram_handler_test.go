@@ -11,7 +11,7 @@ import (
 )
 
 func TestPersistentDeepgramEndpointsKeepAcceptingUtterances(t *testing.T) {
-	completed := make(chan string, 2)
+	completed := make(chan Utterance, 2)
 	var updates []string
 	handler := newDeepgramHandler(context.Background(), completed, func(text string) error {
 		updates = append(updates, text)
@@ -21,7 +21,7 @@ func TestPersistentDeepgramEndpointsKeepAcceptingUtterances(t *testing.T) {
 		if err := handler.Message(deepgramMessage(text, true, true, false)); err != nil {
 			t.Fatal(err)
 		}
-		if got := <-completed; got != text {
+		if got := <-completed; got.Text != text {
 			t.Fatalf("got %q, want %q", got, text)
 		}
 		select {
@@ -36,7 +36,7 @@ func TestPersistentDeepgramEndpointsKeepAcceptingUtterances(t *testing.T) {
 }
 
 func TestPersistentDeepgramCompletesOnUtteranceEndWhenNoiseBlocksSpeechFinal(t *testing.T) {
-	completed := make(chan string, 1)
+	completed := make(chan Utterance, 1)
 	handler := newDeepgramHandler(context.Background(), completed, func(string) error { return nil }, true)
 	if err := handler.Message(deepgramMessage("hey glasses what is next", true, false, false)); err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestPersistentDeepgramCompletesOnUtteranceEndWhenNoiseBlocksSpeechFinal(t *
 	}
 	select {
 	case utterance := <-completed:
-		if utterance != "hey glasses what is next" {
+		if utterance.Text != "hey glasses what is next" {
 			t.Fatalf("completed utterance = %q", utterance)
 		}
 	default:
@@ -69,7 +69,7 @@ func TestDeepgramOptionsEnableBothEndOfTurnSignals(t *testing.T) {
 }
 
 func TestDeepgramIgnoresStaleUtteranceEnd(t *testing.T) {
-	completed := make(chan string, 1)
+	completed := make(chan Utterance, 1)
 	handler := newDeepgramHandler(context.Background(), completed, func(string) error { return nil }, true)
 	if err := handler.Message(deepgramMessage("hey glasses", true, false, false)); err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestDeepgramIgnoresStaleUtteranceEnd(t *testing.T) {
 }
 
 func TestDeepgramRouterDispatchesRawUtteranceEndToHandler(t *testing.T) {
-	completed := make(chan string, 1)
+	completed := make(chan Utterance, 1)
 	handler := newDeepgramHandler(context.Background(), completed, func(string) error { return nil }, true)
 	if err := handler.Message(deepgramMessage("hey glasses", true, false, false)); err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func TestDeepgramRouterDispatchesRawUtteranceEndToHandler(t *testing.T) {
 	}
 	select {
 	case utterance := <-completed:
-		if utterance != "hey glasses" {
+		if utterance.Text != "hey glasses" {
 			t.Fatalf("completed utterance = %q", utterance)
 		}
 	default:
@@ -104,7 +104,7 @@ func TestDeepgramRouterDispatchesRawUtteranceEndToHandler(t *testing.T) {
 }
 
 func TestDeepgramHandlerCompletesAtSpeechEndpoint(t *testing.T) {
-	completed := make(chan string, 1)
+	completed := make(chan Utterance, 1)
 	var updates []string
 	handler := newDeepgramHandler(
 		context.Background(),
@@ -149,7 +149,7 @@ func TestDeepgramHandlerCompletesAtSpeechEndpoint(t *testing.T) {
 
 	select {
 	case utterance := <-completed:
-		if utterance != "remind me tomorrow at nine" {
+		if utterance.Text != "remind me tomorrow at nine" {
 			t.Fatalf("completed utterance = %q", utterance)
 		}
 	default:
@@ -166,7 +166,7 @@ func TestDeepgramHandlerCompletesAtSpeechEndpoint(t *testing.T) {
 }
 
 func TestDeepgramHandlerIncludesFinalSegmentFromExplicitFinalize(t *testing.T) {
-	completed := make(chan string, 1)
+	completed := make(chan Utterance, 1)
 	var updates []string
 	handler := newDeepgramHandler(
 		context.Background(),
@@ -191,7 +191,7 @@ func TestDeepgramHandlerIncludesFinalSegmentFromExplicitFinalize(t *testing.T) {
 	}
 	select {
 	case utterance := <-completed:
-		if utterance != "hello world" {
+		if utterance.Text != "hello world" {
 			t.Fatalf("completed utterance = %q, want %q", utterance, "hello world")
 		}
 	default:
@@ -200,7 +200,7 @@ func TestDeepgramHandlerIncludesFinalSegmentFromExplicitFinalize(t *testing.T) {
 }
 
 func TestDeepgramHandlerEmptyFinalizeSignalsWithoutCompleting(t *testing.T) {
-	completed := make(chan string, 1)
+	completed := make(chan Utterance, 1)
 	handler := newDeepgramHandler(
 		context.Background(),
 		completed,
@@ -221,7 +221,7 @@ func TestDeepgramHandlerReturnsTranscriptObserverError(t *testing.T) {
 	wantErr := errors.New("display unavailable")
 	handler := newDeepgramHandler(
 		context.Background(),
-		make(chan string, 1),
+		make(chan Utterance, 1),
 		func(string) error {
 			return wantErr
 		}, false)
@@ -253,7 +253,7 @@ func deepgramMessage(
 	return message
 }
 
-func assertNoCompletedUtterance(t *testing.T, completed <-chan string) {
+func assertNoCompletedUtterance(t *testing.T, completed <-chan Utterance) {
 	t.Helper()
 
 	select {

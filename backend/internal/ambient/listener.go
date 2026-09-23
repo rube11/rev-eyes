@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rube11/rev-eyes/backend/internal/candidate"
+	"github.com/rube11/rev-eyes/backend/internal/speech"
 )
 
 const SampleRate = 16000
@@ -40,6 +41,7 @@ type Clip struct {
 
 type Input struct {
 	PCM     []byte
+	Role    speech.Role
 	Control string
 }
 

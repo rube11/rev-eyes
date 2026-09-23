@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"github.com/rube11/rev-eyes/backend/internal/speech"
 )
 
 // Tool describes a capability the agent can invoke.
@@ -30,6 +31,9 @@ type Scope struct {
 	// MemoryReview is set only by the service: answering from stored context,
 	// with no agent tools allowed during this turn.
 	MemoryReview bool
+	// Speech is observed audio attribution, not authentication or speaker identity.
+	// Nil identifies intentional text input; audio without labels is Unknown.
+	Speech *speech.Utterance
 }
 
 // Result is the normalized output returned by a tool.

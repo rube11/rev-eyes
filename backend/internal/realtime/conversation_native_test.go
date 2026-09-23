@@ -24,7 +24,7 @@ type countedLiveConversation struct {
 	calls atomic.Int32
 }
 
-func (c *countedLiveConversation) TranscribeConversation(ctx context.Context, audio <-chan stt.AudioInput, completed chan<- string, observe stt.TranscriptObserver) error {
+func (c *countedLiveConversation) TranscribeConversation(ctx context.Context, audio <-chan stt.AudioInput, completed chan<- stt.Utterance, observe stt.TranscriptObserver) error {
 	c.calls.Add(1)
 	return c.live.TranscribeConversation(ctx, audio, completed, observe)
 }

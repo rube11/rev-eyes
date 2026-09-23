@@ -2,6 +2,7 @@ package stt
 
 import (
 	"context"
+	"github.com/rube11/rev-eyes/backend/internal/speech"
 	"strings"
 	"sync"
 
@@ -15,9 +16,11 @@ type deepgramHandler struct {
 
 	mu         sync.RWMutex
 	transcript string
+	segments   []speech.Segment
+	speakers   speakerTimeline
 	lastUpdate string
 	ctx        context.Context
-	completed  chan<- string
+	completed  chan<- Utterance
 	observe    TranscriptObserver
 	endpointed chan struct{}
 	persistent bool
@@ -28,7 +31,7 @@ type deepgramHandler struct {
 
 func newDeepgramHandler(
 	ctx context.Context,
-	completed chan<- string,
+	completed chan<- Utterance,
 	observe TranscriptObserver,
 	persistent bool,
 ) *deepgramHandler {
@@ -54,9 +57,10 @@ func (h *deepgramHandler) Message(message *msginterfaces.MessageResponse) error 
 	}
 
 	var update string
-	var utterance string
+	var utterance Utterance
 	h.mu.Lock()
 	if message.IsFinal && text != "" {
+		h.attribute(message.Channel.Alternatives[0], message.Start, message.Duration)
 		if h.transcript != "" {
 			h.transcript += " "
 		}
@@ -86,7 +90,7 @@ func (h *deepgramHandler) Message(message *msginterfaces.MessageResponse) error 
 		}
 	}
 	h.complete(utterance)
-	if !h.persistent && message.SpeechFinal && utterance != "" {
+	if !h.persistent && message.SpeechFinal && utterance.Text != "" {
 		h.endpoint.Do(func() { close(h.endpointed) })
 	}
 
@@ -112,17 +116,18 @@ func (h *deepgramHandler) UtteranceEnd(event *msginterfaces.UtteranceEndResponse
 
 // takeTranscriptLocked starts a fresh utterance after any end-of-turn signal.
 // The caller must hold h.mu.
-func (h *deepgramHandler) takeTranscriptLocked() string {
-	utterance := h.transcript
+func (h *deepgramHandler) takeTranscriptLocked() Utterance {
+	utterance := Utterance{Text: h.transcript, Segments: h.segments}
 	h.transcript = ""
-	if utterance != "" {
+	h.segments = nil
+	if utterance.Text != "" {
 		h.lastUpdate = ""
 	}
 	return utterance
 }
 
-func (h *deepgramHandler) complete(utterance string) {
-	if utterance == "" {
+func (h *deepgramHandler) complete(utterance Utterance) {
+	if utterance.Text == "" {
 		return
 	}
 	select {
