@@ -11,6 +11,7 @@ type Action string
 const (
 	ActionIgnore          Action = "ignore"
 	ActionRespond         Action = "respond"
+	ActionSuggestTip      Action = "suggest_tip"
 	ActionStateUpdate     Action = "state_update"
 	ActionStateTransition Action = "state_transition"
 	ActionRemember        Action = "remember"
@@ -39,6 +40,7 @@ func normalizeDecision(decision Decision) Decision {
 		decision.MemoryReviewAll = false
 	}
 	if decision.Action == ActionRespond ||
+		decision.Action == ActionSuggestTip ||
 		decision.Action == ActionStateTransition ||
 		decision.Action == ActionMemoryReview ||
 		decision.Action == ActionMemoryForget ||
@@ -55,6 +57,7 @@ func validateDecision(decision Decision) Decision {
 	switch decision.Action {
 	case ActionIgnore,
 		ActionRespond,
+		ActionSuggestTip,
 		ActionStateUpdate,
 		ActionStateTransition,
 		ActionRemember,

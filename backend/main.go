@@ -18,7 +18,6 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/assistant/jev"
 	"github.com/rube11/rev-eyes/backend/internal/assistant/openai"
 	openaiextraction "github.com/rube11/rev-eyes/backend/internal/assistant/openai/extraction"
-	openairouting "github.com/rube11/rev-eyes/backend/internal/assistant/openai/routing"
 	openaitooling "github.com/rube11/rev-eyes/backend/internal/assistant/openai/tooling"
 	"github.com/rube11/rev-eyes/backend/internal/auth"
 	"github.com/rube11/rev-eyes/backend/internal/automation/proposal"
@@ -135,13 +134,6 @@ func run() error {
 		return err
 	}
 
-	routerEnricher, err := openairouting.New(
-		os.Getenv("OPENAI_API_KEY"),
-		os.Getenv("OPENAI_ROUTER_MODEL"),
-	)
-	if err != nil {
-		return err
-	}
 	jevClient, err := jev.New(os.Getenv("JEV_API_KEY"))
 	if err != nil {
 		return err
@@ -153,6 +145,7 @@ func run() error {
 	memoryExtractor, err := openaiextraction.NewMemoryExtractor(
 		os.Getenv("OPENAI_API_KEY"),
 		memoryModel,
+		jevClient,
 	)
 	if err != nil {
 		return err
@@ -208,10 +201,7 @@ func run() error {
 		candidateAudioHandler = candidateService.Process
 		slog.Info("candidate audio enabled", "max_concurrent", candidateMaxConcurrent)
 	}
-	activityRouter, err := assistant.NewJevRouter(
-		jevClient,
-		routerEnricher,
-	)
+	activityRouter, err := assistant.NewJevRouter(jevClient)
 	if err != nil {
 		return err
 	}

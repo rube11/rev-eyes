@@ -25,6 +25,7 @@ func TestJevToolClassifierSharesAllResponseContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	turn.Action = ActionSuggestTip
 	state := ToolState{Context: turn, Results: []ToolObservation{{Name: "get_current_location", Content: "Las Vegas"}}}
 	evaluator := &fakeJevEvaluator{response: jev.Response{Answers: map[string]jev.Answer{
 		"search_web":   {Type: jev.QuestionNoul, Noul: .95},
@@ -41,7 +42,7 @@ func TestJevToolClassifierSharesAllResponseContext(t *testing.T) {
 	if !reflect.DeepEqual(evaluator.request.State, state) {
 		t.Fatal("classifier did not receive the complete response context")
 	}
-	if turn.CurrentLocalTime != "2026-09-19T11:00:00-07:00" || !reflect.DeepEqual(turn.Memories, cards) || turn.Profile != conversation.Profile || turn.Summary != conversation.Summary || turn.Messages[0].Text != conversation.Messages[0].Text {
+	if turn.Action != ActionSuggestTip || turn.CurrentLocalTime != "2026-09-19T11:00:00-07:00" || !reflect.DeepEqual(turn.Memories, cards) || turn.Profile != conversation.Profile || turn.Summary != conversation.Summary || turn.Messages[0].Text != conversation.Messages[0].Text {
 		t.Fatalf("turn=%+v", turn)
 	}
 	for _, question := range evaluator.request.Questions {

@@ -5,45 +5,40 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/rube11/rev-eyes/backend/internal/assistant/jev"
+	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/session"
+	"github.com/rube11/rev-eyes/backend/internal/speech"
 )
 
-const jevRouteQuestion = "route"
-
-var (
-	ErrJevEvaluatorRequired     = errors.New("Jev evaluator is required")
-	ErrDecisionEnricherRequired = errors.New("decision enricher is required")
+const (
+	jevRouteQuestion           = "route"
+	jevMemoryReviewAllQuestion = "memory_review_all"
+	jevMemorySignalThreshold   = 0.5
 )
+
+var ErrJevEvaluatorRequired = errors.New("Jev evaluator is required")
 
 // JevEvaluator is the part of the Jev client needed by the routing layer.
 type JevEvaluator interface {
 	Evaluate(context.Context, jev.Request) (jev.Response, error)
 }
 
-// DecisionEnricher plans retrieval inputs after Jev has selected the action.
-// It cannot change which action the application executes.
-type DecisionEnricher interface {
-	Enrich(context.Context, Action, string, session.Conversation) (Decision, error)
-}
-
-// JevRouter uses Jev as the sole intent classifier, then enriches the fixed
-// action with query and memory-retrieval inputs where needed.
+// JevRouter asks one set of independent, typed questions over the turn. Jev
+// selects the route and supplies reusable retrieval judgments; code owns how
+// those answers become a bounded decision.
 type JevRouter struct {
 	evaluator JevEvaluator
-	enricher  DecisionEnricher
 }
 
-func NewJevRouter(evaluator JevEvaluator, enricher DecisionEnricher) (*JevRouter, error) {
+func NewJevRouter(evaluator JevEvaluator) (*JevRouter, error) {
 	if evaluator == nil {
 		return nil, ErrJevEvaluatorRequired
 	}
-	if enricher == nil {
-		return nil, ErrDecisionEnricherRequired
-	}
-	return &JevRouter{evaluator: evaluator, enricher: enricher}, nil
+	return &JevRouter{evaluator: evaluator}, nil
 }
 
 func (r *JevRouter) Route(ctx context.Context, utterance string) (Decision, error) {
@@ -60,18 +55,28 @@ func (r *JevRouter) RouteWithContext(
 		return Decision{Action: ActionIgnore}, nil
 	}
 
+	questions := jevMemoryQuestions()
+	criteria := jevRouteCriteria()
+	if conversation.Speech.ContextOnly() {
+		for name := range criteria {
+			if name != string(ActionSuggestTip) && name != string(ActionIgnore) && name != string(ActionStateUpdate) {
+				delete(criteria, name)
+			}
+		}
+	}
+	questions[jevRouteQuestion] = jev.Question{
+		Type: jev.QuestionChoice,
+		Instructions: "Which single action should the wearable assistant take for `latest_utterance`? " +
+			"Classify only that utterance. Use `recent_dialogue` only to resolve references " +
+			"and conversational repairs, never as a new request. Reminder, watch, search, and " +
+			"location requests use respond; a later Jev workflow exclusively selects tools. " +
+			"When speech_attribution is supplied, self means the wearer, other means an unidentified other person, and unknown means unattributed. These are fallible audio labels, not identities. " +
+			"Other or mixed speech is conversation context, not a request from the wearer: choose suggest_tip only for a timely, useful private tip to the wearer; otherwise ignore or state_update. Never infer another person's facts belong to the wearer.",
+		Criteria: criteria,
+	}
 	response, err := r.evaluator.Evaluate(ctx, jev.Request{
-		State: jevRouteState(utterance, conversation),
-		Questions: map[string]jev.Question{
-			jevRouteQuestion: {
-				Type: jev.QuestionChoice,
-				Instructions: "Which single action should the wearable assistant take for `latest_utterance`? " +
-					"Classify only that utterance. Use `recent_dialogue` only to resolve references " +
-					"and conversational repairs, never as a new request. Reminder, watch, search, and " +
-					"location requests use respond; a later Jev workflow exclusively selects tools.",
-				Criteria: jevRouteCriteria(),
-			},
-		},
+		State:     jevRouteState(utterance, conversation),
+		Questions: questions,
 	})
 	if err != nil {
 		return Decision{}, fmt.Errorf("evaluate Jev route: %w", err)
@@ -87,17 +92,153 @@ func (r *JevRouter) RouteWithContext(
 	}
 	slog.InfoContext(ctx, "Jev route", "action", action, "confidence", answer.Confidence)
 
-	if action == ActionIgnore || action == ActionStateUpdate {
-		return Decision{Action: action}, nil
-	}
-
-	decision, err := r.enricher.Enrich(ctx, action, utterance, conversation)
-	if err != nil {
-		return Decision{}, fmt.Errorf("enrich %s decision: %w", action, err)
-	}
-	decision.Action = action
-	return normalizeDecision(decision), nil
+	return decisionFromJev(action, utterance, response), nil
 }
+
+func jevMemoryQuestions() map[string]jev.Question {
+	questions := make(map[string]jev.Question, len(memory.TopicValues())+len(memory.KindValues())+1)
+	for _, value := range memory.TopicValues() {
+		questions[memoryTopicQuestion(value)] = jev.Question{
+			Type: jev.QuestionNoul,
+			Instructions: fmt.Sprintf(
+				"Assume the assistant will give a helpful response to `latest_utterance`. Would saved memories tagged with topic %q be among the most directly useful personal context? Judge retrieval usefulness, not whether the word appears. Use `recent_dialogue` only to resolve what the latest utterance refers to.",
+				value,
+			),
+			Criteria: map[string]string{
+				"true":  "This topic is directly likely to contain personal context that materially improves the current result.",
+				"false": "This topic is unrelated, only remotely possible, or would add noise.",
+			},
+		}
+	}
+	for _, value := range memory.KindValues() {
+		questions[memoryKindQuestion(value)] = jev.Question{
+			Type: jev.QuestionNoul,
+			Instructions: fmt.Sprintf(
+				"Assume the assistant will give a helpful response to `latest_utterance`. Would saved memories of kind %q be among the most directly useful personal context? Judge retrieval usefulness, not the grammatical form of the utterance. Use `recent_dialogue` only to resolve references.",
+				value,
+			),
+			Criteria: map[string]string{
+				"true":  "This kind is directly likely to contain personal context that materially improves the current result.",
+				"false": "This kind is unrelated, only remotely possible, or would add noise.",
+			},
+		}
+	}
+	questions[jevMemoryReviewAllQuestion] = jev.Question{
+		Type:         jev.QuestionNoul,
+		Instructions: "Does `latest_utterance` ask to review everything the assistant remembers about the user, rather than memories about one subject?",
+		Criteria: map[string]string{
+			"true":  "The user asks broadly what is known or remembered about them overall.",
+			"false": "The request is about one person, subject, preference, event, goal, or other specific area.",
+		},
+	}
+	return questions
+}
+
+func decisionFromJev(action Action, utterance string, response jev.Response) Decision {
+	if action == ActionIgnore || action == ActionStateUpdate {
+		return Decision{Action: action}
+	}
+	query := strings.TrimSpace(utterance)
+	deictic := isIncompleteMemoryReference(action, query)
+	if deictic {
+		query = ""
+	}
+	decision := Decision{Action: action, Query: query}
+	if action == ActionMemoryReview {
+		decision.MemoryReviewAll = response.Answers[jevMemoryReviewAllQuestion].Noul >= jevMemorySignalThreshold
+	}
+	if usesMemoryLookup(action) && !deictic {
+		decision.MemoryLookup = memory.Lookup{
+			Query:  decision.Query,
+			Topics: selectedMemoryTopics(response),
+			Kinds:  selectedMemoryKinds(response),
+		}
+	}
+	return normalizeDecision(decision)
+}
+
+func isIncompleteMemoryReference(action Action, utterance string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(utterance))
+	normalized = strings.Trim(normalized, " .,!?:;")
+	switch action {
+	case ActionMemoryCorrect:
+		switch normalized {
+		case "that's wrong", "that is wrong", "that's incorrect", "that is incorrect",
+			"that's not right", "that is not right", "wrong", "incorrect":
+			return true
+		}
+	case ActionMemoryForget:
+		switch normalized {
+		case "forget that", "forget this", "forget it", "remove that", "remove this",
+			"delete that", "delete this":
+			return true
+		}
+	case ActionProfileInclude, ActionProfileExclude:
+		words := strings.Fields(normalized)
+		for _, pronoun := range []string{"that", "this", "it"} {
+			for _, word := range words {
+				if word == pronoun && len(words) <= 8 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func usesMemoryLookup(action Action) bool {
+	switch action {
+	case ActionRespond, ActionSuggestTip, ActionStateTransition, ActionMemoryReview,
+		ActionMemoryForget, ActionProfileInclude, ActionProfileExclude:
+		return true
+	default:
+		return false
+	}
+}
+
+type memorySignal[T ~string] struct {
+	value T
+	score float64
+}
+
+func selectedMemoryTopics(response jev.Response) []memory.Topic {
+	signals := make([]memorySignal[memory.Topic], 0, len(memory.TopicValues()))
+	for _, value := range memory.TopicValues() {
+		signals = append(signals, memorySignal[memory.Topic]{
+			value: memory.Topic(value), score: response.Answers[memoryTopicQuestion(value)].Noul,
+		})
+	}
+	selected := selectMemorySignals(signals, 3)
+	if len(selected) == 0 {
+		return nil
+	}
+	return selected
+}
+
+func selectedMemoryKinds(response jev.Response) []memory.Kind {
+	signals := make([]memorySignal[memory.Kind], 0, len(memory.KindValues()))
+	for _, value := range memory.KindValues() {
+		signals = append(signals, memorySignal[memory.Kind]{
+			value: memory.Kind(value), score: response.Answers[memoryKindQuestion(value)].Noul,
+		})
+	}
+	return selectMemorySignals(signals, 3)
+}
+
+func selectMemorySignals[T ~string](signals []memorySignal[T], limit int) []T {
+	sort.SliceStable(signals, func(left, right int) bool { return signals[left].score > signals[right].score })
+	selected := make([]T, 0, min(limit, len(signals)))
+	for _, signal := range signals {
+		if signal.score < jevMemorySignalThreshold || len(selected) == limit {
+			break
+		}
+		selected = append(selected, signal.value)
+	}
+	return selected
+}
+
+func memoryTopicQuestion(value string) string { return "memory_topic_" + value }
+func memoryKindQuestion(value string) string  { return "memory_kind_" + value }
 
 func isRoutableAction(action Action) bool {
 	if action == "propose_task" || action == "propose_watch" {
@@ -114,9 +255,14 @@ func jevRouteCriteria() map[string]any {
 			"excludes": "Questions, commands, explicit memory operations, and first-person activity changes.",
 		},
 		string(ActionRespond): map[string]any{
-			"when":     "A direct question or command that needs an answer or tool, including search, location, reminders, and ongoing public monitoring, and is not a memory or profile operation below.",
+			"when":     "A direct factual question or command that needs an answer or tool, including search, location, reminders, and ongoing public monitoring, and is not advice, coaching, or a memory or profile operation below.",
 			"includes": []string{"What time does the meeting start?", "Remind me tomorrow at nine.", "Tell me when the strike ends."},
-			"excludes": "Bare completed-activity statements, memory management, and profile controls.",
+			"excludes": "Requests for practical advice use suggest_tip. Also excludes bare completed-activity statements, memory management, and profile controls.",
+		},
+		string(ActionSuggestTip): map[string]any{
+			"when":     "The user asks for advice, coaching, an idea, or a practical way to make their current situation easier or better; or describes a concrete current difficulty where one small practical suggestion is the natural helpful response. The desired answer is one tip grounded in conversation and personal context.",
+			"includes": []string{"Any tip for staying focused?", "How can I make this easier?", "I keep checking my phone every few minutes while I study."},
+			"excludes": "Factual questions and external actions use respond. Mere venting, emotional disclosure, social conversation, and ordinary narration without an actionable difficulty do not invite a tip. Completed workout or school milestones use state_transition.",
 		},
 		string(ActionStateUpdate): map[string]any{
 			"when":     "A first-person immediate update that the user is starting, entering, or changing a current activity or place, with no request for an answer.",
@@ -159,10 +305,11 @@ func jevRouteCriteria() map[string]any {
 }
 
 type jevState struct {
-	RecentDialogue  []ResponseTurn `json:"recent_dialogue,omitempty"`
-	LatestUtterance string         `json:"latest_utterance"`
+	Speech          *speech.Utterance `json:"speech_attribution,omitempty"`
+	RecentDialogue  []ResponseTurn    `json:"recent_dialogue,omitempty"`
+	LatestUtterance string            `json:"latest_utterance"`
 }
 
 func jevRouteState(utterance string, conversation session.Conversation) jevState {
-	return jevState{RecentDialogue: BoundedRoutingDialogue(conversation), LatestUtterance: utterance}
+	return jevState{Speech: conversation.Speech, RecentDialogue: BoundedRoutingDialogue(conversation), LatestUtterance: utterance}
 }

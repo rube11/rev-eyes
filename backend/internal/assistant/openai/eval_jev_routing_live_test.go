@@ -10,24 +10,19 @@ import (
 
 	"github.com/rube11/rev-eyes/backend/internal/assistant"
 	"github.com/rube11/rev-eyes/backend/internal/assistant/jev"
-	"github.com/rube11/rev-eyes/backend/internal/assistant/openai/routing"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/session"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
-// TestLiveJevRoutingScenarios exercises Jev-owned intent routing, OpenAI memory
-// enrichment, and response generation without touching a user's database.
+// TestLiveJevRoutingScenarios exercises Jev-owned intent and memory retrieval
+// classification plus response generation without touching a user's database.
 func TestLiveJevRoutingScenarios(t *testing.T) {
 	if os.Getenv("RUN_LIVE_JEV_ROUTING_TEST") != "1" {
 		t.Skip("set RUN_LIVE_JEV_ROUTING_TEST=1 to call Jev and OpenAI")
 	}
 
 	openAIKey := requiredLiveEnv(t, "OPENAI_API_KEY")
-	enricher, err := routing.New(openAIKey, requiredLiveEnv(t, "OPENAI_ROUTER_MODEL"))
-	if err != nil {
-		t.Fatalf("NewRouterEnricher: %v", err)
-	}
 	agent, err := NewAgent(openAIKey, requiredLiveEnv(t, "OPENAI_AGENT_MODEL"), nil)
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
@@ -62,11 +57,31 @@ func TestLiveJevRoutingScenarios(t *testing.T) {
 			memories:     workoutMemories(),
 		},
 		{
-			name:         "workout_question_gets_direct_response",
+			name:         "workout_advice_question_gets_tip_route",
 			spoken:       "I just left the gym; what should I eat?",
-			wantAction:   assistant.ActionRespond,
+			wantAction:   assistant.ActionSuggestTip,
 			wantResponse: true,
 			memories:     workoutMemories(),
+		},
+		{
+			name:         "advice_request_gets_tip_route",
+			spoken:       "Any tip for staying focused while I study?",
+			wantAction:   assistant.ActionSuggestTip,
+			wantResponse: true,
+			memories:     studyMemories(),
+		},
+		{
+			name:         "concrete_difficulty_gets_tip_route",
+			spoken:       "I keep checking my phone every few minutes while I study.",
+			wantAction:   assistant.ActionSuggestTip,
+			wantResponse: true,
+			memories:     studyMemories(),
+		},
+		{
+			name:         "factual_productivity_question_stays_response",
+			spoken:       "What does the Pomodoro technique mean?",
+			wantAction:   assistant.ActionRespond,
+			wantResponse: true,
 		},
 		{
 			name:       "memory_command_is_classified_by_jev",
@@ -77,7 +92,7 @@ func TestLiveJevRoutingScenarios(t *testing.T) {
 		scenario := scenario
 		t.Run(scenario.name, func(t *testing.T) {
 			recorder := &recordingJevEvaluator{client: jevClient}
-			router, err := assistant.NewJevRouter(recorder, enricher)
+			router, err := assistant.NewJevRouter(recorder)
 			if err != nil {
 				t.Fatalf("NewJevRouter: %v", err)
 			}
@@ -115,7 +130,7 @@ func TestLiveJevRoutingScenarios(t *testing.T) {
 			if hasResponse {
 				assertLiveGlassesResponse(t, outcome.Response)
 				lookup := memoryReader.Lookup()
-				if len(lookup.Terms) == 0 && len(lookup.Topics) == 0 &&
+				if len(scenario.memories) > 0 && len(lookup.Terms) == 0 && len(lookup.Topics) == 0 &&
 					len(lookup.Kinds) == 0 && len(lookup.Entities) == 0 {
 					t.Errorf("response route did not create structured memory lookup: %#v", lookup)
 				}
@@ -142,10 +157,6 @@ func TestLiveJevAmbiguousScenarios(t *testing.T) {
 	}
 
 	openAIKey := requiredLiveEnv(t, "OPENAI_API_KEY")
-	enricher, err := routing.New(openAIKey, requiredLiveEnv(t, "OPENAI_ROUTER_MODEL"))
-	if err != nil {
-		t.Fatalf("NewRouterEnricher: %v", err)
-	}
 	agent, err := NewAgent(openAIKey, requiredLiveEnv(t, "OPENAI_AGENT_MODEL"), nil)
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
@@ -183,7 +194,7 @@ func TestLiveJevAmbiguousScenarios(t *testing.T) {
 		{
 			name:       "generic_next_step_question",
 			spoken:     "Okay, what should I do now?",
-			wantAction: assistant.ActionRespond,
+			wantAction: assistant.ActionSuggestTip,
 			memories:   studyMemories(),
 		},
 		{
@@ -204,8 +215,18 @@ func TestLiveJevAmbiguousScenarios(t *testing.T) {
 		{
 			name:       "location_update_with_question",
 			spoken:     "I'm heading home; should I grab dinner first?",
-			wantAction: assistant.ActionRespond,
+			wantAction: assistant.ActionSuggestTip,
 			memories:   workoutMemories(),
+		},
+		{
+			name:   "tip_inferred_from_conversation",
+			spoken: "Mostly my phone.",
+			conversation: session.Conversation{Messages: []session.Message{
+				{Speaker: session.SpeakerUser, Text: "I'm struggling to focus while I study."},
+				{Speaker: session.SpeakerAssistant, Text: "What keeps pulling you away?"},
+			}},
+			wantAction: assistant.ActionSuggestTip,
+			memories:   studyMemories(),
 		},
 		{
 			name:   "contextual_memory_review_follow_up",
@@ -221,7 +242,7 @@ func TestLiveJevAmbiguousScenarios(t *testing.T) {
 		scenario := scenario
 		t.Run(scenario.name, func(t *testing.T) {
 			recorder := &recordingJevEvaluator{client: jevClient}
-			router, err := assistant.NewJevRouter(recorder, enricher)
+			router, err := assistant.NewJevRouter(recorder)
 			if err != nil {
 				t.Fatalf("NewJevRouter: %v", err)
 			}

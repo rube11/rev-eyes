@@ -134,7 +134,7 @@ func TestLiveJevToolPipeline(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
-			result, err := agent.RespondWithResult(ctx, scope, query, session.Conversation{Profile: "User profile: prefers outdoor seating"}, []memory.Card{{Title: "Cafe budget", Summary: "Keep cafe visits under $10"}})
+			result, err := agent.RespondWithResult(ctx, scope, assistant.ActionRespond, query, session.Conversation{Profile: "User profile: prefers outdoor seating"}, []memory.Card{{Title: "Cafe budget", Summary: "Keep cafe visits under $10"}})
 			if err != nil {
 				t.Fatal(err)
 			}
