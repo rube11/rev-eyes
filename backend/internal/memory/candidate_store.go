@@ -240,7 +240,9 @@ func upsertCandidate(
 
 // Find retrieves active, unexpired cards using native full-text search and
 // the structured hints already produced by the router. Text and exact entity
-// hits qualify directly; structured hints qualify only as a topic-kind pair.
+// hits qualify directly. When Jev supplies both topics and kinds, a memory must
+// match both; when it confidently supplies only one dimension, that signal can
+// still produce the bounded shortlist.
 func (s *Store) Find(
 	ctx context.Context,
 	scope tool.Scope,
@@ -303,11 +305,13 @@ func (s *Store) Find(
 		 from scored
 		 where scored.text_score > 0
 		    or scored.entity_hit
-		    or (scored.topic_hit and scored.kind_hit)
+		    or (scored.topic_hit and (cardinality($3::text[]) = 0 or scored.kind_hit))
+		    or (scored.kind_hit and cardinality($2::text[]) = 0)
 		 order by
 		     scored.entity_hit desc,
 		     scored.text_score desc,
-		     (scored.topic_hit and scored.kind_hit) desc,
+		     scored.topic_hit desc,
+		     scored.kind_hit desc,
 		     scored.updated_at desc
 		 limit $5`,
 		scope.UserID,

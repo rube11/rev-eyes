@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rube11/rev-eyes/backend/internal/assistant/jev"
 	"github.com/rube11/rev-eyes/backend/internal/assistant/openai/responses"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 )
@@ -63,7 +64,8 @@ func TestMemoryExtractorDecodesAtomicWorkoutCandidates(t *testing.T) {
 	}))
 	defer server.Close()
 
-	extractor, err := NewMemoryExtractor("test-key", "test-model", responses.Config{HTTPClient: server.Client(), Endpoint: server.URL})
+	classifier := workoutMetadataEvaluator()
+	extractor, err := NewMemoryExtractor("test-key", "test-model", classifier, responses.Config{HTTPClient: server.Client(), Endpoint: server.URL})
 	if err != nil {
 		t.Fatalf("NewMemoryExtractor() error = %v", err)
 	}
@@ -76,6 +78,9 @@ func TestMemoryExtractorDecodesAtomicWorkoutCandidates(t *testing.T) {
 	}
 	if len(candidates) != 10 {
 		t.Fatalf("candidate count = %d, want 10", len(candidates))
+	}
+	if classifier.calls != 1 {
+		t.Fatalf("Jev calls = %d, want 1", classifier.calls)
 	}
 
 	byKey := make(map[string]memory.Candidate, len(candidates))
@@ -123,33 +128,29 @@ func workoutMemoryCandidates() []map[string]any {
 		summary   string
 		topic     string
 		kind      string
+		profile   string
 		retention string
 	}
 	items := []item{
-		{"state.activity.current", "Currently working out", "The user is currently working out.", "health", "event", "temporary"},
-		{"profile.nutrition.daily_calorie_range", "Daily calorie range", "The user typically needs 2,000 to 3,000 calories per day.", "health", "goal", "durable"},
-		{"profile.nutrition.daily_protein_target", "Daily protein target", "The user targets 130 grams of protein per day.", "health", "goal", "durable"},
-		{"profile.food.flavor_preference", "Prefers flavorful meals", "The user loves flavorful meals.", "preferences", "preference", "durable"},
-		{"profile.food.preference.steak", "Likes steak", "The user likes meals with steak.", "preferences", "preference", "durable"},
-		{"profile.food.preference.chicken", "Likes chicken", "The user likes meals with chicken.", "preferences", "preference", "durable"},
-		{"profile.food.preference.pasta", "Likes pasta", "The user likes meals with pasta.", "preferences", "preference", "durable"},
-		{"profile.food.preference.rice", "Likes rice", "The user likes meals with rice.", "preferences", "preference", "durable"},
-		{"profile.role.student", "Is a student", "The user is a student.", "personal", "fact", "durable"},
-		{"profile.health.weight", "Approximate weight", "The user weighs around 150 pounds.", "health", "fact", "durable"},
+		{"state.activity.current", "Currently working out", "The user is currently working out.", "health", "event", "recent", "temporary"},
+		{"profile.nutrition.daily_calorie_range", "Daily calorie range", "The user typically needs 2,000 to 3,000 calories per day.", "health", "goal", "core", "durable"},
+		{"profile.nutrition.daily_protein_target", "Daily protein target", "The user targets 130 grams of protein per day.", "health", "goal", "core", "durable"},
+		{"profile.food.flavor_preference", "Prefers flavorful meals", "The user loves flavorful meals.", "preferences", "preference", "core", "durable"},
+		{"profile.food.preference.steak", "Likes steak", "The user likes meals with steak.", "preferences", "preference", "detail", "durable"},
+		{"profile.food.preference.chicken", "Likes chicken", "The user likes meals with chicken.", "preferences", "preference", "detail", "durable"},
+		{"profile.food.preference.pasta", "Likes pasta", "The user likes meals with pasta.", "preferences", "preference", "detail", "durable"},
+		{"profile.food.preference.rice", "Likes rice", "The user likes meals with rice.", "preferences", "preference", "detail", "durable"},
+		{"profile.role.student", "Is a student", "The user is a student.", "personal", "fact", "core", "durable"},
+		{"profile.health.weight", "Approximate weight", "The user weighs around 150 pounds.", "health", "fact", "detail", "durable"},
 	}
 	result := make([]map[string]any, 0, len(items))
 	for _, candidate := range items {
 		result = append(result, map[string]any{
 			"memory_key": candidate.key,
-			"retention":  candidate.retention,
-			"card": map[string]any{
-				"topics":   []string{candidate.topic},
-				"kind":     candidate.kind,
-				"title":    candidate.title,
-				"summary":  candidate.summary,
-				"details":  []any{},
-				"entities": []any{},
-			},
+			"title":      candidate.title,
+			"summary":    candidate.summary,
+			"details":    []any{},
+			"entities":   []any{},
 		})
 	}
 	return result
@@ -172,7 +173,7 @@ func TestMemoryExtractorPromptRejectsAmbientAndSecretData(t *testing.T) {
 }
 
 func TestMemoryExtractorSkipsCredentialUtterancesBeforeModelCall(t *testing.T) {
-	extractor, err := NewMemoryExtractor("test-key", "test-model")
+	extractor, err := NewMemoryExtractor("test-key", "test-model", &fakeMemoryJev{})
 	if err != nil {
 		t.Fatalf("NewMemoryExtractor() error = %v", err)
 	}
@@ -186,4 +187,72 @@ func TestMemoryExtractorSkipsCredentialUtterancesBeforeModelCall(t *testing.T) {
 	if len(candidates) != 0 {
 		t.Fatalf("candidates = %#v, want none", candidates)
 	}
+}
+
+type fakeMemoryJev struct {
+	response jev.Response
+	err      error
+	request  jev.Request
+	calls    int
+}
+
+func (f *fakeMemoryJev) Evaluate(_ context.Context, request jev.Request) (jev.Response, error) {
+	f.calls++
+	f.request = request
+	if f.response.Answers == nil {
+		f.response.Answers = make(map[string]jev.Answer)
+	}
+	for id, question := range request.Questions {
+		if _, found := f.response.Answers[id]; !found {
+			f.response.Answers[id] = jev.Answer{Type: question.Type}
+		}
+	}
+	return f.response, f.err
+}
+
+func workoutMetadataEvaluator() *fakeMemoryJev {
+	answers := make(map[string]jev.Answer)
+	items := workoutMemoryCandidates()
+	for index, raw := range items {
+		key := raw["memory_key"].(string)
+		retention := memory.RetentionDurable
+		profile := memory.ProfileDetail
+		kind := memory.KindPreference
+		topic := memory.TopicPreferences
+		switch {
+		case key == "state.activity.current":
+			retention, profile, kind, topic = memory.RetentionTemporary, memory.ProfileRecent, memory.KindEvent, memory.TopicHealth
+		case strings.Contains(key, "nutrition"):
+			profile, kind, topic = memory.ProfileCore, memory.KindGoal, memory.TopicHealth
+		case key == "profile.food.flavor_preference":
+			profile = memory.ProfileCore
+		case strings.HasPrefix(key, "profile.role"):
+			profile, kind, topic = memory.ProfileCore, memory.KindFact, memory.TopicPersonal
+		case key == "profile.health.weight":
+			kind, topic = memory.KindFact, memory.TopicHealth
+		}
+		answers[retentionQuestion(index)] = jev.Answer{Choice: string(retention)}
+		answers[profileLayerQuestion(index)] = jev.Answer{Choice: string(profile)}
+		answers[keyFamilyQuestion(index)] = jev.Answer{Choice: memoryKeyFamilyForTest(key)}
+		answers[kindQuestion(index)] = jev.Answer{Choice: string(kind)}
+		answers[topicQuestion(index, string(topic))] = jev.Answer{Noul: 0.95}
+	}
+	return &fakeMemoryJev{response: jev.Response{Answers: answers}}
+}
+
+func memoryKeyFamilyForTest(key string) string {
+	for _, family := range []string{memoryKeyFoodPreference, memoryKeyRole, memoryKeyRelationship} {
+		if strings.HasPrefix(key, family+".") {
+			return family
+		}
+	}
+	for _, family := range []string{
+		memoryKeyActivity, memoryKeyCalorieTarget, memoryKeyCalorieRange,
+		memoryKeyProteinTarget, memoryKeyFlavor, memoryKeyWeight,
+	} {
+		if key == family {
+			return family
+		}
+	}
+	return memoryKeyCustom
 }
