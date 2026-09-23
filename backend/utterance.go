@@ -43,7 +43,11 @@ func handleUtterance(
 	memories memoryService,
 ) (realtime.UtteranceResult, error) {
 	result := realtime.UtteranceResult{}
-	utteranceID, err := transcripts.Append(ctx, scope, session.SpeakerUser, utterance)
+	record := utterance
+	if scope.Speech != nil {
+		record = scope.Speech.Record()
+	}
+	utteranceID, err := transcripts.Append(ctx, scope, session.SpeakerUser, record)
 	if err != nil {
 		return result, fmt.Errorf("persist user utterance: %w", err)
 	}
@@ -52,7 +56,7 @@ func handleUtterance(
 	}
 
 	outcome, err := service.HandleUtterance(ctx, scope, utteranceID, utterance)
-	if shouldCaptureMemory(outcome.Decision.Action) {
+	if scope.Speech.PersonalMemory() && shouldCaptureMemory(outcome.Decision.Action) {
 		if memories == nil || !memories.Capture(scope, utteranceID, utterance) {
 			slog.WarnContext(ctx, "memory learning queue unavailable")
 		}
@@ -91,8 +95,8 @@ func handleUtterance(
 	}
 
 	response := outcome.Response
-	if outcome.Decision.Action == assistant.ActionRemember ||
-		(outcome.Decision.Action == assistant.ActionMemoryCorrect && response == "") {
+	if !scope.Speech.ContextOnly() && (outcome.Decision.Action == assistant.ActionRemember ||
+		(outcome.Decision.Action == assistant.ActionMemoryCorrect && response == "")) {
 		if memories == nil {
 			return result, errors.New("memory service is required")
 		}

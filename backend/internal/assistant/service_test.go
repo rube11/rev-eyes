@@ -26,7 +26,7 @@ type agentFunc func(
 	[]memory.Card,
 ) (string, error)
 
-func (f agentFunc) RespondWithResult(ctx context.Context, scope tool.Scope, query string, conversation session.Conversation, memories []memory.Card) (AgentResult, error) {
+func (f agentFunc) RespondWithResult(ctx context.Context, scope tool.Scope, _ Action, query string, conversation session.Conversation, memories []memory.Card) (AgentResult, error) {
 	text, err := f(ctx, scope, query, conversation, memories)
 	return AgentResult{Text: text}, err
 }
@@ -42,11 +42,34 @@ type proposalAwareAgentFunc func(
 func (f proposalAwareAgentFunc) RespondWithResult(
 	ctx context.Context,
 	scope tool.Scope,
+	_ Action,
 	query string,
 	conversation session.Conversation,
 	memories []memory.Card,
 ) (AgentResult, error) {
 	return f(ctx, scope, query, conversation, memories)
+}
+
+type routeRecordingAgent struct {
+	action   Action
+	query    string
+	profile  string
+	memories []memory.Card
+}
+
+func (a *routeRecordingAgent) RespondWithResult(
+	_ context.Context,
+	_ tool.Scope,
+	action Action,
+	query string,
+	conversation session.Conversation,
+	memories []memory.Card,
+) (AgentResult, error) {
+	a.action = action
+	a.query = query
+	a.profile = conversation.Profile
+	a.memories = memories
+	return AgentResult{Text: "Try one distraction-free twenty-minute block."}, nil
 }
 
 type memoryReaderFunc func(context.Context, tool.Scope, memory.Lookup) ([]memory.Card, error)
@@ -174,6 +197,45 @@ var noProposalConfirmation = proposalConfirmerFunc(func(
 ) (string, bool, error) {
 	return "", false, nil
 })
+
+func TestSuggestTipUsesSharedResponsePipelineAndPreservesRoute(t *testing.T) {
+	wantCards := []memory.Card{{Title: "Study preference", Summary: "Prefers quiet study spaces."}}
+	agent := &routeRecordingAgent{}
+	store := profileMemoryStub{
+		managedMemoryStub: managedMemoryStub{find: func(_ context.Context, _ tool.Scope, lookup memory.Lookup) ([]memory.Card, error) {
+			if lookup.Query != "focus while studying" {
+				t.Fatalf("lookup = %#v", lookup)
+			}
+			return wantCards, nil
+		}},
+		profile: func(context.Context, tool.Scope) (string, error) {
+			return "User profile: studying for biology exams.", nil
+		},
+	}
+	service := NewService(
+		routerFunc(func(context.Context, string) (Decision, error) {
+			return Decision{
+				Action:       ActionSuggestTip,
+				Query:        "one focus tip",
+				MemoryLookup: memory.Lookup{Query: "focus while studying"},
+			}, nil
+		}),
+		agent,
+		store,
+		noConversation,
+		noProposalConfirmation,
+	)
+
+	outcome, err := service.HandleUtterance(context.Background(), tool.Scope{UserID: "owner"}, "turn", "Any tip for staying focused?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Decision.Action != ActionSuggestTip || outcome.Response == "" ||
+		agent.action != ActionSuggestTip || agent.query != "Any tip for staying focused?" ||
+		agent.profile == "" || !reflect.DeepEqual(agent.memories, wantCards) {
+		t.Fatalf("outcome=%#v agent=%#v", outcome, agent)
+	}
+}
 
 func TestHandleUtteranceUsesActualProposalResult(t *testing.T) {
 	service := NewService(

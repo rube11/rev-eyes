@@ -169,7 +169,7 @@ func TestAgentPreservesActualProposalStatus(t *testing.T) {
 				}
 			})
 			attachTestWorkflow(t, agent, proposal, `{"value":"tomorrow"}`)
-			result, err := agent.RespondWithResult(context.Background(), tool.Scope{}, "Remind me tomorrow", session.Conversation{}, nil)
+			result, err := agent.RespondWithResult(context.Background(), tool.Scope{}, assistant.ActionRespond, "Remind me tomorrow", session.Conversation{}, nil)
 			if result.ProposalCreated != (ending != "proposal error") {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}

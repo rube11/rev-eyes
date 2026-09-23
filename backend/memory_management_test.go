@@ -150,6 +150,7 @@ func TestMemoryManagementCommandsAreNotLearnedAsMemories(t *testing.T) {
 	}
 	for _, action := range []assistant.Action{
 		assistant.ActionRespond,
+		assistant.ActionSuggestTip,
 		assistant.ActionStateUpdate,
 		assistant.ActionStateTransition,
 	} {

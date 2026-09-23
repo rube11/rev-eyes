@@ -25,7 +25,7 @@ func (m profileMemoryStub) SetProfileOverride(ctx context.Context, scope tool.Sc
 }
 
 func TestProfileSuppliedWithoutSearchMatchForChatGlassesAndReview(t *testing.T) {
-	for _, action := range []Action{ActionRespond, ActionStateTransition, ActionMemoryReview} {
+	for _, action := range []Action{ActionRespond, ActionSuggestTip, ActionStateTransition, ActionMemoryReview} {
 		for _, typed := range []bool{false, true} {
 			for _, failed := range []bool{false, true} {
 				loads := 0

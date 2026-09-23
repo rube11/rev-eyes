@@ -43,7 +43,7 @@ func (s *Service) reviewMemories(
 	}
 	scope.MemoryReview = true
 	conversation.Profile = s.loadProfile(ctx, scope)
-	result, err := s.agent.RespondWithResult(ctx, scope, utterance, conversation, cards)
+	result, err := s.agent.RespondWithResult(ctx, scope, ActionMemoryReview, utterance, conversation, cards)
 	return result.Text, err
 }
 

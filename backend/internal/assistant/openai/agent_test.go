@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/rube11/rev-eyes/backend/internal/assistant"
 	"github.com/rube11/rev-eyes/backend/internal/assistant/openai/responses"
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/session"
+	"github.com/rube11/rev-eyes/backend/internal/speech"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
@@ -117,6 +120,58 @@ func TestAgentReturnsText(t *testing.T) {
 	if len(request.Include) != 1 ||
 		request.Include[0] != "reasoning.encrypted_content" {
 		t.Fatalf("include = %#v", request.Include)
+	}
+}
+
+func TestSuggestTipUsesSharedContextToolsAndTipInstructions(t *testing.T) {
+	conversation := session.Conversation{
+		Profile:  "User profile: studies best in quiet places.",
+		Summary:  "The user is preparing for exams.",
+		Messages: []session.Message{{Speaker: session.SpeakerUser, Text: "I lose focus after twenty minutes."}},
+	}
+	memories := []memory.Card{{Title: "Study goal", Summary: "Finish the biology review tonight."}}
+	scope := tool.Scope{TimeZone: "America/Los_Angeles", Speech: &speech.Utterance{
+		Text: "Any tip for staying focused?", Segments: []speech.Segment{{Role: speech.Other, Text: "Any tip for staying focused?"}},
+	}}
+	now := time.Date(2026, 9, 21, 18, 0, 0, 0, time.UTC)
+	want, err := assistant.NewResponseContext(scope, "Any tip for staying focused?", conversation, memories, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want.Action = assistant.ActionSuggestTip
+
+	var request createRequest
+	agent := testAgent(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		writeJSON(t, w, map[string]any{"output": []any{map[string]any{
+			"type": "message", "content": []any{map[string]any{"type": "output_text", "text": "Put your phone away for one focused twenty-minute block."}},
+		}}})
+	})
+	agent.now = func() time.Time { return now }
+	agent.workflow = toolRunnerFunc(func(_ context.Context, gotScope tool.Scope, got assistant.ResponseContext) (assistant.ToolRunResult, error) {
+		if gotScope != scope || !reflect.DeepEqual(got, want) {
+			t.Fatalf("tool context = %#v, want %#v", got, want)
+		}
+		return assistant.ToolRunResult{}, nil
+	})
+
+	result, err := agent.RespondWithResult(context.Background(), scope, assistant.ActionSuggestTip, "Any tip for staying focused?", conversation, memories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Text == "" || !strings.Contains(request.Instructions, "classified suggest_tip") ||
+		!strings.Contains(request.Instructions, "# Eyes tonality guide") {
+		t.Fatalf("result=%#v instructions=%q", result, request.Instructions)
+	}
+	encodedInput, _ := json.Marshal(request.Input)
+	if !strings.Contains(string(encodedInput), "speech_attribution") || !strings.Contains(string(encodedInput), `\"speaker_role\":\"other\"`) {
+		t.Fatal("final composer did not receive speaker attribution")
+	}
+	input, err := responseInput(want, nil)
+	if err != nil || !reflect.DeepEqual(request.Input, input) {
+		t.Fatal("suggest_tip did not use the shared response context")
 	}
 }
 

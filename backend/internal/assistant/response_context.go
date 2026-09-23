@@ -7,21 +7,24 @@ import (
 
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/session"
+	"github.com/rube11/rev-eyes/backend/internal/speech"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
 // ResponseContext is built once, after retrieval, and shared by tool selection,
 // argument preparation, and final response generation. Authentication stays in Scope.
 type ResponseContext struct {
-	Query            string         `json:"query"`
-	Profile          string         `json:"profile,omitempty"`
-	Memories         []memory.Card  `json:"memories,omitempty"`
-	Summary          string         `json:"conversation_summary,omitempty"`
-	Messages         []ResponseTurn `json:"recent_dialogue,omitempty"`
-	CurrentLocalTime string         `json:"current_local_time"`
-	TimeZone         string         `json:"time_zone"`
-	AlwaysRespond    bool           `json:"always_respond"`
-	MemoryReview     bool           `json:"memory_review"`
+	Speech           *speech.Utterance `json:"speech_attribution,omitempty"`
+	Action           Action            `json:"route"`
+	Query            string            `json:"query"`
+	Profile          string            `json:"profile,omitempty"`
+	Memories         []memory.Card     `json:"memories,omitempty"`
+	Summary          string            `json:"conversation_summary,omitempty"`
+	Messages         []ResponseTurn    `json:"recent_dialogue,omitempty"`
+	CurrentLocalTime string            `json:"current_local_time"`
+	TimeZone         string            `json:"time_zone"`
+	AlwaysRespond    bool              `json:"always_respond"`
+	MemoryReview     bool              `json:"memory_review"`
 }
 
 type ResponseTurn struct {
@@ -57,7 +60,8 @@ func NewResponseContext(scope tool.Scope, query string, conversation session.Con
 		}
 	}
 	turn := ResponseContext{
-		Query: strings.TrimSpace(query), Profile: conversation.Profile,
+		Speech: scope.Speech,
+		Action: ActionRespond, Query: strings.TrimSpace(query), Profile: conversation.Profile,
 		Memories: memories, Summary: conversation.Summary,
 		CurrentLocalTime: now.In(location).Format(time.RFC3339), TimeZone: location.String(),
 		AlwaysRespond: scope.AlwaysRespond, MemoryReview: scope.MemoryReview,

@@ -10,11 +10,54 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/realtime"
 	"github.com/rube11/rev-eyes/backend/internal/session"
+	"github.com/rube11/rev-eyes/backend/internal/speech"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
 
 type fakeUtteranceService struct {
 	handle func(context.Context, tool.Scope, string, string) (assistant.Outcome, error)
+}
+
+func TestAutomaticMemoriesRequireWearerAttribution(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		roles []speech.Role
+		want  bool
+	}{
+		{"self", []speech.Role{speech.Self}, true},
+		{"other", []speech.Role{speech.Other}, false},
+		{"unknown", []speech.Role{speech.Unknown}, false},
+		{"mixed", []speech.Role{speech.Self, speech.Other, speech.Self}, false},
+		{"missing metadata", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := &speech.Utterance{Text: "I am allergic to peanuts."}
+			for _, role := range tc.roles {
+				u.Segments = append(u.Segments, speech.Segment{Role: role, Text: u.Text})
+			}
+			captured := false
+			_, err := handleUtterance(context.Background(), tool.Scope{Speech: u}, u.Text,
+				fakeUtteranceService{handle: func(context.Context, tool.Scope, string, string) (assistant.Outcome, error) {
+					return assistant.Outcome{Decision: assistant.Decision{Action: assistant.ActionIgnore}}, nil
+				}},
+				fakeTranscriptStore{append: func(_ context.Context, _ tool.Scope, _ session.Speaker, text string) (string, error) {
+					if text != u.Record() {
+						t.Error("history lost attribution")
+					}
+					return "source", nil
+				}},
+				fakeMemoryService{capture: func(_ tool.Scope, source, text string) bool {
+					captured = true
+					if source != "source" || text != u.Text {
+						t.Error("changed memory evidence")
+					}
+					return true
+				}})
+			if err != nil || captured != tc.want {
+				t.Fatalf("capture=%v want=%v error=%v", captured, tc.want, err)
+			}
+		})
+	}
 }
 
 func (f fakeUtteranceService) HandleUtterance(

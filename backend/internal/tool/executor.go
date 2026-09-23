@@ -34,6 +34,9 @@ func (r *Registry) Execute(
 	if !found {
 		return Result{}, fmt.Errorf("tool %q is not registered", name)
 	}
+	if scope.Speech.ContextOnly() && !selected.Spec().ReadOnly {
+		return Result{}, fmt.Errorf("tool %q requires a wearer request, not third-party conversation", name)
+	}
 
 	result, err := selected.Execute(ctx, scope, arguments)
 	if err != nil {

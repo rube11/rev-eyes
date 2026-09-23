@@ -22,7 +22,7 @@ type ActivityRouter interface {
 // Agent generates a response for a routed query. Scope must be populated from
 // trusted authentication and application-session state by the caller.
 type Agent interface {
-	RespondWithResult(context.Context, tool.Scope, string, session.Conversation, []memory.Card) (AgentResult, error)
+	RespondWithResult(context.Context, tool.Scope, Action, string, session.Conversation, []memory.Card) (AgentResult, error)
 }
 
 // AgentResult includes effects that the response text alone cannot prove.
@@ -105,15 +105,14 @@ func (s *Service) HandleUtterance(
 	turnScope := scope
 	turnScope.UtteranceID = strings.TrimSpace(utteranceID)
 
-	confirmation, handled, err := s.proposals.Confirm(ctx, turnScope, utterance)
-	if err != nil {
-		return Outcome{}, fmt.Errorf("confirm proposal: %w", err)
-	}
-	if handled {
-		return Outcome{
-			Decision: Decision{Action: ActionResolveProposal},
-			Response: strings.TrimSpace(confirmation),
-		}, nil
+	if !scope.Speech.ContextOnly() {
+		confirmation, handled, err := s.proposals.Confirm(ctx, turnScope, utterance)
+		if err != nil {
+			return Outcome{}, fmt.Errorf("confirm proposal: %w", err)
+		}
+		if handled {
+			return Outcome{Decision: Decision{Action: ActionResolveProposal}, Response: strings.TrimSpace(confirmation)}, nil
+		}
 	}
 
 	var conversation session.Conversation
@@ -125,14 +124,20 @@ func (s *Service) HandleUtterance(
 		conversation, conversationErr = s.conversation.Prepare(ctx, scope, utteranceID, utterance)
 		prepared = true
 	}
+	conversation.Speech = scope.Speech
 	decision, err := s.router.RouteWithContext(ctx, utterance, conversation)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("route utterance: %w", err)
 	}
+	// Observed third-party or mixed speech is context, never an account command.
+	// Enforce this independently of classifier output and before any mutations.
+	if scope.Speech.ContextOnly() && decision.Action != ActionSuggestTip && decision.Action != ActionIgnore && decision.Action != ActionStateUpdate {
+		return Outcome{Decision: Decision{Action: ActionIgnore}}, nil
+	}
 
 	// App messages are intentional input, not overheard speech. Keep specialized
 	// memory/proposal routes, but never silently discard a typed turn.
-	if scope.AlwaysRespond && (decision.Action == ActionIgnore || decision.Action == ActionStateUpdate) {
+	if scope.AlwaysRespond && !scope.Speech.ContextOnly() && (decision.Action == ActionIgnore || decision.Action == ActionStateUpdate) {
 		decision.Action = ActionRespond
 		decision.Query = strings.TrimSpace(utterance)
 	}
@@ -171,6 +176,7 @@ func (s *Service) HandleUtterance(
 		return outcome, nil
 	}
 	if decision.Action != ActionRespond &&
+		decision.Action != ActionSuggestTip &&
 		decision.Action != ActionStateTransition {
 		return outcome, nil
 	}
@@ -226,7 +232,7 @@ func (s *Service) HandleUtterance(
 
 	// Retrieval uses the enriched query; the response and tool workflow need the
 	// user's actual wording, including self-corrections, tone, and constraints.
-	result, err := s.agent.RespondWithResult(ctx, turnScope, strings.TrimSpace(utterance), conversation, cards)
+	result, err := s.agent.RespondWithResult(ctx, turnScope, decision.Action, strings.TrimSpace(utterance), conversation, cards)
 	outcome.ProposalCreated = result.ProposalCreated
 	outcome.ProposalKinds = result.ProposalKinds
 	if err != nil && outcome.ProposalCreated && ctx.Err() == nil {

@@ -89,6 +89,9 @@ func (w *ToolWorkflow) Run(ctx context.Context, scope tool.Scope, turn ResponseC
 		}
 		available := make([]tool.Spec, 0, len(specs))
 		for _, spec := range specs {
+			if (scope.Speech.ContextOnly() || turn.Speech.ContextOnly()) && !spec.ReadOnly {
+				continue
+			}
 			limit := 1
 			if spec.Name == searchToolName {
 				limit = MaxWebSearchCalls

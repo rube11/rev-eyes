@@ -11,6 +11,7 @@ The top level is reserved for application capabilities shared across features:
 - `ambient`: native listening, rolling audio, and persistent conversation handoff.
 - `candidate`: accurate wake authorization and bounded clip transcription.
 - `stt`: Deepgram transcription and the native Moonshine boundary.
+- `speech`: observed wearer/other/unknown attribution shared by audio and turns.
 - `tool`: the tool contract, registry with execution, and standalone tool adapters.
 - `web`: shared HTTP policies and health handlers.
 
@@ -30,9 +31,9 @@ and tool implementations with the feature whose state they own.
 `assistant/openai` is organized by model responsibility:
 
 - root: final response composition, conversation compaction, and tonality;
-- `extraction`: finalized-utterance to memory-candidate extraction;
+- `extraction`: OpenAI atomization of source-grounded memory drafts followed by
+  Jev classification of their fixed metadata;
 - `responses`: shared Responses API transport and output parsing;
-- `routing`: retrieval enrichment after Jev has fixed the action;
 - `tooling`: argument preparation after Jev has fixed the tool selection.
 
 The two files beginning with `eval_jev_` are opt-in end-to-end checks for the
@@ -59,6 +60,24 @@ The ambient listener owns the native stream, rolling buffer, and active paid
 conversation. A rough wake triggers buffered replay followed by live audio into
 one Deepgram connection. Accurate speech must authorize automatic interaction;
 follow-ups reuse that connection. Moonshine resumes after paid work joins.
+
+SDK 0.0.15 (Even App 2.2.10+) supplies per-frame wearer/other/unknown labels.
+The frontend negotiates `pcm_speaker_v1` on ambient/manual start: each binary
+frame has a version byte (1), role byte (0 unknown, 1 self, 2 other), then unchanged
+PCM16LE. Older clients retain raw PCM with unknown attribution. Deploy the backend
+before the updated glasses package. Phone audio is always unattributed.
+The rolling buffer retains labels with samples; Deepgram word timestamps map to
+the same replay/live sample timeline. Speaker switches never reset Moonshine,
+finalize an utterance, or reconnect Deepgram. Attribution is bounded to 120 seconds
+per Deepgram connection; stale/missing timing is unknown, never assumed self.
+
+Observed-speech records preserve provenance through history and compaction.
+Only entirely self-attributed speech learns personal memories automatically;
+unknown/mixed/other speech is not a source of personal facts. Intentional text
+input keeps existing behavior. During an active conversation, other/mixed speech
+may route to a private `suggest_tip` with normal memories, profile, and tone,
+but cannot confirm proposals, mutate memories, or execute non-read-only tools.
+These are fallible wearer-vs-other labels, not identities for multiple people.
 
 A tap opens a manual conversation inside the ambient session. Finalization ends
 an utterance without closing Deepgram; conversation stop returns to Moonshine.
@@ -89,8 +108,13 @@ See [server Moonshine](../docs/server-moonshine.md) for runtime setup.
 
 Each assistant turn first uses Jev to choose the utterance action. Tool-bearing
 requests route as ordinary responses; tool choice happens only in the workflow.
-Open-ended route fields are enriched separately, then the service loads the saved profile,
-retrieves relevant memories, and prepares recent conversation context. The
+Advice requests use the distinct `suggest_tip` route, then share the response
+route's profile, memory retrieval, tool workflow, tonality, and final composer;
+only the final instruction narrows the output to one grounded, useful suggestion.
+The same Jev request independently judges useful memory topics and kinds, so
+there is no second OpenAI routing or memory-enrichment call. Code combines the
+selected route with those typed retrieval signals, then the service loads the
+saved profile, retrieves relevant memories, and prepares recent conversation context. The
 resulting `assistant.ResponseContext` contains the routed query, profile,
 retrieved memories, conversation summary and messages, local time, time zone,
 and turn flags. Authentication remains in the trusted `tool.Scope`.
@@ -102,8 +126,12 @@ of at most eight selection rounds and passes completed observations back to Jev.
 This allows evidence from location or search to make a later action ready while
 keeping tool output as data rather than authorization.
 
-The provider client lives in `assistant/jev`; OpenAI-specific enrichment,
+The provider client lives in `assistant/jev`; OpenAI-specific atomization,
 argument preparation, and response composition live in `assistant/openai`.
+When learning memories, OpenAI produces only atomic source-grounded wording,
+details, entity names, and a key-suffix hint. One Jev request classifies every
+draft's canonical key family, kind, topics, retention, profile layer, and entity
+types; code normalizes, validates, and persists the result.
 
 Execution limits are deterministic:
 

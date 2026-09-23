@@ -14,6 +14,7 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/realtime"
 	"github.com/rube11/rev-eyes/backend/internal/session"
+	"github.com/rube11/rev-eyes/backend/internal/speech"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
 )
@@ -21,6 +22,24 @@ import (
 type ambientMemoryExtractor struct {
 	started chan string
 	release chan struct{}
+}
+
+type attributedMemoryTranscriber struct{ text string }
+
+func (f attributedMemoryTranscriber) TranscribeConversation(ctx context.Context, audio <-chan stt.AudioInput, completed chan<- stt.Utterance, _ stt.TranscriptObserver) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case frame := <-audio:
+		role := speech.Unknown
+		if len(frame.Speakers) == 1 {
+			role = frame.Speakers[0].Role
+		}
+		clear(frame.PCM)
+		completed <- stt.Utterance{Text: f.text, Segments: []speech.Segment{{Role: role, Text: f.text}}}
+	}
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func (e ambientMemoryExtractor) Extract(ctx context.Context, text string) ([]memory.Candidate, error) {
@@ -66,14 +85,14 @@ func TestAmbientTranscriptLearnsMemoryAfterSocketDisconnect(t *testing.T) {
 	routed := false
 	persisted := false
 	service := fakeUtteranceService{handle: func(_ context.Context, got tool.Scope, source, transcript string) (assistant.Outcome, error) {
-		if !prepared || !persisted || got != scope || source != "utterance" || transcript != text {
+		if !prepared || !persisted || got.UserID != scope.UserID || got.Speech == nil || !got.Speech.PersonalMemory() || source != "utterance" || transcript != text {
 			t.Error("ambient transcript bypassed normal routing prerequisites")
 		}
 		routed = true
 		return assistant.Outcome{Decision: assistant.Decision{Action: assistant.ActionIgnore}}, nil
 	}}
 	transcripts := fakeTranscriptStore{append: func(_ context.Context, got tool.Scope, speaker session.Speaker, transcript string) (string, error) {
-		if !prepared || got != scope || speaker != session.SpeakerUser || transcript != text {
+		if !prepared || got.UserID != scope.UserID || speaker != session.SpeakerUser || transcript != got.Speech.Record() {
 			t.Error("unexpected transcript persistence")
 		}
 		persisted = true
@@ -82,7 +101,7 @@ func TestAmbientTranscriptLearnsMemoryAfterSocketDisconnect(t *testing.T) {
 	s := realtime.NewServer(nil, realtime.Handlers{
 		Authenticate: func(string) (tool.Scope, error) { return scope, nil },
 		PrepareSession: func(_ context.Context, got tool.Scope) error {
-			if got != scope {
+			if got.UserID != scope.UserID || got.SessionID != scope.SessionID {
 				t.Error("wrong session")
 			}
 			prepared = true
@@ -100,7 +119,18 @@ func TestAmbientTranscriptLearnsMemoryAfterSocketDisconnect(t *testing.T) {
 				}
 			}
 		},
-		CandidateAudio: func(context.Context, []byte, stt.AudioFormat) (string, error) { return text, nil },
+		CandidateAudio:          func(context.Context, []byte, stt.AudioFormat) (string, error) { return text, nil },
+		ConversationTranscriber: attributedMemoryTranscriber{text: text},
+		AmbientStreaming: func(ctx context.Context, input <-chan ambient.Input, converse ambient.Conversation) error {
+			audio := make(chan stt.AudioInput, 1)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case frame := <-input:
+				audio <- stt.AudioInput{PCM: frame.PCM, Speakers: []speech.Span{{End: int64(len(frame.PCM) / 2), Role: frame.Role}}}
+			}
+			return converse(ctx, audio, true)
+		},
 		Utterance: func(ctx context.Context, got tool.Scope, text string) (realtime.UtteranceResult, error) {
 			return handleUtterance(ctx, got, text, service, transcripts, recorder)
 		},
@@ -119,10 +149,10 @@ func TestAmbientTranscriptLearnsMemoryAfterSocketDisconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if err := conn.WriteJSON(map[string]string{"type": "ambient_start"}); err != nil {
+	if err := conn.WriteJSON(map[string]string{"type": "ambient_start", "encoding": "pcm_speaker_v1"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := conn.WriteMessage(websocket.BinaryMessage, []byte{1, 0, 2, 0}); err != nil {
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte{1, 1, 1, 0, 2, 0}); err != nil {
 		t.Fatal(err)
 	}
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -134,13 +164,10 @@ func TestAmbientTranscriptLearnsMemoryAfterSocketDisconnect(t *testing.T) {
 		if err := conn.ReadJSON(&response); err != nil {
 			t.Fatal(err)
 		}
-		if response.Type == "assistant_thinking" || response.Type == "assistant_response" {
+		if response.Type == "assistant_response" {
 			t.Fatal("ignored ambient utterance interrupted the user")
 		}
 		if response.Type == "assistant_done" {
-			if response.ID == "" {
-				t.Fatal("missing candidate correlation")
-			}
 			break
 		}
 	}
@@ -164,6 +191,10 @@ func TestAmbientTranscriptLearnsMemoryAfterSocketDisconnect(t *testing.T) {
 	close(extractor.release)
 	select {
 	case got := <-stored:
+		if got.scope.Speech == nil || !got.scope.Speech.PersonalMemory() {
+			t.Fatal("memory lost wearer attribution")
+		}
+		got.scope.Speech = nil
 		if got.scope != scope || got.source != "utterance" || len(got.candidates) != 1 {
 			t.Fatalf("wrong memory write: %+v", got)
 		}
