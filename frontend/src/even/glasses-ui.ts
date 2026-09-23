@@ -61,8 +61,12 @@ export function buildCompactPage(content: string): RebuildPageContainer {
   return page([text({
     xPosition: MARGIN, yPosition: 228, width: CONTENT_WIDTH, height: 56,
     containerID: 1, containerName: "compact-control",
-    content: wrapGlassesText(cleanText(content)).slice(0, 2).join("\n"), isEventCapture: 1,
+    content: buildCompactContent(content), isEventCapture: 1,
   })])
+}
+
+export function buildCompactContent(content: string): string {
+  return wrapGlassesText(cleanText(content)).slice(0, 2).join("\n")
 }
 
 export function buildTranscriptContent(content: string): string {
@@ -70,14 +74,18 @@ export function buildTranscriptContent(content: string): string {
   return wrapGlassesText(cleanText(content).replace(/\n/gu, " ")).slice(-2).join("\n") || " "
 }
 
-export function buildTranscriptPage(content: string, thinking = false): RebuildPageContainer {
+export function buildTranscriptPage(
+  content: string,
+  thinking = false,
+  listeningStatus = "Listening",
+): RebuildPageContainer {
   return page([
     text({
       xPosition: MARGIN, yPosition: 148, width: CONTENT_WIDTH, height: 80,
       containerID: 1, containerName: "live-transcript",
       content: buildTranscriptContent(content), isEventCapture: 1,
     }),
-    status(thinking ? "Thinking" : "Listening", "speech-status"),
+    status(thinking ? "Thinking" : listeningStatus, "speech-status"),
   ])
 }
 

@@ -59,16 +59,21 @@ async function harness(t, serverListeningEnabled = false, reconnect = false, rea
     './glasses-page-host': {
       getEvenBridge: async () => bridge, resumeGlassesPage: () => {},
       renderGlassesPage: async page => pages.push(page),
+      upgradeCompactText: async text => { upgrades.push(text); pages.at(-1).label = text; return true },
       upgradeTranscriptText: async text => { upgrades.push(text); pages.at(-1).transcript = text; return true },
+      upgradeTranscriptStatus: async footer => { upgrades.push(footer); pages.at(-1).footer = footer; return true },
       upgradeMessageStatus: async footer => { upgrades.push(footer); pages.at(-1).footer = footer; return true },
     },
     './glasses-ui': {
       buildCompactPage: label => ({ label }), buildSleepPage: () => ({ label: 'sleep' }),
+      buildCompactContent: label => label,
       buildMessagePage: (message, footer, pageIndex = 0) => ({ message, footer, pageIndex }),
       buildMessageStatus: (_message, footer) => footer,
       glassesMessagePages: message => message.body.match(/.{1,100}/g) ?? [' '],
       buildTranscriptContent: text => text,
-      buildTranscriptPage: text => ({ transcript: text }),
+      buildTranscriptPage: (text, thinking, listeningStatus) => ({
+        transcript: text, footer: thinking ? 'Thinking' : listeningStatus,
+      }),
       presentGlassesMessage: text => ({ kind: 'answer', body: text }),
     },
     '../shared/api/client': { connectRealtimeSocket: async () => {
@@ -172,7 +177,7 @@ async function harness(t, serverListeningEnabled = false, reconnect = false, rea
     nativeCalls, nativeText: () => nativePage?.textObject.map(item => item.content).join('\n'),
     failNativeRender: (count = 1) => { failedNativeRenders = count },
     delayConnection: () => { let release; connectionGate = new Promise(resolve => { release = resolve }); return release },
-    pcm: async pcm => { eventHandler?.({ audioEvent: { audioPcm: pcm } }); await flush() }, message, click, sleep, scroll, reply, advance, dispose,
+    pcm: async (pcm, speakerRole, source = 'glasses') => { eventHandler?.({ audioEvent: { audioPcm: pcm, speakerRole, source } }); await flush() }, message, click, sleep, scroll, reply, advance, dispose,
     disconnect: async () => { socket.close(); await flush() },
     denyAudio: () => { allowAudio = false },
     delayAudio: () => { let release; audioGate = new Promise(resolve => { release = resolve }); return release },
@@ -182,12 +187,40 @@ async function harness(t, serverListeningEnabled = false, reconnect = false, rea
 test('real display host delivers a Moonshine conversation reply through the installed SDK', async t => {
   const h = await harness(t, true, false, true)
   await h.message('conversation_started')
+  assert.match(h.nativeText(), /LISTENING \. · PAUSE TO SEND/)
+  await h.advance(800)
+  assert.match(h.nativeText(), /LISTENING \. \. · PAUSE TO SEND/)
   await h.message('user_transcript', { text: 'Hey glasses, what time is it?' })
   await h.message('assistant_thinking')
   await h.message('assistant_response', { text: 'It is noon.' })
   assert.match(h.nativeText(), /It is noon\./)
   assert.equal(h.audio.filter(Boolean).length, 1)
   assert.equal(h.audio.includes(false), false)
+})
+
+test('listening dots breathe across compact and transcript views, then stop while thinking', async t => {
+  const h = await harness(t)
+  await h.click()
+  assert.match(h.pages.at(-1).label, /LISTENING \.  ·  PAUSE TO SEND/)
+
+  await h.advance(800)
+  assert.match(h.pages.at(-1).label, /LISTENING \. \.  ·  PAUSE TO SEND/)
+  await h.message('user_transcript', { text: 'What is next?' })
+  await h.advance(250)
+  assert.equal(h.pages.at(-1).footer, 'Listening . .')
+
+  await h.advance(800)
+  assert.equal(h.pages.at(-1).footer, 'Listening . . .')
+  await h.advance(800)
+  assert.equal(h.pages.at(-1).footer, 'Listening . .')
+  await h.advance(800)
+  assert.equal(h.pages.at(-1).footer, 'Listening .')
+
+  await h.message('assistant_thinking')
+  const upgradeCount = h.upgrades.length
+  await h.advance(3_200)
+  assert.equal(h.upgrades.length, upgradeCount)
+  assert.equal(h.pages.at(-1).footer, 'Thinking')
 })
 
 test('a rejected transcript write cannot consume the following assistant response', async t => {
@@ -234,6 +267,38 @@ test('a reply restarts the mic after stop acknowledgement and listens for exactl
   assert.equal(h.controls.at(-1), 'listening_stop')
   assert.equal(h.pages.at(-1).message.body, 'It is noon.')
   assert.equal(h.pages.at(-1).footer, 'Tap to talk')
+})
+
+test('follow-up speech keeps the answer visible until the agent starts responding', async t => {
+  const h = await harness(t)
+  await h.reply()
+  await h.message('listening_stopped')
+  assert.equal(h.pages.at(-1).message.body, 'It is noon.')
+
+  await h.message('user_transcript', { text: 'And tomorrow?' })
+  await h.advance(250)
+  assert.equal(h.pages.at(-1).message.body, 'It is noon.')
+
+  await h.message('assistant_thinking')
+  assert.equal(h.pages.at(-1).message, undefined)
+  assert.equal(h.pages.at(-1).footer, 'Thinking')
+})
+
+test('server-managed follow-up also preserves the answer through transcript updates', async t => {
+  const h = await harness(t, true)
+  await h.message('conversation_started')
+  await h.message('user_transcript', { text: 'What time is it?' })
+  await h.message('assistant_thinking')
+  await h.message('assistant_response', { text: 'It is noon.' })
+  assert.equal(h.pages.at(-1).message.body, 'It is noon.')
+
+  await h.message('user_transcript', { text: 'And tomorrow?' })
+  await h.advance(250)
+  assert.equal(h.pages.at(-1).message.body, 'It is noon.')
+
+  await h.message('assistant_thinking')
+  assert.equal(h.pages.at(-1).message, undefined)
+  assert.equal(h.pages.at(-1).footer, 'Thinking')
 })
 
 test('speech near expiry is not cut off and the next reply gets a fresh window', async t => {
@@ -402,7 +467,7 @@ test('thinking is static and a pending transcript cannot overwrite the answer', 
   assert.equal(h.pages.at(-1).message.body, 'A complete answer.')
 })
 
-test('speech received just before expiry keeps capture alive despite paced rendering', async t => {
+test('speech received just before expiry keeps capture alive without hiding the answer', async t => {
   const h = await harness(t)
   await h.reply()
   await h.message('listening_stopped')
@@ -411,7 +476,7 @@ test('speech received just before expiry keeps capture alive despite paced rende
   await h.advance(20)
   assert.equal(h.audio.at(-1), true)
   await h.advance(230)
-  assert.equal(h.pages.at(-1).transcript, 'A follow-up')
+  assert.equal(h.pages.at(-1).message.body, 'It is noon.')
 })
 
 test('sleep discards scheduled transcript updates', async t => {
@@ -521,7 +586,7 @@ test('server listening forwards copied PCM while the UI is idle', async t => {
   const h = await harness(t, true)
   const frame = new Uint8Array([1, 2, 3, 4])
   await h.pcm(frame)
-  assert.deepEqual(h.pcmFrames, [[1, 2, 3, 4]])
+  assert.deepEqual(h.pcmFrames, [[1, 0, 1, 2, 3, 4]])
   assert.deepEqual(Array.from(frame), [1, 2, 3, 4])
   assert.equal(h.controls.includes('listening_start'), false)
 })
@@ -534,6 +599,19 @@ test('failed server capture on wake keeps the microphone error visible', async t
   await h.click()
   assert.equal(h.controls.at(-2), 'ambient_stop')
   assert.match(h.pages.at(-1).label, /MIC UNAVAILABLE/)
+})
+
+test('speaker switches preserve frame labels without restarting capture or sending control commands', async t => {
+  const h = await harness(t, true)
+  const controls = h.controls.length
+  const captures = h.audio.length
+  for (const role of ['self', 'other', 'unknown', 'self']) {
+    await h.pcm(new Uint8Array([42, 0]), role)
+  }
+  await h.pcm(new Uint8Array([42, 0]), 'self', 'phone')
+  assert.deepEqual(h.pcmFrames, [[1,1,42,0], [1,2,42,0], [1,0,42,0], [1,1,42,0], [1,0,42,0]])
+  assert.equal(h.controls.length, controls)
+  assert.equal(h.audio.length, captures)
 })
 
 test('server tap dismisses a visible answer and closes only the conversation', async t => {

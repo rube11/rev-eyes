@@ -7,7 +7,7 @@ import {
 } from "@evenrealities/even_hub_sdk"
 import type { RebuildPageContainer } from "@evenrealities/even_hub_sdk"
 
-import { buildCompactPage } from "./glasses-ui"
+import { buildCompactContent, buildCompactPage } from "./glasses-ui"
 
 let bridgePromise: ReturnType<typeof waitForEvenAppBridge> | undefined
 let startup: Promise<void> | undefined
@@ -114,6 +114,22 @@ export async function renderGlassesPage(
 }
 
 export async function upgradeTranscriptText(content: string): Promise<boolean> {
+  return upgradeTextContainer(1, "live-transcript", content)
+}
+
+export async function upgradeCompactText(content: string): Promise<boolean> {
+  return upgradeTextContainer(1, "compact-control", buildCompactContent(content))
+}
+
+export async function upgradeTranscriptStatus(content: string): Promise<boolean> {
+  return upgradeTextContainer(2, "speech-status", content)
+}
+
+async function upgradeTextContainer(
+  containerID: number,
+  containerName: string,
+  content: string,
+): Promise<boolean> {
   if (pageSuspended) {
     return false
   }
@@ -123,8 +139,8 @@ export async function upgradeTranscriptText(content: string): Promise<boolean> {
     }
     const bridge = await ensurePage()
     return bridge.textContainerUpgrade(new TextContainerUpgrade({
-      containerID: 1,
-      containerName: "live-transcript",
+      containerID,
+      containerName,
       content,
     }))
   })
@@ -136,12 +152,5 @@ export async function showEvenMessage(text: string): Promise<void> {
 }
 
 export async function upgradeMessageStatus(content: string): Promise<boolean> {
-  if (pageSuspended) return false
-  return serializePageMutation(async () => {
-    if (pageSuspended) return false
-    const bridge = await ensurePage()
-    return bridge.textContainerUpgrade(new TextContainerUpgrade({
-      containerID: 2, containerName: "message-status", content,
-    }))
-  })
+  return upgradeTextContainer(2, "message-status", content)
 }
