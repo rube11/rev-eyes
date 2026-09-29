@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	searchURL           = "https://api.tavily.com/search"
-	maxQueryLength      = 400
+	searchURL = "https://api.tavily.com/search"
+	// Current Search guidance: https://docs.tavily.com/documentation/best-practices/best-practices-search
+	maxQueryLength      = 1500
 	quickMaxResults     = 5
-	researchMaxResults  = 8
+	researchMaxResults  = 10
 	maxTitleLength      = 300
 	maxURLLength        = 2048
 	maxSnippetLength    = 1600
@@ -33,7 +34,8 @@ const parametersSchema = `{
   "properties": {
     "query": {
       "type": "string",
-      "description": "A short, focused search phrase or natural-language question under 400 characters. Preserve key names, grounded dates and locations, and essential constraints. Omit assistant instructions and unrelated subquestions."
+      "maxLength": 1500,
+      "description": "One focused public-information lookup, preferably under 400 characters; never exceed 1500. Include the subject, grounded location/date, and essential retrieval constraints. Never include a personal biography, writing instructions, or the entire conversation."
     },
     "mode": {
       "type": "string",
@@ -54,7 +56,7 @@ const parametersSchema = `{
       "type": "array",
       "items": { "type": "string" },
       "maxItems": 5,
-      "description": "Optional bare domains to require, such as nps.gov. Use an empty array unless the user named a site or authoritative-source verification needs it."
+      "description": "Hard restriction to at most five bare hostnames, such as nps.gov. Leave empty unless the user requests specific sites. Never guess a company's domain."
     }
   },
   "required": ["query", "mode", "topic", "recency", "include_domains"],
@@ -131,36 +133,25 @@ func (t *Tool) Execute(
 	_ tool.Scope,
 	arguments json.RawMessage,
 ) (tool.Result, error) {
-	var input searchInput
-	decoder := json.NewDecoder(bytes.NewReader(arguments))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
-		return tool.Result{}, fmt.Errorf("decode web search: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return tool.Result{}, errors.New("decode web search: expected one JSON object")
-	}
-
-	input, err := normalizeSearchInput(input)
+	input, err := parseSearchArguments(arguments)
 	if err != nil {
 		return tool.Result{}, err
 	}
 
 	request := searchRequest{
-		Query:          input.Query,
-		SearchDepth:    "basic",
-		MaxResults:     quickMaxResults,
-		Topic:          input.Topic,
-		TimeRange:      searchTimeRange(input.Recency),
-		IncludeDomains: input.IncludeDomains,
-		Language:       "en",
-		FilterLanguage: true,
-		SafeSearch:     true,
-		IncludeUsage:   true,
+		Query:           input.Query,
+		SearchDepth:     "basic",
+		ChunksPerSource: 3,
+		MaxResults:      quickMaxResults,
+		Topic:           input.Topic,
+		TimeRange:       searchTimeRange(input.Recency),
+		IncludeDomains:  input.IncludeDomains,
+		Language:        "en",
+		SafeSearch:      true,
+		IncludeUsage:    true,
 	}
 	if input.Mode == "research" {
 		request.SearchDepth = "advanced"
-		request.ChunksPerSource = 3
 		request.MaxResults = researchMaxResults
 	}
 
@@ -191,7 +182,6 @@ type searchRequest struct {
 	TimeRange       string   `json:"time_range,omitempty"`
 	IncludeDomains  []string `json:"include_domains,omitempty"`
 	Language        string   `json:"language,omitempty"`
-	FilterLanguage  bool     `json:"filter_by_language,omitempty"`
 	SafeSearch      bool     `json:"safe_search,omitempty"`
 	IncludeUsage    bool     `json:"include_usage,omitempty"`
 }
@@ -203,16 +193,36 @@ func (t *Tool) SearchNews(ctx context.Context, query string) ([]Result, error) {
 		return nil, err
 	}
 	response, err := t.search(ctx, searchRequest{
-		Query:          query,
-		SearchDepth:    "basic",
-		MaxResults:     quickMaxResults,
-		Topic:          "news",
-		TimeRange:      "day",
-		Language:       "en",
-		FilterLanguage: true,
-		SafeSearch:     true,
+		Query:           query,
+		SearchDepth:     "basic",
+		ChunksPerSource: 3,
+		MaxResults:      quickMaxResults,
+		Topic:           "news",
+		TimeRange:       "day",
+		Language:        "en",
+		SafeSearch:      true,
 	})
 	return response.Results, err
+}
+
+// ValidateArguments checks the same contract as Execute without making a search
+// request, so argument preparation can repair invalid input before execution.
+func ValidateArguments(arguments json.RawMessage) error {
+	_, err := parseSearchArguments(arguments)
+	return err
+}
+
+func parseSearchArguments(arguments json.RawMessage) (searchInput, error) {
+	var input searchInput
+	decoder := json.NewDecoder(bytes.NewReader(arguments))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		return searchInput{}, fmt.Errorf("decode web search: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return searchInput{}, errors.New("decode web search: expected one JSON object")
+	}
+	return normalizeSearchInput(input)
 }
 
 func (t *Tool) search(ctx context.Context, parameters searchRequest) (searchResponse, error) {
@@ -342,7 +352,7 @@ func normalizeSearchInput(input searchInput) (searchInput, error) {
 		domain = strings.ToLower(strings.TrimSpace(domain))
 		domain = strings.TrimPrefix(domain, "www.")
 		if !domainPattern.MatchString(domain) {
-			return searchInput{}, fmt.Errorf("invalid web search domain %q", domain)
+			return searchInput{}, errors.New("web search domains must be bare hostnames, not URLs or paths")
 		}
 		if _, found := seen[domain]; found {
 			continue
@@ -368,7 +378,7 @@ func validateQuery(query string) error {
 		return errors.New("web search query is required")
 	}
 	if utf8.RuneCountInString(query) > maxQueryLength {
-		return errors.New("web search query is too long")
+		return fmt.Errorf("web search query is too long (maximum %d characters)", maxQueryLength)
 	}
 	return nil
 }

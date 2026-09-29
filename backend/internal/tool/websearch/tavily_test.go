@@ -25,7 +25,10 @@ func TestToolSearchesTavily(t *testing.T) {
 			t.Errorf("authorization = %q", r.Header.Get("Authorization"))
 		}
 
-		var request searchRequest
+		var request struct {
+			searchRequest
+			FilterLanguage bool `json:"filter_by_language"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
@@ -38,7 +41,7 @@ func TestToolSearchesTavily(t *testing.T) {
 			len(request.IncludeDomains) != 1 ||
 			request.IncludeDomains[0] != "example.com" ||
 			request.Language != "en" ||
-			!request.FilterLanguage ||
+			request.FilterLanguage ||
 			!request.SafeSearch ||
 			!request.IncludeUsage {
 			t.Errorf("request = %#v", request)
@@ -105,18 +108,21 @@ func TestSearchNewsUsesExplicitBackgroundOptions(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request searchRequest
+		var request struct {
+			searchRequest
+			FilterLanguage bool `json:"filter_by_language"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		if request.Query != "Did Nintendo announce its next console?" ||
 			request.SearchDepth != "basic" ||
-			request.ChunksPerSource != 0 ||
+			request.ChunksPerSource != 3 ||
 			request.Topic != "news" ||
 			request.TimeRange != "day" ||
 			request.MaxResults != quickMaxResults ||
 			request.Language != "en" ||
-			!request.FilterLanguage ||
+			request.FilterLanguage ||
 			!request.SafeSearch {
 			t.Errorf("request = %#v", request)
 		}
@@ -197,6 +203,37 @@ func TestToolRejectsInvalidArguments(t *testing.T) {
 			json.RawMessage(arguments),
 		); err == nil {
 			t.Fatalf("Execute(%s) error = nil", arguments)
+		}
+	}
+}
+
+func TestToolQueryLengthContract(t *testing.T) {
+	search, _ := New("test-key")
+	var schema struct {
+		Properties map[string]struct {
+			MaxLength int `json:"maxLength"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(search.Spec().Parameters, &schema); err != nil || schema.Properties["query"].MaxLength != 1500 {
+		t.Errorf("query schema must expose the 1500-character limit: %+v, %v", schema, err)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		_, _ = w.Write([]byte(`{"results":[{"title":"Fixture","url":"https://example.com","content":"Evidence"}]}`))
+	}))
+	defer server.Close()
+	search.endpoint, search.client = server.URL, server.Client()
+	for _, length := range []int{702, 1500, 1501} {
+		// Count Unicode characters, not UTF-8 bytes, consistently with JSON Schema.
+		args, _ := json.Marshal(map[string]string{"query": strings.Repeat("é", length)})
+		before := requests
+		_, err := search.Execute(context.Background(), tool.Scope{}, args)
+		if length <= 1500 && (err != nil || requests != before+1) {
+			t.Errorf("valid %d-character query rejected: %v", length, err)
+		}
+		if length > 1500 && (err == nil || requests != before) {
+			t.Errorf("oversized query reached provider: %v", err)
 		}
 	}
 }

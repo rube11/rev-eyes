@@ -12,9 +12,10 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/assistant"
 	"github.com/rube11/rev-eyes/backend/internal/assistant/openai/responses"
 	"github.com/rube11/rev-eyes/backend/internal/tool"
+	"github.com/rube11/rev-eyes/backend/internal/tool/websearch"
 )
 
-const testSchema = `{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`
+const testSchema = `{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}`
 
 type observedRequest struct {
 	Instructions string            `json:"instructions"`
@@ -37,7 +38,7 @@ func TestArgumentBuilderUsesFixedSchemaAndCompleteContext(t *testing.T) {
 		if len(request.Tools) > 0 || request.Model != "argument-model" {
 			t.Fatalf("request=%+v", request)
 		}
-		for _, example := range []string{"under 400 characters", "Seattle weather forecast today", "quiet cafes Seattle", "Bluebird Museum opening hours", "New York news today", "Never guess an official domain", "Only one search call"} {
+		for _, example := range []string{"under 400 characters", "maximum is 1500", "JT4 Las Vegas company", "Intbox AI enterprise Henderson", "user biography", "Seattle weather forecast today", "quiet cafes Seattle", "Bluebird Museum opening hours", "New York news today", "Never guess an official domain", "Only one search call"} {
 			if !strings.Contains(request.Instructions, example) {
 				t.Errorf("missing search guidance %q", example)
 			}
@@ -65,7 +66,7 @@ func TestArgumentBuilderUsesFixedSchemaAndCompleteContext(t *testing.T) {
 		if !reflect.DeepEqual(received, state) {
 			t.Fatalf("state=%+v", received)
 		}
-		writeJSON(t, w, `{"search_web":{"arguments":{"value":"quiet outdoor cafes Las Vegas"}}}`)
+		writeJSON(t, w, `{"search_web":{"arguments":{"query":"quiet outdoor cafes Las Vegas"}}}`)
 	}))
 	defer server.Close()
 	builder, err := NewArgumentBuilder("test-key", "argument-model", responses.Config{HTTPClient: server.Client(), Endpoint: server.URL})
@@ -101,7 +102,7 @@ func TestArgumentBuilderRejectsDifferentSelectionAndInvalidOutput(t *testing.T) 
 
 func TestArgumentBuilderRetriesMalformedOutputBeforeReturningArguments(t *testing.T) {
 	requests := 0
-	valid := `{"search_web":{"arguments":{"value":"cafes"}}}`
+	valid := `{"search_web":{"arguments":{"query":"cafes"}}}`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests++
 		output := valid
@@ -113,8 +114,38 @@ func TestArgumentBuilderRetriesMalformedOutputBeforeReturningArguments(t *testin
 	defer server.Close()
 	builder, _ := NewArgumentBuilder("test-key", "argument-model", responses.Config{HTTPClient: server.Client(), Endpoint: server.URL})
 	result, err := builder.Build(context.Background(), assistant.ToolState{}, []tool.Spec{{Name: "search_web", Parameters: json.RawMessage(testSchema)}})
-	if err != nil || requests != 2 || string(result["search_web"].Arguments) != `{"value":"cafes"}` {
+	if err != nil || requests != 2 || string(result["search_web"].Arguments) != `{"query":"cafes"}` {
 		t.Fatalf("requests=%d result=%+v err=%v", requests, result, err)
+	}
+}
+
+func TestArgumentBuilderValidatesSearchBeforeReturningIt(t *testing.T) {
+	search, _ := websearch.New("unused")
+	valid := `{"search_web":{"arguments":{"query":"JT4 Las Vegas engineering careers","mode":"research","topic":"general","recency":"none","include_domains":[]}}}`
+	for _, invalid := range []string{
+		`{"search_web":{"arguments":{"query":"` + strings.Repeat("a", 1501) + `"}}}`,
+		`{"search_web":{"arguments":{"query":"JT4","include_domains":["https://example.com/path"]}}}`,
+	} {
+		for _, repair := range []bool{true, false} {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests++
+				output := invalid
+				if repair && requests == 2 {
+					output = valid
+				}
+				writeJSON(t, w, output)
+			}))
+			builder, _ := NewArgumentBuilder("test-key", "argument-model", responses.Config{HTTPClient: server.Client(), Endpoint: server.URL})
+			result, err := builder.Build(context.Background(), assistant.ToolState{Context: assistant.ResponseContext{Query: "Research JT4 and how my projects fit"}}, []tool.Spec{search.Spec()})
+			server.Close()
+			if requests != 2 || (repair && err != nil) || (!repair && err == nil) {
+				t.Errorf("repair=%t requests=%d error=%v", repair, requests, err)
+			}
+			if repair && !strings.Contains(string(result["search_web"].Arguments), "JT4 Las Vegas engineering careers") {
+				t.Error("invalid arguments escaped preparation")
+			}
+		}
 	}
 }
 

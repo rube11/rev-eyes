@@ -242,7 +242,8 @@ func (w *ToolWorkflow) execute(ctx context.Context, scope tool.Scope, name strin
 	}
 	started := time.Now()
 	result, err := w.registry.Execute(ctx, scope, name, args)
-	slog.InfoContext(ctx, "tool executed", "name", name, "success", err == nil, "duration_ms", time.Since(started).Milliseconds())
+	slog.InfoContext(ctx, "tool executed", "utterance_id", scope.UtteranceID,
+		"name", name, "success", err == nil, "error", err, "duration_ms", time.Since(started).Milliseconds())
 	if err != nil {
 		observation.Error = err.Error()
 	} else {
