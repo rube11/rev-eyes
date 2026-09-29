@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/rube11/rev-eyes/backend/internal/speech"
 	"github.com/rube11/rev-eyes/backend/internal/stt"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -35,7 +36,97 @@ func (s *conversationStream) Reset() error {
 }
 func (*conversationStream) Close() {}
 
-func TestKnownOtherWakeDoesNotOpenConversationOrRestartMoonshine(t *testing.T) {
+func TestStreamingAudioGapFlushesPartialPCMAndFeedsOneSilenceWindow(t *testing.T) {
+	stream := &conversationStream{reset: make(chan struct{}, 4)}
+	listener := Listener{Factory: conversationFactory{stream}}
+	ctx, cancel := context.WithCancel(context.Background())
+	input := make(chan Input)
+	frames := make(chan stt.AudioInput, 8)
+	done := make(chan error, 1)
+	var calls atomic.Int32
+	go func() {
+		done <- listener.RunStreaming(ctx, input, func(ctx context.Context, audio <-chan stt.AudioInput, automatic bool) error {
+			calls.Add(1)
+			for {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case frame := <-audio:
+					frames <- frame
+				}
+			}
+		})
+	}()
+	defer func() {
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Error(err)
+		}
+	}()
+	input <- Input{Control: "listening_start"}
+	// A device may stop emitting audio events at a pause instead of sending
+	// silent PCM. Keep a partial block so the test also catches lost tail audio.
+	input <- Input{PCM: []byte{1, 0, 2, 0}, Role: speech.Self}
+	assertSilence := func(frame stt.AudioInput) {
+		t.Helper()
+		if len(frame.PCM) != int(conversationAudioGap*SampleRate/time.Second)*2 || len(frame.Speakers) != 0 {
+			t.Fatalf("pause was not filled by one bounded unattributed silence window: bytes=%d speakers=%+v", len(frame.PCM), frame.Speakers)
+		}
+		for _, sample := range frame.PCM {
+			if sample != 0 {
+				t.Fatal("padding was not silence")
+			}
+		}
+	}
+	assertFlushed := func(want byte) {
+		t.Helper()
+		select {
+		case frame := <-frames:
+			if len(frame.PCM) != 4 || frame.PCM[0] != want || len(frame.Speakers) != 1 || frame.Speakers[0].Role != speech.Self {
+				t.Fatalf("partial PCM was not preserved before finalization: %+v", frame)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no PCM arrived after the microphone paused")
+		}
+		select {
+		case frame := <-frames:
+			assertSilence(frame)
+		case <-time.After(time.Second):
+			t.Fatal("pause did not finalize the buffered utterance")
+		}
+	}
+	assertFlushed(1)
+	select {
+	case frame := <-frames:
+		t.Fatalf("audio gap produced repeated finalization: %+v", frame)
+	case <-time.After(1400 * time.Millisecond):
+	}
+	// A manual finalize consumes the same pending audio and disarms the gap;
+	// neither event may restart either recognizer.
+	input <- Input{PCM: []byte{3, 0, 4, 0}, Role: speech.Self}
+	input <- Input{Control: "conversation_finalize"}
+	assertFlushed(3)
+	// Even without new PCM, an explicit retry must reach the provider in case
+	// its prior endpoint was lost. Only the automatic padding is one-shot.
+	input <- Input{Control: "conversation_finalize"}
+	select {
+	case frame := <-frames:
+		assertSilence(frame)
+	case <-time.After(time.Second):
+		t.Fatal("explicit finalize retry was suppressed")
+	}
+	input <- Input{Role: speech.Self}
+	select {
+	case frame := <-frames:
+		t.Fatalf("manual finalize was duplicated by audio-gap fallback: %+v", frame)
+	case <-time.After(1400 * time.Millisecond):
+	}
+	if calls.Load() != 1 || stream.samples != 0 || len(stream.reset) != 0 {
+		t.Fatalf("pause restarted recognizers: conversations=%d moonshine samples=%d resets=%d", calls.Load(), stream.samples, len(stream.reset))
+	}
+}
+
+func TestOtherLabeledWakeOpensConversationWithoutRestartingMoonshine(t *testing.T) {
 	stream := &conversationStream{reset: make(chan struct{}, 1)}
 	l := Listener{Factory: conversationFactory{stream}}
 	input := make(chan Input, 20)
@@ -43,12 +134,17 @@ func TestKnownOtherWakeDoesNotOpenConversationOrRestartMoonshine(t *testing.T) {
 		input <- Input{PCM: make([]byte, SampleRate*2), Role: speech.Other}
 	}
 	close(input)
-	err := l.RunStreaming(context.Background(), input, func(context.Context, <-chan stt.AudioInput, bool) error {
-		t.Error("other speaker opened Deepgram")
-		return nil
+	var opened atomic.Bool
+	err := l.RunStreaming(context.Background(), input, func(ctx context.Context, _ <-chan stt.AudioInput, automatic bool) error {
+		opened.Store(true)
+		if !automatic {
+			t.Error("keyword handoff was not automatic")
+		}
+		<-ctx.Done()
+		return ctx.Err()
 	})
-	if err != nil || stream.samples != 20*SampleRate || len(stream.reset) != 0 {
-		t.Fatalf("err=%v samples=%d resets=%d", err, stream.samples, len(stream.reset))
+	if err != nil || !opened.Load() || stream.samples != 20*SampleRate || len(stream.reset) != 0 {
+		t.Fatalf("err=%v opened=%v samples=%d resets=%d", err, opened.Load(), stream.samples, len(stream.reset))
 	}
 }
 
@@ -155,8 +251,8 @@ func TestManualFinalizeFlushesPartialBlockAndKeepsConnection(t *testing.T) {
 	}
 	select {
 	case pcm := <-frames:
-		if !pcm.Finalize {
-			t.Fatal("expected finalize signal")
+		if len(pcm.PCM) != int(conversationAudioGap*SampleRate/time.Second)*2 {
+			t.Fatal("expected one end-of-turn silence window, not a premature Finalize")
 		}
 	case <-ctx.Done():
 		t.Fatal("missing finalize")

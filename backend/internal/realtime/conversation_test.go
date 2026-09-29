@@ -64,7 +64,7 @@ func TestConversationKeepsAttributionAcrossSpeakerChanges(t *testing.T) {
 	} {
 		fake.words <- u
 	}
-	for i, want := range []speech.Role{speech.Self, speech.Other, speech.Self} {
+	for i, want := range []speech.Role{speech.Other, speech.Self, speech.Other, speech.Self} {
 		select {
 		case got := <-turns:
 			if got == nil || len(got.Segments) != 1 || got.Segments[0].Role != want {

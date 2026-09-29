@@ -9,12 +9,11 @@ type Utterance = speech.Utterance
 
 type TranscriptObserver func(text string) error
 
-// AudioInput preserves the order of PCM and utterance finalization commands.
+// AudioInput preserves ordered PCM and sample-relative speaker attribution.
 // The producer transfers ownership of PCM to the transcription worker.
 type AudioInput struct {
 	PCM      []byte
 	Speakers []speech.Span
-	Finalize bool
 }
 
 // ConversationTranscriber keeps one connection across utterance endpoints.

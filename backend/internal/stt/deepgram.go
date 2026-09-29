@@ -104,12 +104,6 @@ func (dg *deepgramTranscriber) transcribe(ctx context.Context, audio <-chan Audi
 				}
 				return finalizeDeepgramStream(streamCtx, dgClient, handler)
 			}
-			if persistent && input.Finalize {
-				if err := dgClient.Finalize(); err != nil {
-					return fmt.Errorf("finalize conversation utterance: %w", err)
-				}
-				continue
-			}
 			chunk := input.PCM
 			if len(chunk) == 0 {
 				continue

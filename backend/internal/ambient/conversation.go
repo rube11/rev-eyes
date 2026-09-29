@@ -14,8 +14,12 @@ import (
 
 // Conversation consumes owned PCM buffers and clears them after use. The bool
 // marks an automatic wake, whose first utterance must pass the accurate gate.
-// Finalize requests an utterance endpoint without closing the stream.
+// Pauses and manual endpoints keep this same stream open for follow-ups.
 type Conversation func(context.Context, <-chan stt.AudioInput, bool) error
+
+// Endpointing sees audio time, not wall-clock time. A microphone that stops
+// delivering frames at a pause must explicitly flush its final partial block.
+const conversationAudioGap = 1200 * time.Millisecond
 
 // RunStreaming owns the rolling buffer and the handoff. Moonshine runs only
 // while idle. The triggering block is included in the replay exactly once;
@@ -49,6 +53,24 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 	// fixed channel; channel nilness never selects the listening mode.
 	finished := make(chan error, 1)
 	var active *activeConversation
+	gapTimer := time.NewTimer(conversationAudioGap)
+	gapTimer.Stop()
+	defer gapTimer.Stop()
+	var audioGap <-chan time.Time
+	stopGap := func() {
+		if !gapTimer.Stop() {
+			select {
+			case <-gapTimer.C:
+			default:
+			}
+		}
+		audioGap = nil
+	}
+	armGap := func() {
+		stopGap()
+		gapTimer.Reset(conversationAudioGap)
+		audioGap = gapTimer.C
+	}
 	defer func() {
 		if active != nil {
 			active.cancel()
@@ -58,6 +80,7 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 	}()
 	// Called only after receiving completion, so no worker still owns PCM.
 	reset := func() error {
+		stopGap()
 		active.cancel()
 		active.clearAudio()
 		active = nil
@@ -82,6 +105,25 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 		}
 		return stt.AudioInput{PCM: pcm, Speakers: spans}
 	}
+	finishPendingAudio := func() error {
+		stopGap()
+		if active == nil {
+			return nil
+		}
+		if len(block) > 0 {
+			if err := active.send(ctx, snapshot(end-int64(len(block)))); err != nil {
+				return err
+			}
+			clear(block)
+			block = block[:0]
+		}
+		// Feed the observed pause or explicit end-of-turn through ordinary
+		// endpointing. Immediately sending Finalize can freeze an earlier
+		// interim result before Deepgram has decoded the last audio window.
+		// One bounded silence window preserves the tail on the same stream.
+		silence := make([]byte, int(conversationAudioGap*SampleRate/time.Second)*2)
+		return active.send(ctx, stt.AudioInput{PCM: silence})
+	}
 	start := func(offset int64, automatic bool) error {
 		conversationCtx, cancel := context.WithCancel(ctx)
 		active = &activeConversation{audio: make(chan stt.AudioInput, 16), cancel: cancel}
@@ -89,6 +131,7 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 			finished <- converse(conversationCtx, audio, automatic)
 		}(active.audio)
 		if offset < end {
+			armGap()
 			return active.send(ctx, snapshot(offset))
 		}
 		return nil
@@ -97,6 +140,10 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-audioGap:
+			if err := finishPendingAudio(); err != nil {
+				return err
+			}
 		case conversationErr := <-finished:
 			if conversationErr != nil && !errors.Is(conversationErr, context.Canceled) {
 				active.cancel()
@@ -121,17 +168,8 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 						block = block[:0]
 					}
 				case "conversation_finalize":
-					if active != nil {
-						if len(block) > 0 {
-							if err := active.send(ctx, snapshot(end-int64(len(block)))); err != nil {
-								return err
-							}
-							clear(block)
-							block = block[:0]
-						}
-						if err := active.send(ctx, stt.AudioInput{Finalize: true}); err != nil {
-							return err
-						}
+					if err := finishPendingAudio(); err != nil {
+						return err
 					}
 				case "conversation_stop":
 					if active != nil {
@@ -172,23 +210,8 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 								continue
 							}
 							if _, matched := candidate.MatchWakePhrase(line.Text); matched {
-								// A clearly other-only rough line cannot wake the assistant.
-								// Keep all PCM in the buffer for later conversation context.
-								lineStart := max(end-retention, base+int64(line.Start*SampleRate))
-								lineEnd := end
-								if line.Duration > 0 && !math.IsInf(line.Duration, 0) {
-									lineEnd = min(end, lineStart+int64(line.Duration*SampleRate))
-								}
-								otherOnly := lineStart < lineEnd
-								for i := max(int64(0), lineStart); i < lineEnd; i++ {
-									if roles[i%retention] != speech.Other {
-										otherOnly = false
-										break
-									}
-								}
-								if otherOnly {
-									continue
-								}
+								// Fallible speaker labels inform downstream routing and
+								// account permissions, but must not veto a wake phrase.
 								offset := max(floor, max(end-retention, base+int64(line.Start*SampleRate)-preRoll))
 								if offset > end {
 									continue
@@ -223,6 +246,9 @@ func (l *Listener) RunStreaming(ctx context.Context, input <-chan Input, convers
 						return err
 					}
 				}
+			}
+			if active != nil && len(event.PCM) > 0 {
+				armGap()
 			}
 			clear(event.PCM)
 		}
