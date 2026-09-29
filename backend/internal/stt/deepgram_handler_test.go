@@ -22,7 +22,7 @@ func TestPersistentDeepgramEndpointsKeepAcceptingUtterances(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := <-completed; got.Text != text {
-			t.Fatalf("got %q, want %q", got, text)
+			t.Fatalf("got %q, want %q", got.Text, text)
 		}
 		select {
 		case <-handler.Endpointed():
@@ -48,7 +48,7 @@ func TestPersistentDeepgramCompletesOnUtteranceEndWhenNoiseBlocksSpeechFinal(t *
 	select {
 	case utterance := <-completed:
 		if utterance.Text != "hey glasses what is next" {
-			t.Fatalf("completed utterance = %q", utterance)
+			t.Fatalf("completed utterance = %q", utterance.Text)
 		}
 	default:
 		t.Fatal("UtteranceEnd did not complete the paused utterance")
@@ -96,7 +96,7 @@ func TestDeepgramRouterDispatchesRawUtteranceEndToHandler(t *testing.T) {
 	select {
 	case utterance := <-completed:
 		if utterance.Text != "hey glasses" {
-			t.Fatalf("completed utterance = %q", utterance)
+			t.Fatalf("completed utterance = %q", utterance.Text)
 		}
 	default:
 		t.Fatal("raw UtteranceEnd event was not dispatched")
@@ -150,7 +150,7 @@ func TestDeepgramHandlerCompletesAtSpeechEndpoint(t *testing.T) {
 	select {
 	case utterance := <-completed:
 		if utterance.Text != "remind me tomorrow at nine" {
-			t.Fatalf("completed utterance = %q", utterance)
+			t.Fatalf("completed utterance = %q", utterance.Text)
 		}
 	default:
 		t.Fatal("speech endpoint did not complete the utterance")
@@ -192,7 +192,7 @@ func TestDeepgramHandlerIncludesFinalSegmentFromExplicitFinalize(t *testing.T) {
 	select {
 	case utterance := <-completed:
 		if utterance.Text != "hello world" {
-			t.Fatalf("completed utterance = %q, want %q", utterance, "hello world")
+			t.Fatalf("completed utterance = %q, want %q", utterance.Text, "hello world")
 		}
 	default:
 		t.Fatal("explicitly finalized utterance was not completed")
@@ -258,7 +258,7 @@ func assertNoCompletedUtterance(t *testing.T, completed <-chan Utterance) {
 
 	select {
 	case utterance := <-completed:
-		t.Fatalf("unexpected completed utterance %q", utterance)
+		t.Fatalf("unexpected completed utterance %q", utterance.Text)
 	default:
 	}
 }

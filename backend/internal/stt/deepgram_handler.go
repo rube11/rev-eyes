@@ -14,19 +14,20 @@ import (
 type deepgramHandler struct {
 	*websocket.DefaultCallbackHandler
 
-	mu         sync.RWMutex
-	transcript string
-	segments   []speech.Segment
-	speakers   speakerTimeline
-	lastUpdate string
-	ctx        context.Context
-	completed  chan<- Utterance
-	observe    TranscriptObserver
-	endpointed chan struct{}
-	persistent bool
-	endpoint   sync.Once
-	finalized  chan struct{}
-	finalize   sync.Once
+	mu               sync.RWMutex
+	transcript       string
+	segments         []speech.Segment
+	speakerUncertain bool
+	speakers         speakerTimeline
+	lastUpdate       string
+	ctx              context.Context
+	completed        chan<- Utterance
+	observe          TranscriptObserver
+	endpointed       chan struct{}
+	persistent       bool
+	endpoint         sync.Once
+	finalized        chan struct{}
+	finalize         sync.Once
 }
 
 func newDeepgramHandler(
@@ -117,9 +118,22 @@ func (h *deepgramHandler) UtteranceEnd(event *msginterfaces.UtteranceEndResponse
 // takeTranscriptLocked starts a fresh utterance after any end-of-turn signal.
 // The caller must hold h.mu.
 func (h *deepgramHandler) takeTranscriptLocked() Utterance {
-	utterance := Utterance{Text: h.transcript, Segments: h.segments}
+	utterance := Utterance{Text: h.transcript, Segments: h.segments, SpeakerUncertain: h.speakerUncertain}
+	// Don't turn uncertain words within one apparent speaker's sentence into
+	// several invented dialogue turns. Keep real sustained self/other changes.
+	var self, other, unknown bool
+	for _, segment := range utterance.Segments {
+		self = self || segment.Role == speech.Self
+		other = other || segment.Role == speech.Other
+		unknown = unknown || segment.Role == speech.Unknown
+	}
+	if unknown && !(self && other) {
+		utterance.Segments = []speech.Segment{{Role: speech.Unknown, Text: utterance.Text}}
+		utterance.SpeakerUncertain = utterance.SpeakerUncertain || other
+	}
 	h.transcript = ""
 	h.segments = nil
+	h.speakerUncertain = false
 	if utterance.Text != "" {
 		h.lastUpdate = ""
 	}

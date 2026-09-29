@@ -10,6 +10,10 @@ import (
 const speakerSampleRate = 16000
 const speakerRetention = 120 * speakerSampleRate
 
+// A starting heuristic, not calibrated identity confidence. A short word may
+// borrow support from an adjacent same-role run, but we never wait for audio.
+const minimumSpeakerRun = 150 * speakerSampleRate / 1000
+
 // One bounded timeline per Deepgram connection, including replayed samples.
 // Access is protected by the handler mutex. Speaker changes never finalize,
 // reconnect, or change the audio sent to Deepgram.
@@ -37,25 +41,38 @@ func (t *speakerTimeline) add(input AudioInput) {
 	t.end += n
 }
 
-func (t *speakerTimeline) role(start, end float64) speech.Role {
+func (t *speakerTimeline) evidence(start, end float64) (speech.Role, bool) {
 	if math.IsNaN(start) || math.IsNaN(end) || math.IsInf(start, 0) || math.IsInf(end, 0) || start < 0 || end <= start || end > float64(t.end)/speakerSampleRate {
-		return speech.Unknown
+		return speech.Unknown, false
 	}
 	a, b := int64(math.Floor(start*speakerSampleRate)), int64(math.Ceil(end*speakerSampleRate))
 	if a < t.end-speakerRetention || b <= a || len(t.roles) == 0 {
-		return speech.Unknown
+		return speech.Unknown, false
 	}
-	role := speech.Self
+	role := t.roles[a%speakerRetention]
+	other := false
+	conflicting := false
 	for i := a; i < b; i++ {
 		r := t.roles[i%speakerRetention]
-		if r == speech.Other {
-			return speech.Other
-		}
-		if r != speech.Self {
-			role = speech.Unknown
-		}
+		other = other || r == speech.Other
+		conflicting = conflicting || r != role
 	}
-	return role
+	if conflicting || role == speech.Unknown {
+		return speech.Unknown, other
+	}
+	// Confirm a continuous run, including support outside very short words.
+	// Do not carry a role across gaps, stream restarts, or overwritten samples.
+	left, right := a, b
+	for left > max(int64(0), t.end-speakerRetention) && right-left < minimumSpeakerRun && t.roles[(left-1)%speakerRetention] == role {
+		left--
+	}
+	for right < t.end && right-left < minimumSpeakerRun && t.roles[right%speakerRetention] == role {
+		right++
+	}
+	if right-left < minimumSpeakerRun {
+		return speech.Unknown, other
+	}
+	return role, other
 }
 
 func (h *deepgramHandler) recordAudio(input AudioInput) {
@@ -68,10 +85,11 @@ func (h *deepgramHandler) attribute(alternative msginterfaces.Alternative, start
 	if len(alternative.Words) == 0 {
 		// Missing word timing must not turn known third-party audio into an
 		// unattributed command. Still require word timing for personal memories.
-		role := speech.Unknown
-		if h.speakers.role(start, start+duration) == speech.Other {
-			role = speech.Other
+		role, other := h.speakers.evidence(start, start+duration)
+		if role != speech.Other {
+			role = speech.Unknown
 		}
+		h.speakerUncertain = h.speakerUncertain || (role == speech.Unknown && other)
 		h.appendSegment(role, alternative.Transcript)
 		return
 	}
@@ -80,7 +98,9 @@ func (h *deepgramHandler) attribute(alternative msginterfaces.Alternative, start
 		if text == "" {
 			text = word.Word
 		}
-		h.appendSegment(h.speakers.role(word.Start, word.End), text)
+		role, other := h.speakers.evidence(word.Start, word.End)
+		h.speakerUncertain = h.speakerUncertain || (role == speech.Unknown && other)
+		h.appendSegment(role, text)
 	}
 }
 

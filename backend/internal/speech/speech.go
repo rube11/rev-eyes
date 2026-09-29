@@ -41,13 +41,19 @@ type Segment struct {
 type Utterance struct {
 	Text     string    `json:"text"`
 	Segments []Segment `json:"segments"`
+	// Conflicting third-party evidence is not a confident speaker identity, but
+	// must not become permission for account changes when displayed as unknown.
+	SpeakerUncertain bool `json:"speaker_uncertain,omitempty"`
 }
 
 // ContextOnly prevents another person's speech (including a mixed utterance)
-// from being interpreted as authorization for an action.
+// from authorizing account changes. It does not prevent conversational answers.
 func (u *Utterance) ContextOnly() bool {
 	if u == nil {
 		return false
+	}
+	if u.SpeakerUncertain {
+		return true
 	}
 	for _, s := range u.Segments {
 		if s.Role == Other {
@@ -63,7 +69,7 @@ func (u *Utterance) PersonalMemory() bool {
 	if u == nil {
 		return true
 	} // Intentional text input.
-	if len(u.Segments) == 0 {
+	if u.SpeakerUncertain || len(u.Segments) == 0 {
 		return false
 	}
 	for _, s := range u.Segments {
