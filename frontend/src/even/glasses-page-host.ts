@@ -9,15 +9,34 @@ import type { RebuildPageContainer } from "@evenrealities/even_hub_sdk"
 
 import { buildCompactContent, buildCompactPage } from "./glasses-ui"
 
+const DISPLAY_TIMEOUT_MS = 5_000
+
 let bridgePromise: ReturnType<typeof waitForEvenAppBridge> | undefined
 let startup: Promise<void> | undefined
 let exitEventsRegistered = false
 let pageMutationTail: Promise<void> = Promise.resolve()
 let pageSuspended = false
 
+// Bound each native await, not the whole mutation: after a timeout its caller
+// must not resume later and commit stale page state. This does not cancel the
+// native call or retry it; newer queued updates can proceed independently.
+async function withDisplayTimeout<T>(operation: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("Glasses display update timed out")), DISPLAY_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 export function getEvenBridge() {
   if (!bridgePromise) {
-    const attempt = waitForEvenAppBridge()
+    const attempt = withDisplayTimeout(waitForEvenAppBridge())
     bridgePromise = attempt
     void attempt.catch(() => {
       if (bridgePromise === attempt) {
@@ -50,14 +69,14 @@ async function ensurePage() {
 
   startup ??= (async () => {
     const initialPage = buildCompactPage("SIGN IN ON PHONE")
-    const result = await bridge.createStartUpPageContainer(
+    const result = await withDisplayTimeout(bridge.createStartUpPageContainer(
       new CreateStartUpPageContainer({
         containerTotalNum: initialPage.containerTotalNum,
         listObject: initialPage.listObject,
         textObject: initialPage.textObject,
         imageObject: initialPage.imageObject,
       }),
-    )
+    ))
     if (result !== StartUpPageCreateResult.success) {
       throw new Error(`Glasses page failed (${result})`)
     }
@@ -76,7 +95,7 @@ async function ensurePage() {
       if (eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
         pageSuspended = true
         void serializePageMutation(async () => {
-          const stopped = await bridge.shutDownPageContainer(0)
+          const stopped = await withDisplayTimeout(bridge.shutDownPageContainer(0))
           if (stopped) {
             startup = undefined
           }
@@ -105,7 +124,7 @@ export async function renderGlassesPage(
       return
     }
     const bridge = await ensurePage()
-    const rebuilt = await bridge.rebuildPageContainer(page)
+    const rebuilt = await withDisplayTimeout(bridge.rebuildPageContainer(page))
     if (!rebuilt) {
       // Rejection does not destroy the native page; startup is created once.
       throw new Error("Glasses display update rejected")
@@ -138,11 +157,11 @@ async function upgradeTextContainer(
       return false
     }
     const bridge = await ensurePage()
-    return bridge.textContainerUpgrade(new TextContainerUpgrade({
+    return withDisplayTimeout(bridge.textContainerUpgrade(new TextContainerUpgrade({
       containerID,
       containerName,
       content,
-    }))
+    })))
   })
 }
 

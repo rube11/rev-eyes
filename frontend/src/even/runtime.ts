@@ -52,6 +52,11 @@ type NotificationPresentation = {
   id: string
   message: GlassesMessage
 }
+type PendingTranscript = {
+  message?: RealtimeServerMessage
+  queued: boolean
+  responseGeneration: number
+}
 const TRANSCRIPT_UPDATE_MS = 250
 const LISTENING_ANIMATION_MS = 800
 const LISTENING_FRAMES = [".", ". .", ". . .", ". ."] as const
@@ -137,8 +142,10 @@ export async function initializeEvenExperience(
   let transcriptLayoutThinking = false
   let lastTranscriptContent = ""
   let messagePageIndex = 0
-  let pendingTranscript: RealtimeServerMessage | undefined
+  let pendingTranscript: PendingTranscript | undefined
   let transcriptTimer: ReturnType<typeof setTimeout> | undefined
+  let responseGeneration = 0
+  let pendingResponses = 0
   let listeningAnimationTimer: ReturnType<typeof setTimeout> | undefined
   let listeningAnimationFrame = 0
   let locationStarted = false
@@ -351,7 +358,8 @@ export async function initializeEvenExperience(
       return
     }
     thinking = true
-    await renderTranscript()
+    if (visibleAssistant) await refreshAnswerStatus()
+    else await renderTranscript()
   }
 
   async function showReady() {
@@ -365,7 +373,10 @@ export async function initializeEvenExperience(
 
   async function showListening() {
     thinking = false
-    visibleAssistant = undefined
+    if (visibleAssistant) {
+      await refreshAnswerStatus()
+      return
+    }
     if (latestTranscript) {
       await renderTranscript()
       return
@@ -391,12 +402,13 @@ export async function initializeEvenExperience(
   }
 
   function answerAction(): string {
+    if (thinking || awaitingResponse) return "Thinking"
     return listeningState === "listening"
       ? listeningLabel() : "Tap to talk"
   }
 
   async function refreshListeningAnimation(): Promise<void> {
-    if (!active || sleeping || currentNotification || listeningState !== "listening") return
+    if (!active || sleeping || currentNotification || pendingResponses > 0 || listeningState !== "listening") return
     if (surface === "compact") {
       await upgradeCompactText(listeningPrompt())
     } else if (surface === "transcript" && !thinking) {
@@ -407,10 +419,11 @@ export async function initializeEvenExperience(
   }
 
   async function refreshAnswerStatus() {
-    if (!visibleAssistant || surface !== "message" || currentNotification) return
+    if (!visibleAssistant || currentNotification) return
     const message = visibleAssistant
     const action = answerAction()
-    const upgraded = await upgradeMessageStatus(buildMessageStatus(message, action, messagePageIndex))
+    const upgraded = surface === "message" &&
+      await upgradeMessageStatus(buildMessageStatus(message, action, messagePageIndex))
     if (!upgraded) await setPage(buildMessagePage(message, action, messagePageIndex), "message")
   }
 
@@ -695,30 +708,45 @@ export async function initializeEvenExperience(
       if (!message) {
         return
       }
-      if (connection.current !== nextSocket) return
+      if (!active || connection.current !== nextSocket) return
+      // Phone data must not wait for the glasses to acknowledge a page update.
+      if (message.type === "workspace_changed") {
+        if (message.resources) onWorkspaceChanged(message.resources)
+        return
+      }
       if (message.type === "user_transcript" && message.text) {
         // Receipt, not delayed rendering, owns the follow-up deadline.
         if (listeningState === "listening") cancelAssistantResponseWindow()
-        pendingTranscript = message
-        if (transcriptTimer === undefined) {
+        if (pendingTranscript) pendingTranscript.message = message
+        else pendingTranscript = { message, queued: false, responseGeneration }
+        if (transcriptTimer === undefined && !pendingTranscript.queued) {
           transcriptTimer = setTimeout(() => {
-            const pending = takePendingTranscript()
-            void enqueueTransition(async () => {
-              if (connection.current === nextSocket && pending) await handleServerMessage(pending)
-            })
+            queuePendingTranscript(nextSocket)
           }, TRANSCRIPT_UPDATE_MS)
         }
         return
       }
-      const pending = takePendingTranscript()
-      if (pending) {
-        void enqueueTransition(async () => {
-          if (connection.current === nextSocket) await handleServerMessage(pending)
-        })
+      const replacesTranscript =
+        (message.type === "assistant_response" && Boolean(message.text?.trim())) ||
+        message.type === "assistant_repeat"
+      if (replacesTranscript) {
+        responseGeneration += 1
+        pendingResponses += 1
+        takePendingTranscript()
+      } else {
+        // Seal the batch at a control boundary so later speech cannot jump
+        // ahead of conversation_started/idle or another server state change.
+        queuePendingTranscript(nextSocket, true)
       }
+      const generation = responseGeneration
       void enqueueTransition(async () => {
-        if (connection.current === nextSocket) {
+        try {
+          if (connection.current !== nextSocket) return
+          if (generation !== responseGeneration &&
+            (message.type === "assistant_thinking" || message.type === "ambient_candidate")) return
           await handleServerMessage(message)
+        } finally {
+          if (replacesTranscript) pendingResponses -= 1
         }
       })
     }
@@ -730,10 +758,30 @@ export async function initializeEvenExperience(
     connection.bind(nextSocket, handleMessage, handleClose)
   }
 
-  function takePendingTranscript() {
+  function queuePendingTranscript(socket: WebSocket, seal = false) {
     if (transcriptTimer !== undefined) clearTimeout(transcriptTimer)
     transcriptTimer = undefined
     const pending = pendingTranscript
+    if (seal) pendingTranscript = undefined
+    if (!pending || pending.queued) return
+    pending.queued = true
+    void enqueueTransition(async () => {
+      if (pendingTranscript === pending) pendingTranscript = undefined
+      const message = pending.message
+      pending.message = undefined
+      // Select the newest interim text when rendering starts, not when its
+      // throttle expires. Slow native writes must not build a stale backlog.
+      if (connection.current === socket && pending.responseGeneration === responseGeneration && message) {
+        await handleServerMessage(message)
+      }
+    })
+  }
+
+  function takePendingTranscript() {
+    if (transcriptTimer !== undefined) clearTimeout(transcriptTimer)
+    transcriptTimer = undefined
+    const pending = pendingTranscript?.message
+    if (pendingTranscript) pendingTranscript.message = undefined
     pendingTranscript = undefined
     return pending
   }
@@ -831,7 +879,9 @@ export async function initializeEvenExperience(
     if (currentNotification) {
       return
     }
-    if (latestTranscript) {
+    if (visibleAssistant) {
+      await refreshAnswerStatus()
+    } else if (latestTranscript) {
       await renderTranscript()
     } else {
       await showReady()
@@ -844,7 +894,6 @@ export async function initializeEvenExperience(
         if (!serverListeningEnabled || sleeping) return
         cancelAssistantResponseWindow()
         latestTranscript = ""
-        visibleAssistant = undefined
         setListeningState("listening")
         awaitingResponse = false
         reportStatus("Listening")
@@ -863,13 +912,6 @@ export async function initializeEvenExperience(
         }
         return
       }
-      case "workspace_changed": {
-        if (message.resources) {
-          onWorkspaceChanged(message.resources)
-        }
-        return
-      }
-
       case "notification": {
         await presentNotification(message)
         return
@@ -890,8 +932,8 @@ export async function initializeEvenExperience(
         }
         reportStatus(thinking || awaitingResponse ? "Thinking" : "Listening")
         // A transcript is evidence of a possible follow-up, not a display
-        // transition. Keep the previous answer readable until the agent
-        // actually begins another response.
+        // transition. Keep the previous answer readable until its replacement
+        // is ready, including turns that ultimately produce no response.
         if (!currentNotification && !(visibleAssistant && surface === "message")) {
           await renderTranscript()
         }
@@ -901,7 +943,6 @@ export async function initializeEvenExperience(
       case "ambient_candidate": {
         if (!serverListeningEnabled) return
         cancelAssistantResponseWindow()
-        visibleAssistant = undefined
         setListeningState("stopping")
         awaitingResponse = true
         if (!sleeping) { reportStatus("Thinking"); await showThinking() }
@@ -910,7 +951,6 @@ export async function initializeEvenExperience(
 
       case "assistant_thinking": {
         cancelAssistantResponseWindow()
-        visibleAssistant = undefined
         awaitingResponse = true
         if (
           listeningState === "starting" ||

@@ -21,8 +21,11 @@ async function harness(t, serverListeningEnabled = false, reconnect = false, rea
   const statuses = []
   const upgrades = []
   const nativeCalls = []
+  const workspaceEvents = []
   let nativePage
   let failedNativeRenders = 0
+  let nativeAckGate
+  let nativeAckDelay = 0
   let nativePageCreated = false
   let connectionGate
   const sockets = []
@@ -104,12 +107,22 @@ async function harness(t, serverListeningEnabled = false, reconnect = false, rea
       }
       if (method === 'rebuildPageContainer' || method === 'textContainerUpgrade') {
         if (failedNativeRenders > 0) { failedNativeRenders -= 1; return false }
+        if (nativeAckDelay) {
+          await new Promise(resolve => {
+            const id = ++sequence
+            timers.set(id, { fn: resolve, at: now + nativeAckDelay })
+          })
+        }
         if (method === 'rebuildPageContainer') nativePage = structuredClone(params)
         else {
           const target = nativePage.textObject.find(item => item.containerID === params.containerID && item.containerName === params.containerName)
           if (!target) return false
           target.content = params.content
         }
+        // The device may apply an update but never acknowledge it to the SDK.
+        const gate = nativeAckGate
+        nativeAckGate = undefined
+        if (gate) await gate
         return true
       }
       throw new Error('Unexpected native method: ' + method)
@@ -160,7 +173,9 @@ async function harness(t, serverListeningEnabled = false, reconnect = false, rea
     await flush()
   }
   const { initializeEvenExperience } = load(path.resolve(__dirname, '../src/even/runtime.ts'))
-  const dispose = await initializeEvenExperience('synthetic-test-token', value => statuses.push(value))
+  const dispose = await initializeEvenExperience(
+    'synthetic-test-token', value => statuses.push(value), resources => workspaceEvents.push(resources),
+  )
   t.after(dispose)
   await advance(0)
   const message = async (type, extra = {}) => { socket.listeners.get('message')?.({ data: JSON.stringify({ type, ...extra }) }); await flush() }
@@ -173,9 +188,11 @@ async function harness(t, serverListeningEnabled = false, reconnect = false, rea
     await message('assistant_thinking')
     await message('assistant_response', { text: 'It is noon.' })
   }
-  return { audio, controls, pages, statuses, upgrades, pcmFrames, sockets,
+  return { audio, controls, pages, statuses, upgrades, pcmFrames, sockets, workspaceEvents,
     nativeCalls, nativeText: () => nativePage?.textObject.map(item => item.content).join('\n'),
     failNativeRender: (count = 1) => { failedNativeRenders = count },
+    setNativeAckDelay: milliseconds => { nativeAckDelay = milliseconds },
+    delayNativeAck: () => { let release; nativeAckGate = new Promise(resolve => { release = resolve }); return release },
     delayConnection: () => { let release; connectionGate = new Promise(resolve => { release = resolve }); return release },
     pcm: async (pcm, speakerRole, source = 'glasses') => { eventHandler?.({ audioEvent: { audioPcm: pcm, speakerRole, source } }); await flush() }, message, click, sleep, scroll, reply, advance, dispose,
     disconnect: async () => { socket.close(); await flush() },
@@ -196,6 +213,134 @@ test('real display host delivers a Moonshine conversation reply through the inst
   assert.match(h.nativeText(), /It is noon\./)
   assert.equal(h.audio.filter(Boolean).length, 1)
   assert.equal(h.audio.includes(false), false)
+})
+
+test('phone chat refreshes immediately while a display acknowledgment is stalled', async t => {
+  const h = await harness(t, true, false, true)
+  await h.message('conversation_started')
+  await h.message('user_transcript', { text: 'Hey glasses, what time is it?' })
+  await h.advance(250)
+  const release = h.delayNativeAck()
+  try {
+    await h.message('assistant_thinking')
+    await h.message('workspace_changed', { resources: ['conversations'] })
+    assert.equal(h.workspaceEvents.length, 1)
+    assert.equal(h.workspaceEvents[0][0], 'conversations')
+  } finally {
+    release()
+    await h.advance(0)
+  }
+})
+
+for (const acknowledgmentMs of [300, 500]) {
+  test(`sustained ${acknowledgmentMs}ms display acknowledgments do not accumulate stale transcripts`, async t => {
+    const h = await harness(t, true, false, true)
+    await h.message('conversation_started')
+    h.setNativeAckDelay(acknowledgmentMs)
+    try {
+      // Model a continuous recognizer emitting ten interim results per second.
+      for (let update = 1; update <= 60; update += 1) {
+        await h.message('user_transcript', { text: `Transcript update ${update}` })
+        await h.advance(100)
+      }
+      const displayed = Number(h.nativeText().match(/Transcript update (\d+)/)?.[1])
+      assert.ok(displayed >= 45, `latest input was 60 but display was ${displayed}`)
+
+      await h.message('assistant_thinking')
+      await h.message('assistant_response', { text: 'The final answer.' })
+      await h.advance(acknowledgmentMs * 2)
+      assert.match(h.nativeText(), /The final answer\./)
+      assert.equal(h.audio.filter(Boolean).length, 1)
+      assert.equal(h.audio.includes(false), false)
+    } finally {
+      h.setNativeAckDelay(0)
+      await h.advance(10_000)
+    }
+  })
+}
+
+test('queued transcript batches cannot move speech across conversation boundaries', async t => {
+  const h = await harness(t, true, false, true)
+  await h.message('conversation_started')
+  await h.message('user_transcript', { text: 'The first conversation.' })
+  await h.advance(250)
+  const release = h.delayNativeAck()
+  try {
+    await h.advance(800)
+    await h.message('user_transcript', { text: 'The previous conversation ended.' })
+    await h.advance(250)
+    await h.message('conversation_idle')
+    await h.message('conversation_started')
+    await h.message('user_transcript', { text: 'This belongs to the new conversation.' })
+    await h.advance(250)
+    release()
+    await h.advance(0)
+    assert.match(h.nativeText(), /This belongs to the new\s+conversation\./)
+    assert.doesNotMatch(h.nativeText(), /previous conversation ended/)
+  } finally {
+    release()
+    await h.advance(0)
+  }
+})
+
+for (const method of ['rebuildPageContainer', 'textContainerUpgrade']) {
+  test(`a stalled ${method} cannot consume the queued answer or a late acknowledgment`, async t => {
+    const h = await harness(t, true, false, true)
+    await h.message('conversation_started')
+    await h.message('user_transcript', { text: 'Hey glasses, what time is it?' })
+    await h.advance(250)
+    const release = h.delayNativeAck()
+    try {
+      if (method === 'textContainerUpgrade') await h.advance(800)
+      else await h.message('assistant_thinking')
+      assert.equal(h.nativeCalls.at(-1), method)
+      await h.message('assistant_response', { text: 'It is noon.' })
+      await h.message('conversation_idle')
+      await h.advance(5_000)
+      assert.match(h.nativeText(), /It is noon\./)
+      assert.notEqual(h.statuses.at(-1), 'Thinking')
+      assert.ok(h.statuses.includes('Glasses display update timed out'))
+      const display = h.nativeText()
+      release()
+      await h.advance(0)
+      assert.equal(h.nativeText(), display, 'late acknowledgment must not restore stale state')
+      assert.equal(h.nativeCalls.filter(call => call === 'createStartUpPageContainer').length, 1)
+      assert.equal(h.audio.filter(Boolean).length, 1)
+      assert.equal(h.audio.includes(false), false)
+    } finally {
+      release()
+      await h.advance(0)
+    }
+  })
+}
+
+test('a stalled display acknowledgment cannot hold reconnect or teardown indefinitely', async t => {
+  const h = await harness(t, true, true, true)
+  await h.message('conversation_started')
+  const release = h.delayNativeAck()
+  try {
+    await h.message('assistant_thinking')
+    await h.disconnect()
+    await h.advance(6_000)
+    assert.equal(h.sockets.length, 2)
+    assert.equal(h.audio.at(-1), true)
+  } finally {
+    release()
+    await h.advance(0)
+  }
+
+  const releaseAgain = h.delayNativeAck()
+  try {
+    await h.message('assistant_thinking')
+    let disposed = false
+    const disposal = h.dispose().then(() => { disposed = true })
+    await h.advance(5_000)
+    assert.equal(disposed, true)
+    await disposal
+  } finally {
+    releaseAgain()
+    await h.advance(0)
+  }
 })
 
 test('listening dots breathe across compact and transcript views, then stop while thinking', async t => {
@@ -228,6 +373,8 @@ test('a rejected transcript write cannot consume the following assistant respons
   await h.message('conversation_started')
   h.failNativeRender()
   await h.message('user_transcript', { text: 'Hey glasses, what time is it?' })
+  await h.advance(250)
+  assert.equal(h.statuses.at(-1), 'Glasses display update rejected')
   await h.message('assistant_response', { text: 'It is noon.' })
   await h.advance(5_000)
   assert.match(h.nativeText(), /It is noon\./)
@@ -269,7 +416,7 @@ test('a reply restarts the mic after stop acknowledgement and listens for exactl
   assert.equal(h.pages.at(-1).footer, 'Tap to talk')
 })
 
-test('follow-up speech keeps the answer visible until the agent starts responding', async t => {
+test('follow-up speech keeps the answer visible until a replacement is ready', async t => {
   const h = await harness(t)
   await h.reply()
   await h.message('listening_stopped')
@@ -280,8 +427,10 @@ test('follow-up speech keeps the answer visible until the agent starts respondin
   assert.equal(h.pages.at(-1).message.body, 'It is noon.')
 
   await h.message('assistant_thinking')
-  assert.equal(h.pages.at(-1).message, undefined)
+  assert.equal(h.pages.at(-1).message.body, 'It is noon.')
   assert.equal(h.pages.at(-1).footer, 'Thinking')
+  await h.message('assistant_response', { text: 'Tomorrow is Monday.' })
+  assert.equal(h.pages.at(-1).message.body, 'Tomorrow is Monday.')
 })
 
 test('server-managed follow-up also preserves the answer through transcript updates', async t => {
@@ -297,9 +446,29 @@ test('server-managed follow-up also preserves the answer through transcript upda
   assert.equal(h.pages.at(-1).message.body, 'It is noon.')
 
   await h.message('assistant_thinking')
-  assert.equal(h.pages.at(-1).message, undefined)
+  assert.equal(h.pages.at(-1).message.body, 'It is noon.')
   assert.equal(h.pages.at(-1).footer, 'Thinking')
 })
+
+for (const completion of ['assistant_done', 'assistant_response']) {
+  test(`a new keyword conversation and silent ${completion} preserve the previous answer`, async t => {
+    const h = await harness(t, true, false, true)
+    await h.message('assistant_response', { text: 'Your meeting starts at noon.' })
+    await h.message('conversation_idle')
+    await h.message('conversation_started')
+    assert.match(h.nativeText(), /Your meeting starts at noon\./)
+    await h.message('user_transcript', { text: 'Hey glasses, never mind.' })
+    await h.message('assistant_thinking')
+    assert.match(h.nativeText(), /Your meeting starts at noon\./)
+    assert.match(h.nativeText(), /Thinking/)
+    await h.message(completion)
+    assert.match(h.nativeText(), /Your meeting starts at noon\./)
+    assert.doesNotMatch(h.nativeText(), /Thinking/)
+    await h.message('conversation_idle')
+    assert.match(h.nativeText(), /Your meeting starts at noon\./)
+    assert.equal(h.audio.filter(Boolean).length, 1)
+  })
+}
 
 test('speech near expiry is not cut off and the next reply gets a fresh window', async t => {
   const h = await harness(t)
