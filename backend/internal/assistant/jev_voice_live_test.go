@@ -22,6 +22,92 @@ type voiceRecordingEvaluator struct {
 	result jev.Response
 }
 
+// Exercises the real router followed by tool selection, with no tool execution
+// or memory writes. Scores also let us compare search cutoffs without extra calls.
+func TestLiveJevSearchIntent(t *testing.T) {
+	if os.Getenv("RUN_LIVE_JEV_VOICE_TEST") != "1" {
+		t.Skip("set RUN_LIVE_JEV_VOICE_TEST=1 to call Jev")
+	}
+	client, err := jev.New(os.Getenv("JEV_API_KEY"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	search, _ := websearch.New("synthetic-key-never-used")
+	specs := []tool.Spec{(&location.Tool{}).Spec(), search.Spec(), (&reminder.Tool{}).Spec(), (&watch.Tool{}).Spec()}
+	research := []session.Message{
+		{Speaker: session.SpeakerUser, Text: "Research Mbox AI in Henderson and how my skills fit."},
+		{Speaker: session.SpeakerAssistant, Text: "I couldn't verify the company. Send its exact name and I'll research it."},
+	}
+	for _, tc := range []struct {
+		name, query string
+		history     []session.Message
+		route       Action
+		search      bool
+	}{
+		{"company_overview", "Can you tell me a little bit about J T 4 from Las Vegas?", nil, ActionRespond, true},
+		{"unfamiliar_organization", "What does Redwood Materials in Nevada do?", nil, ActionRespond, true},
+		{"company_fit", "Research JT4 in Las Vegas and explain how my Rust and Go projects fit their work.", nil, ActionRespond, true},
+		{"name_correction", "It's Intbox AI, like enterprise.", research, ActionRespond, true},
+		{"location_correction", "No, Henderson, not Houston.", research, ActionRespond, true},
+		{"explicit_search", "Search the web.", research, ActionRespond, true},
+		{"weather", "What's the weather in Seattle today?", nil, ActionRespond, true},
+		{"definition", "What does idempotent mean?", nil, ActionRespond, false},
+		{"arithmetic", "What is seventeen times six?", nil, ActionRespond, false},
+		{"writing", "Rewrite this more politely: Send me the report now.", nil, ActionRespond, false},
+		{"personal_recall", "What is my usual coffee order?", nil, ActionRespond, false},
+		{"explicit_no_search", "Without searching, explain what a defense contractor does.", nil, ActionRespond, false},
+		{"company_writing_only", "Make this sentence more professional: I want to work at JT4 because I like engineering.", nil, ActionRespond, false},
+		{"company_no_search", "Don't search the web. Summarize only these facts: JT4 supports defense testing; I built a Rust networking project.", nil, ActionRespond, false},
+		{"writing_name_correction", "No, spell it Maya, not Maria.", []session.Message{
+			{Speaker: session.SpeakerUser, Text: "Draft a thank-you note to Maya for helping with my project."},
+			{Speaker: session.SpeakerAssistant, Text: "Dear Maria, thank you for helping with my project."},
+		}, ActionRespond, false},
+		{"saved_memory_correction", "Change my saved protein target to 150 grams.", nil, ActionMemoryCorrect, false},
+		{"contextual_memory_correction", "No, Maya is my manager, not Maria.", []session.Message{
+			{Speaker: session.SpeakerUser, Text: "Who do you remember as my manager?"},
+			{Speaker: session.SpeakerAssistant, Text: "Your saved memory says Maria is your manager."},
+		}, ActionMemoryCorrect, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := &voiceRecordingEvaluator{client: client}
+			router, _ := NewJevRouter(recorder)
+			utterance := &speech.Utterance{Text: tc.query, Segments: []speech.Segment{{Role: speech.Unknown, Text: tc.query}}}
+			conversation := session.Conversation{Speech: utterance, Profile: "CS student; built Rust networking and a Go wearable assistant. Usual coffee order: oat latte.", Messages: tc.history}
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			decision, err := router.RouteWithContext(ctx, tc.query, conversation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("route=%s expected=%s", decision.Action, tc.route)
+			if decision.Action != tc.route {
+				t.Fatalf("route=%s want=%s", decision.Action, tc.route)
+			}
+			if decision.Action == ActionMemoryCorrect {
+				return
+			}
+			turn, err := NewResponseContext(tool.Scope{Speech: utterance, TimeZone: "America/Los_Angeles"}, decision.Query, conversation, nil, time.Date(2026, 9, 29, 15, 0, 0, 0, time.UTC))
+			if err != nil {
+				t.Fatal(err)
+			}
+			classifier, _ := NewJevToolClassifier(recorder)
+			selected, err := classifier.Select(ctx, ToolState{Context: turn}, specs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := recorder.result.Answers[searchToolName].Noul
+			t.Logf("search_probability=%.3f cutoff_0.5=%t cutoff_0.35=%t selected=%v", p, p > .5, p > .35, selected)
+			var want []string
+			if tc.search {
+				want = []string{searchToolName}
+			}
+			if !reflect.DeepEqual(selected, want) {
+				t.Errorf("selected=%v want=%v", selected, want)
+			}
+		})
+	}
+}
+
 func TestLiveJevToolPrerequisiteSafety(t *testing.T) {
 	if os.Getenv("RUN_LIVE_JEV_VOICE_TEST") != "1" {
 		t.Skip("set RUN_LIVE_JEV_VOICE_TEST=1 to call Jev")

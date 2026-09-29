@@ -254,8 +254,8 @@ func jevRouteCriteria() map[string]any {
 			"excludes": "Questions, commands, explicit memory operations, first-person activity changes, and a useful contextual explanation of unfamiliar terminology (suggest_tip).",
 		},
 		string(ActionRespond): map[string]any{
-			"when":     "A direct factual question or command that needs an answer or tool, including search, location, reminders, and ongoing public monitoring, and is not advice, coaching, or a memory or profile operation below.",
-			"includes": []string{"What time does the meeting start?", "Remind me tomorrow at nine.", "Tell me when the strike ends."},
+			"when":     "A direct factual question or command that needs an answer or tool, including search, location, reminders, and ongoing public monitoring, OR a clarification/correction that continues such an active request. Correcting a misheard name, spelling, location, or the assistant's previous answer is conversation repair, not a saved-memory operation. Use recent dialogue to recover the request being clarified.",
+			"includes": []string{"What time does the meeting start?", "Remind me tomorrow at nine.", "Tell me when the strike ends.", "During company research: 'It's Intbox AI, like enterprise.'", "After an incorrect lookup: 'No, Henderson, not Houston.'"},
 			"excludes": "Requests for practical advice use suggest_tip. Also excludes bare completed-activity statements, memory management, and profile controls.",
 		},
 		string(ActionSuggestTip): map[string]any{
@@ -283,8 +283,9 @@ func jevRouteCriteria() map[string]any {
 			"includes": []string{"What do you remember about Jolene?", "What do you know about me?"},
 		},
 		string(ActionMemoryCorrect): map[string]any{
-			"when":     "The user says a remembered detail is wrong or supplies its replacement.",
-			"includes": []string{"That's wrong.", "Change my protein target to 150 grams."},
+			"when":     "The user corrects a saved personal fact or preference, either explicitly asking to update memory or correcting a detail the assistant just recalled from saved memory.",
+			"includes": []string{"After a saved-memory review: 'That's wrong.'", "Change my protein target to 150 grams."},
+			"excludes": "Corrections to a current request, misheard names, search subjects, or ordinary assistant answers use respond. Mentioning a replacement fact is not by itself a request to edit saved memory.",
 		},
 		string(ActionMemoryForget): map[string]any{
 			"when":     "An explicit request to remove a remembered detail.",
