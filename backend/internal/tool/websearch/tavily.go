@@ -33,7 +33,7 @@ const parametersSchema = `{
   "properties": {
     "query": {
       "type": "string",
-      "description": "A precise natural-language question preserving key names, dates, locations, and relevant user constraints. Do not use a keyword list or add phrases such as public web."
+      "description": "A short, focused search phrase or natural-language question under 400 characters. Preserve key names, grounded dates and locations, and essential constraints. Omit assistant instructions and unrelated subquestions."
     },
     "mode": {
       "type": "string",

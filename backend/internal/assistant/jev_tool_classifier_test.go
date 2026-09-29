@@ -42,6 +42,10 @@ func TestJevToolClassifierSharesAllResponseContext(t *testing.T) {
 	if !reflect.DeepEqual(evaluator.request.State, state) {
 		t.Fatal("classifier did not receive the complete response context")
 	}
+	searchCriteria, ok := evaluator.request.Questions[searchToolName].Criteria.(map[string]string)
+	if !ok || !strings.Contains(searchCriteria["true"], "weather") || !strings.Contains(searchCriteria["false"], "stable general knowledge") {
+		t.Fatal("search selection needs positive and negative examples")
+	}
 	if turn.Action != ActionSuggestTip || turn.CurrentLocalTime != "2026-09-19T11:00:00-07:00" || !reflect.DeepEqual(turn.Memories, cards) || turn.Profile != conversation.Profile || turn.Summary != conversation.Summary || turn.Messages[0].Text != conversation.Messages[0].Text {
 		t.Fatalf("turn=%+v", turn)
 	}

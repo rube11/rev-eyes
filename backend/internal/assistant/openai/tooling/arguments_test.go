@@ -17,10 +17,11 @@ import (
 const testSchema = `{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`
 
 type observedRequest struct {
-	Model string            `json:"model"`
-	Input []json.RawMessage `json:"input"`
-	Text  map[string]any    `json:"text"`
-	Tools []json.RawMessage `json:"tools"`
+	Instructions string            `json:"instructions"`
+	Model        string            `json:"model"`
+	Input        []json.RawMessage `json:"input"`
+	Text         map[string]any    `json:"text"`
+	Tools        []json.RawMessage `json:"tools"`
 }
 
 func TestArgumentBuilderUsesFixedSchemaAndCompleteContext(t *testing.T) {
@@ -35,6 +36,11 @@ func TestArgumentBuilderUsesFixedSchemaAndCompleteContext(t *testing.T) {
 		}
 		if len(request.Tools) > 0 || request.Model != "argument-model" {
 			t.Fatalf("request=%+v", request)
+		}
+		for _, example := range []string{"under 400 characters", "Seattle weather forecast today", "quiet cafes Seattle", "Bluebird Museum opening hours", "New York news today", "Never guess an official domain", "Only one search call"} {
+			if !strings.Contains(request.Instructions, example) {
+				t.Errorf("missing search guidance %q", example)
+			}
 		}
 		format := request.Text["format"].(map[string]any)
 		schema := format["schema"].(map[string]any)

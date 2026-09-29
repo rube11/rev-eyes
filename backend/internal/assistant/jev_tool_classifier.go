@@ -35,6 +35,14 @@ func (c *JevToolClassifier) Select(ctx context.Context, state ToolState, specs [
 			Type:         jev.QuestionNoul,
 			Instructions: fmt.Sprintf("Does fulfilling `context.query` require calling %q now? Tool purpose: %s\n%s\n%s", spec.Name, spec.Description, toolSelectionInstructions, toolSelectionPolicy(spec.Name)),
 		}
+		if spec.Name == searchToolName {
+			question := questions[spec.Name]
+			question.Criteria = map[string]string{
+				"true":  "The current request needs public evidence not already supplied by completed tools. Search even without the words search or look up: weather today, whether a place is open, current prices, recent news, local recommendations, or verification of a public claim. Examples with grounded locations: 'What's the weather in Seattle today?', 'Find a quiet cafe in Seattle', and 'When does Bluebird Museum open tomorrow?' all require search. 'Will it rain there tomorrow?' also requires search when recent dialogue resolves there. After get_current_location succeeds, a nearby request still needs search.",
+				"false": "The answer is stable general knowledge (such as 'What does idempotent mean?'), personal memory recall, or writing help; sufficient current evidence already answers the request; search was already attempted this turn; or a required location prerequisite remains unresolved. Plausible model knowledge is not current evidence for weather, hours, prices, or news.",
+			}
+			questions[spec.Name] = question
+		}
 		if spec.Name == reminderToolName {
 			question := questions[spec.Name]
 			question.Criteria = map[string]string{
