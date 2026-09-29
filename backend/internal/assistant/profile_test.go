@@ -18,6 +18,9 @@ type profileMemoryStub struct {
 }
 
 func (m profileMemoryStub) Profile(ctx context.Context, scope tool.Scope) (string, error) {
+	if m.profile == nil {
+		return m.managedMemoryStub.Profile(ctx, scope)
+	}
 	return m.profile(ctx, scope)
 }
 func (m profileMemoryStub) SetProfileOverride(ctx context.Context, scope tool.Scope, lookup memory.Lookup, layer memory.ProfileLayer) (int, error) {

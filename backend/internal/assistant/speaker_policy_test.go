@@ -16,7 +16,7 @@ func otherSpeech() *speech.Utterance {
 }
 
 func TestOtherSpeechCannotConfirmOrSelectAccountRoutes(t *testing.T) {
-	for _, action := range []Action{ActionRemember, ActionMemoryCorrect, ActionMemoryForget, ActionProfileInclude, ActionProfileExclude, ActionMemoryReview, ActionRespond, ActionResolveProposal, ActionStateTransition} {
+	for _, action := range []Action{ActionRemember, ActionMemoryCorrect, ActionMemoryForget, ActionProfileInclude, ActionProfileExclude, ActionMemoryReview, ActionResolveProposal, ActionStateTransition} {
 		t.Run(string(action), func(t *testing.T) {
 			s := NewService(routerFunc(func(context.Context, string) (Decision, error) { return Decision{Action: action}, nil }),
 				agentFunc(func(context.Context, tool.Scope, string, session.Conversation, []memory.Card) (string, error) {
@@ -34,6 +34,78 @@ func TestOtherSpeechCannotConfirmOrSelectAccountRoutes(t *testing.T) {
 			out, err := s.HandleUtterance(context.Background(), tool.Scope{Speech: otherSpeech()}, "turn", "yes")
 			if err != nil || out.Decision.Action != ActionIgnore {
 				t.Fatalf("%+v %v", out, err)
+			}
+		})
+	}
+}
+
+func TestOtherSpeechCanRespondWithoutGainingAccountAuthority(t *testing.T) {
+	for _, kind := range []string{"other", "mixed", "uncertain"} {
+		input := &speech.Utterance{Text: "Hey glasses, what is two plus two?", Segments: []speech.Segment{{Role: speech.Other, Text: "Hey glasses, what is two plus two?"}}}
+		if kind == "mixed" {
+			input.Segments = append(input.Segments, speech.Segment{Role: speech.Self, Text: "Please."})
+		}
+		if kind == "uncertain" {
+			input.Segments[0].Role = speech.Unknown
+			input.SpeakerUncertain = true
+		}
+		evaluator := jevEvaluatorReturning(ActionRespond)
+		router, _ := NewJevRouter(evaluator)
+		called := false
+		s := NewService(router, agentFunc(func(_ context.Context, scope tool.Scope, _ string, conversation session.Conversation, _ []memory.Card) (string, error) {
+			called = true
+			if scope.Speech != input || conversation.Speech != input || !scope.Speech.ContextOnly() {
+				t.Error("response lost speaker attribution and account restrictions")
+			}
+			return "Four.", nil
+		}), managedMemoryStub{}, noConversation, proposalConfirmerFunc(func(context.Context, tool.Scope, string) (string, bool, error) {
+			t.Error("other speech attempted proposal confirmation")
+			return "", false, nil
+		}))
+		out, err := s.HandleUtterance(context.Background(), tool.Scope{Speech: input}, "turn", input.Text)
+		if err != nil || !called || out.Decision.Action != ActionRespond || out.Response != "Four." {
+			t.Fatalf("kind=%s outcome=%+v called=%v error=%v", kind, out, called, err)
+		}
+		criteria := evaluator.request.Questions[jevRouteQuestion].Criteria.(map[string]any)
+		if criteria[string(ActionRespond)] == nil || criteria[string(ActionRemember)] != nil {
+			t.Fatal("respond must be available without enabling account routes")
+		}
+	}
+}
+
+func TestContextualTipsRouteWithProfileAndKeepSpeakerPermissions(t *testing.T) {
+	for _, action := range []Action{ActionSuggestTip, ActionRemember, ActionProfileInclude} {
+		t.Run(string(action), func(t *testing.T) {
+			evaluator := jevEvaluatorReturning(action)
+			router, _ := NewJevRouter(evaluator)
+			profileLoads := 0
+			store := profileMemoryStub{profile: func(context.Context, tool.Scope) (string, error) {
+				profileLoads++
+				return "The wearer knows basic programming but is new to APIs.", nil
+			}}
+			called := false
+			s := NewService(router, agentFunc(func(_ context.Context, scope tool.Scope, _ string, conversation session.Conversation, _ []memory.Card) (string, error) {
+				called = true
+				if !scope.Speech.ContextOnly() || conversation.Profile == "" {
+					t.Error("lost profile or speaker attribution")
+				}
+				return "Idempotent: repeating the operation has the same effect as doing it once.", nil
+			}), store, noConversation, proposalConfirmerFunc(func(context.Context, tool.Scope, string) (string, bool, error) {
+				t.Error("overheard conversation reached confirmation")
+				return "", false, nil
+			}))
+			scope := tool.Scope{Speech: &speech.Utterance{Segments: []speech.Segment{{Role: speech.Other}}}}
+			out, err := s.HandleUtterance(context.Background(), scope, "turn", "The operation is idempotent.")
+			if err != nil || profileLoads != 1 || called != (action == ActionSuggestTip) {
+				t.Fatalf("out=%+v err=%v loads=%d called=%v", out, err, profileLoads, called)
+			}
+			state := evaluator.request.State.(jevState)
+			if state.Profile == "" || state.Speech != scope.Speech {
+				t.Fatal("Jev did not receive familiarity and speaker attribution")
+			}
+			criteria := evaluator.request.Questions[jevRouteQuestion].Criteria.(map[string]any)
+			if len(criteria) != 4 || criteria[string(ActionRemember)] != nil {
+				t.Fatal("other speech offered mutation routes")
 			}
 		})
 	}
@@ -70,7 +142,7 @@ func TestOtherSpeechTipKeepsAttributionAndPersonalContext(t *testing.T) {
 		t.Fatal("router did not receive speaker attribution")
 	}
 	criteria := evaluator.request.Questions[jevRouteQuestion].Criteria.(map[string]any)
-	if len(criteria) != 3 || criteria[string(ActionSuggestTip)] == nil || criteria[string(ActionRespond)] != nil {
+	if len(criteria) != 4 || criteria[string(ActionSuggestTip)] == nil || criteria[string(ActionRespond)] == nil {
 		t.Fatalf("unsafe routes: %+v", criteria)
 	}
 }

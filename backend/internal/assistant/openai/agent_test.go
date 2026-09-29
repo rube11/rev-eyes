@@ -117,9 +117,8 @@ func TestAgentReturnsText(t *testing.T) {
 	if request.Store {
 		t.Fatal("response must not be stored")
 	}
-	if len(request.Include) != 1 ||
-		request.Include[0] != "reasoning.encrypted_content" {
-		t.Fatalf("include = %#v", request.Include)
+	if len(request.Include) != 0 {
+		t.Fatalf("final composer requested unused encrypted reasoning: %#v", request.Include)
 	}
 }
 
@@ -164,6 +163,11 @@ func TestSuggestTipUsesSharedContextToolsAndTipInstructions(t *testing.T) {
 	if result.Text == "" || !strings.Contains(request.Instructions, "classified suggest_tip") ||
 		!strings.Contains(request.Instructions, "# Eyes tonality guide") {
 		t.Fatalf("result=%#v instructions=%q", result, request.Instructions)
+	}
+	for _, rule := range []string{"meaning in this conversation", "180 characters", "Do not invent an acronym expansion", "avoid patronizing or repeating"} {
+		if !strings.Contains(request.Instructions, rule) {
+			t.Errorf("missing contextual explanation rule %q", rule)
+		}
 	}
 	encodedInput, _ := json.Marshal(request.Input)
 	if !strings.Contains(string(encodedInput), "speech_attribution") || !strings.Contains(string(encodedInput), `\"speaker_role\":\"other\"`) {

@@ -83,7 +83,7 @@ func TestJevRouterSuppliesConversationToEveryJudgment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conversation := session.Conversation{Messages: []session.Message{{
+	conversation := session.Conversation{Profile: "User understands database terminology.", Summary: "Already explained idempotent.", Messages: []session.Message{{
 		Speaker: session.SpeakerUser, Text: "What do you know about my team?",
 	}}}
 
@@ -97,6 +97,9 @@ func TestJevRouterSuppliesConversationToEveryJudgment(t *testing.T) {
 	state, ok := evaluator.request.State.(jevState)
 	if !ok || state.LatestUtterance != "What do you know about me?" || len(state.RecentDialogue) != 1 {
 		t.Fatalf("state = %#v", evaluator.request.State)
+	}
+	if state.Profile != conversation.Profile || state.Summary != conversation.Summary {
+		t.Fatal("routing lost familiarity or previously explained context")
 	}
 	questions := evaluator.request.Questions
 	if len(questions) != 1+1+len(memory.TopicValues())+len(memory.KindValues()) {

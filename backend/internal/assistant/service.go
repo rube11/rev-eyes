@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rube11/rev-eyes/backend/internal/memory"
 	"github.com/rube11/rev-eyes/backend/internal/session"
@@ -102,6 +103,14 @@ func (s *Service) HandleUtterance(
 	utteranceID string,
 	utterance string,
 ) (Outcome, error) {
+	started := time.Now()
+	var contextTime, routeTime, retrievalTime, agentTime time.Duration
+	defer func() {
+		slog.InfoContext(ctx, "assistant turn timing", "utterance_id", utteranceID,
+			"context_ms", contextTime.Milliseconds(), "route_ms", routeTime.Milliseconds(),
+			"retrieval_ms", retrievalTime.Milliseconds(), "agent_ms", agentTime.Milliseconds(),
+			"total_ms", time.Since(started).Milliseconds())
+	}()
 	turnScope := scope
 	turnScope.UtteranceID = strings.TrimSpace(utteranceID)
 
@@ -117,21 +126,34 @@ func (s *Service) HandleUtterance(
 
 	var conversation session.Conversation
 	var conversationErr error
+	var profile string
 	prepared := false
 	if !shouldIgnore(utterance) {
-		// Load once before routing so a clarification can change the lookup.
-		// Reuse the same context for the answer; do not add a resolver model call.
+		contextStarted := time.Now()
+		// Route with current familiarity and dialogue, then reuse both for the
+		// response. Profile and conversation reads are independent.
+		var contextGroup sync.WaitGroup
+		contextGroup.Add(1)
+		go func() {
+			defer contextGroup.Done()
+			profile = s.loadProfile(ctx, scope)
+		}()
 		conversation, conversationErr = s.conversation.Prepare(ctx, scope, utteranceID, utterance)
+		contextGroup.Wait()
+		contextTime = time.Since(contextStarted)
 		prepared = true
 	}
 	conversation.Speech = scope.Speech
+	conversation.Profile = profile
+	routeStarted := time.Now()
 	decision, err := s.router.RouteWithContext(ctx, utterance, conversation)
+	routeTime = time.Since(routeStarted)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("route utterance: %w", err)
 	}
-	// Observed third-party or mixed speech is context, never an account command.
+	// Other or mixed speech may receive answers, but is not an account command.
 	// Enforce this independently of classifier output and before any mutations.
-	if scope.Speech.ContextOnly() && decision.Action != ActionSuggestTip && decision.Action != ActionIgnore && decision.Action != ActionStateUpdate {
+	if scope.Speech.ContextOnly() && decision.Action != ActionRespond && decision.Action != ActionSuggestTip && decision.Action != ActionIgnore && decision.Action != ActionStateUpdate {
 		return Outcome{Decision: Decision{Action: ActionIgnore}}, nil
 	}
 
@@ -195,14 +217,10 @@ func (s *Service) HandleUtterance(
 	var (
 		cards        []memory.Card
 		memoryErr    error
-		profile      string
 		contextGroup sync.WaitGroup
 	)
-	contextGroup.Add(3)
-	go func() {
-		defer contextGroup.Done()
-		profile = s.loadProfile(ctx, scope)
-	}()
+	retrievalStarted := time.Now()
+	contextGroup.Add(2)
 	go func() {
 		defer contextGroup.Done()
 		cards, memoryErr = s.memories.Find(ctx, scope, lookup)
@@ -212,6 +230,7 @@ func (s *Service) HandleUtterance(
 		if prepared {
 			return
 		}
+		profile = s.loadProfile(ctx, scope)
 		conversation, conversationErr = s.conversation.Prepare(
 			ctx,
 			scope,
@@ -220,6 +239,7 @@ func (s *Service) HandleUtterance(
 		)
 	}()
 	contextGroup.Wait()
+	retrievalTime = time.Since(retrievalStarted)
 	conversation.Profile = profile
 
 	if memoryErr != nil {
@@ -232,7 +252,9 @@ func (s *Service) HandleUtterance(
 
 	// Retrieval uses the enriched query; the response and tool workflow need the
 	// user's actual wording, including self-corrections, tone, and constraints.
+	agentStarted := time.Now()
 	result, err := s.agent.RespondWithResult(ctx, turnScope, decision.Action, strings.TrimSpace(utterance), conversation, cards)
+	agentTime = time.Since(agentStarted)
 	outcome.ProposalCreated = result.ProposalCreated
 	outcome.ProposalKinds = result.ProposalKinds
 	if err != nil && outcome.ProposalCreated && ctx.Err() == nil {

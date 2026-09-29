@@ -61,10 +61,9 @@ func New(apiKey, model string, config ...Config) (Client, error) {
 }
 
 type Options struct {
-	Instructions     string
-	Text             map[string]any
-	MaxOutputTokens  int
-	IncludeReasoning bool
+	Instructions    string
+	Text            map[string]any
+	MaxOutputTokens int
 }
 
 type Response struct {
@@ -87,7 +86,6 @@ type createRequest struct {
 	Text            map[string]any    `json:"text,omitempty"`
 	MaxOutputTokens int               `json:"max_output_tokens,omitempty"`
 	Store           bool              `json:"store"`
-	Include         []string          `json:"include,omitempty"`
 }
 
 type outputItem struct {
@@ -119,10 +117,6 @@ func (c *Client) Create(ctx context.Context, input []json.RawMessage, options Op
 		MaxOutputTokens: options.MaxOutputTokens,
 		Store:           false,
 	}
-	if options.IncludeReasoning {
-		body.Include = []string{"reasoning.encrypted_content"}
-	}
-
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		return Response{}, fmt.Errorf("encode OpenAI request: %w", err)
