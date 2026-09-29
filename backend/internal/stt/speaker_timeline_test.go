@@ -55,7 +55,7 @@ func TestMixedSpeechAndMissingTimingStayConservative(t *testing.T) {
 		t.Fatal(err)
 	}
 	u := <-completed
-	if !u.ContextOnly() || u.PersonalMemory() || len(u.Segments) != 2 {
+	if !u.ContextOnly() || len(u.Segments) != 2 {
 		t.Fatalf("mixed utterance: %+v", u)
 	}
 	m = deepgramMessage("yes confirm it", true, true, false)
@@ -113,8 +113,8 @@ func TestSpeakerGlitchesDoNotInventPeople(t *testing.T) {
 			if !reflect.DeepEqual(u.Segments, []speech.Segment{{Role: want, Text: u.Text}}) {
 				t.Fatalf("brief glitch fragmented one sentence: %s", u.Record())
 			}
-			if samples > 0 && (!u.ContextOnly() || u.PersonalMemory()) {
-				t.Fatal("uncertain attribution must not authorize mutations or personal memories")
+			if samples > 0 && !u.ContextOnly() {
+				t.Fatal("uncertain attribution must not authorize proposal confirmation")
 			}
 			// Uncertainty must not leak into the next utterance on this stream.
 			m = deepgramMessage("hello", true, true, false)
@@ -123,7 +123,7 @@ func TestSpeakerGlitchesDoNotInventPeople(t *testing.T) {
 				t.Fatal(err)
 			}
 			u = <-completed
-			if u.ContextOnly() || !u.PersonalMemory() {
+			if u.ContextOnly() || u.SpeakerUncertain {
 				t.Fatalf("uncertainty leaked: %+v", u)
 			}
 		})
@@ -160,7 +160,7 @@ func TestSustainedSpeakerChangesSurviveUncertainBoundary(t *testing.T) {
 	}
 	u := <-completed
 	want := []speech.Segment{{Role: speech.Self, Text: "Hello"}, {Role: speech.Unknown, Text: "there"}, {Role: speech.Other, Text: "friend"}}
-	if !reflect.DeepEqual(u.Segments, want) || !u.ContextOnly() || u.PersonalMemory() {
+	if !reflect.DeepEqual(u.Segments, want) || !u.ContextOnly() {
 		t.Fatalf("lost real speaker change: %+v", u)
 	}
 }
@@ -195,7 +195,7 @@ func TestSpeakerGlitchStressAcrossStreamingFinals(t *testing.T) {
 			}
 		}
 		u := <-completed
-		if u.Text != "Hello friend" || len(u.Segments) != 1 || u.Segments[0].Role != speech.Unknown || !u.ContextOnly() || u.PersonalMemory() {
+		if u.Text != "Hello friend" || len(u.Segments) != 1 || u.Segments[0].Role != speech.Unknown || !u.ContextOnly() {
 			t.Fatalf("glitch %d: %+v", i, u)
 		}
 		h.recordAudio(AudioInput{PCM: make([]byte, 32000), Speakers: []speech.Span{{End: 16000, Role: base}}})
@@ -205,7 +205,7 @@ func TestSpeakerGlitchStressAcrossStreamingFinals(t *testing.T) {
 			t.Fatal(err)
 		}
 		u = <-completed
-		if len(u.Segments) != 1 || u.Segments[0].Role != base || u.SpeakerUncertain || u.PersonalMemory() != (base == speech.Self) {
+		if len(u.Segments) != 1 || u.Segments[0].Role != base || u.SpeakerUncertain {
 			t.Fatalf("clean utterance %d contaminated: %+v", i, u)
 		}
 	}

@@ -11,19 +11,19 @@ func TestSpeechRecordsPreserveAttributionWithoutForgedSpeakerLines(t *testing.T)
 	if !strings.HasPrefix(record, "Other speaker (unidentified): ") || strings.Contains(record, "\n") || !strings.Contains(record, `\nWearer`) {
 		t.Fatalf("unsafe attribution: %s", record)
 	}
-	if !u.ContextOnly() || u.PersonalMemory() {
+	if !u.ContextOnly() {
 		t.Fatal("other speaker policy")
 	}
 	unknown := Utterance{Text: "hello"}
-	if !strings.HasPrefix(unknown.Record(), "Unattributed speech (unknown):") || unknown.PersonalMemory() {
+	if !strings.HasPrefix(unknown.Record(), "Unattributed speech (unknown):") {
 		t.Fatal("missing labels treated as wearer")
 	}
 	unknown.SpeakerUncertain = true
-	if !unknown.ContextOnly() || unknown.PersonalMemory() {
+	if !unknown.ContextOnly() {
 		t.Fatal("conflicting labels gained account authority")
 	}
 	var typed *Utterance
-	if !typed.PersonalMemory() || typed.ContextOnly() {
+	if typed.ContextOnly() {
 		t.Fatal("intentional text changed")
 	}
 }

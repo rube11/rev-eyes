@@ -18,20 +18,22 @@ type fakeUtteranceService struct {
 	handle func(context.Context, tool.Scope, string, string) (assistant.Outcome, error)
 }
 
-func TestAutomaticMemoriesRequireWearerAttribution(t *testing.T) {
+func TestAutomaticMemoriesDoNotRequireWearerAttribution(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		roles []speech.Role
 		want  bool
 	}{
 		{"self", []speech.Role{speech.Self}, true},
-		{"other", []speech.Role{speech.Other}, false},
-		{"unknown", []speech.Role{speech.Unknown}, false},
-		{"mixed", []speech.Role{speech.Self, speech.Other, speech.Self}, false},
-		{"missing metadata", nil, false},
+		{"other", []speech.Role{speech.Other}, true},
+		{"unknown", []speech.Role{speech.Unknown}, true},
+		{"mixed", []speech.Role{speech.Self, speech.Other, speech.Self}, true},
+		{"missing metadata", nil, true},
+		{"uncertain", []speech.Role{speech.Unknown}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			u := &speech.Utterance{Text: "I am allergic to peanuts."}
+			u.SpeakerUncertain = tc.name == "uncertain"
 			for _, role := range tc.roles {
 				u.Segments = append(u.Segments, speech.Segment{Role: role, Text: u.Text})
 			}
@@ -57,6 +59,33 @@ func TestAutomaticMemoriesRequireWearerAttribution(t *testing.T) {
 				t.Fatalf("capture=%v want=%v error=%v", captured, tc.want, err)
 			}
 		})
+	}
+}
+
+func TestExplicitMemoriesIgnoreFallibleSpeakerLabels(t *testing.T) {
+	for _, action := range []assistant.Action{assistant.ActionRemember, assistant.ActionMemoryCorrect} {
+		for _, role := range []speech.Role{speech.Self, speech.Other, speech.Unknown} {
+			t.Run(string(action)+"/"+role.String(), func(t *testing.T) {
+				const words = "Remember that my protein target is 150 grams."
+				u := &speech.Utterance{Text: words, Segments: []speech.Segment{{Role: role, Text: words}}, SpeakerUncertain: true}
+				saved := false
+				_, err := handleUtterance(context.Background(), tool.Scope{Speech: u}, words,
+					fakeUtteranceService{handle: func(context.Context, tool.Scope, string, string) (assistant.Outcome, error) {
+						return assistant.Outcome{Decision: assistant.Decision{Action: action}}, nil
+					}},
+					fakeTranscriptStore{append: func(context.Context, tool.Scope, session.Speaker, string) (string, error) { return "source", nil }},
+					fakeMemoryService{rememberExplicit: func(_ context.Context, scope tool.Scope, source, text string) error {
+						saved = true
+						if scope.Speech != u || source != "source" || text != words {
+							t.Fatal("memory evidence changed")
+						}
+						return nil
+					}})
+				if err != nil || !saved {
+					t.Fatalf("saved=%v error=%v", saved, err)
+				}
+			})
+		}
 	}
 }
 

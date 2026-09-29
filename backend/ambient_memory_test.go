@@ -85,7 +85,7 @@ func TestAmbientTranscriptLearnsMemoryAfterSocketDisconnect(t *testing.T) {
 	routed := false
 	persisted := false
 	service := fakeUtteranceService{handle: func(_ context.Context, got tool.Scope, source, transcript string) (assistant.Outcome, error) {
-		if !prepared || !persisted || got.UserID != scope.UserID || got.Speech == nil || !got.Speech.PersonalMemory() || source != "utterance" || transcript != text {
+		if !prepared || !persisted || got.UserID != scope.UserID || got.Speech == nil || len(got.Speech.Segments) != 1 || got.Speech.Segments[0].Role != speech.Unknown || source != "utterance" || transcript != text {
 			t.Error("ambient transcript bypassed normal routing prerequisites")
 		}
 		routed = true
@@ -191,8 +191,8 @@ func TestAmbientTranscriptLearnsMemoryAfterSocketDisconnect(t *testing.T) {
 	close(extractor.release)
 	select {
 	case got := <-stored:
-		if got.scope.Speech == nil || !got.scope.Speech.PersonalMemory() {
-			t.Fatal("memory lost wearer attribution")
+		if got.scope.Speech == nil || len(got.scope.Speech.Segments) != 1 || got.scope.Speech.Segments[0].Role != speech.Unknown {
+			t.Fatal("disabled speaker identification was reintroduced")
 		}
 		got.scope.Speech = nil
 		if got.scope != scope || got.source != "utterance" || len(got.candidates) != 1 {

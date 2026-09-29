@@ -15,8 +15,32 @@ func otherSpeech() *speech.Utterance {
 	return &speech.Utterance{Text: "Yes, remember that and remind me tomorrow.", Segments: []speech.Segment{{Role: speech.Other, Text: "Yes, remember that and remind me tomorrow."}}}
 }
 
+func TestSpeakerLabelsDoNotVetoExplicitMemoryRoutes(t *testing.T) {
+	for _, action := range []Action{ActionRemember, ActionMemoryCorrect} {
+		t.Run(string(action), func(t *testing.T) {
+			evaluator := jevEvaluatorReturning(action)
+			router, _ := NewJevRouter(evaluator)
+			s := NewService(router, agentFunc(func(context.Context, tool.Scope, string, session.Conversation, []memory.Card) (string, error) {
+				t.Fatal("explicit memory unexpectedly reached composer")
+				return "", nil
+			}), managedMemoryStub{}, noConversation, proposalConfirmerFunc(func(context.Context, tool.Scope, string) (string, bool, error) {
+				t.Fatal("memory request entered proposal confirmation")
+				return "", false, nil
+			}))
+			out, err := s.HandleUtterance(context.Background(), tool.Scope{Speech: otherSpeech()}, "turn", "Remember my protein target is 150 grams.")
+			if err != nil || out.Decision.Action != action {
+				t.Fatalf("out=%+v error=%v", out, err)
+			}
+			criteria := evaluator.request.Questions[jevRouteQuestion].Criteria.(map[string]any)
+			if criteria[string(action)] == nil {
+				t.Fatal("memory route not offered to Jev")
+			}
+		})
+	}
+}
+
 func TestOtherSpeechCannotConfirmOrSelectAccountRoutes(t *testing.T) {
-	for _, action := range []Action{ActionRemember, ActionMemoryCorrect, ActionMemoryForget, ActionProfileInclude, ActionProfileExclude, ActionMemoryReview, ActionResolveProposal, ActionStateTransition} {
+	for _, action := range []Action{ActionMemoryForget, ActionProfileInclude, ActionProfileExclude, ActionMemoryReview, ActionResolveProposal, ActionStateTransition} {
 		t.Run(string(action), func(t *testing.T) {
 			s := NewService(routerFunc(func(context.Context, string) (Decision, error) { return Decision{Action: action}, nil }),
 				agentFunc(func(context.Context, tool.Scope, string, session.Conversation, []memory.Card) (string, error) {
@@ -67,8 +91,8 @@ func TestOtherSpeechCanRespondWithoutGainingAccountAuthority(t *testing.T) {
 			t.Fatalf("kind=%s outcome=%+v called=%v error=%v", kind, out, called, err)
 		}
 		criteria := evaluator.request.Questions[jevRouteQuestion].Criteria.(map[string]any)
-		if criteria[string(ActionRespond)] == nil || criteria[string(ActionRemember)] != nil {
-			t.Fatal("respond must be available without enabling account routes")
+		if criteria[string(ActionRespond)] == nil || criteria[string(ActionRemember)] == nil || criteria[string(ActionResolveProposal)] != nil {
+			t.Fatal("answers and memory must remain available without proposal confirmation")
 		}
 	}
 }
@@ -104,8 +128,8 @@ func TestContextualTipsRouteWithProfileAndKeepSpeakerPermissions(t *testing.T) {
 				t.Fatal("Jev did not receive familiarity and speaker attribution")
 			}
 			criteria := evaluator.request.Questions[jevRouteQuestion].Criteria.(map[string]any)
-			if len(criteria) != 4 || criteria[string(ActionRemember)] != nil {
-				t.Fatal("other speech offered mutation routes")
+			if len(criteria) != 6 || criteria[string(ActionRemember)] == nil || criteria[string(ActionProfileInclude)] != nil {
+				t.Fatal("other speech must offer memory without profile controls")
 			}
 		})
 	}
@@ -142,7 +166,7 @@ func TestOtherSpeechTipKeepsAttributionAndPersonalContext(t *testing.T) {
 		t.Fatal("router did not receive speaker attribution")
 	}
 	criteria := evaluator.request.Questions[jevRouteQuestion].Criteria.(map[string]any)
-	if len(criteria) != 4 || criteria[string(ActionSuggestTip)] == nil || criteria[string(ActionRespond)] == nil {
+	if len(criteria) != 6 || criteria[string(ActionSuggestTip)] == nil || criteria[string(ActionRespond)] == nil {
 		t.Fatalf("unsafe routes: %+v", criteria)
 	}
 }

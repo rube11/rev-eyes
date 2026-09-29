@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-func TestSpeakerPCMProtocol(t *testing.T) {
+func TestLegacySpeakerFramesPreservePCMButIgnoreIdentification(t *testing.T) {
 	for _, role := range []speech.Role{speech.Unknown, speech.Self, speech.Other} {
 		pcm, got, err := decodeAudioFrame([]byte{1, byte(role), 42, 0}, speakerPCMEncoding)
-		if err != nil || got != role || !bytes.Equal(pcm, []byte{42, 0}) {
+		if err != nil || got != speech.Unknown || !bytes.Equal(pcm, []byte{42, 0}) {
 			t.Fatalf("%v %v %v", pcm, got, err)
 		}
 	}

@@ -755,7 +755,7 @@ test('server listening forwards copied PCM while the UI is idle', async t => {
   const h = await harness(t, true)
   const frame = new Uint8Array([1, 2, 3, 4])
   await h.pcm(frame)
-  assert.deepEqual(h.pcmFrames, [[1, 0, 1, 2, 3, 4]])
+  assert.deepEqual(h.pcmFrames, [[1, 2, 3, 4]])
   assert.deepEqual(Array.from(frame), [1, 2, 3, 4])
   assert.equal(h.controls.includes('listening_start'), false)
 })
@@ -770,7 +770,7 @@ test('failed server capture on wake keeps the microphone error visible', async t
   assert.match(h.pages.at(-1).label, /MIC UNAVAILABLE/)
 })
 
-test('speaker switches preserve frame labels without restarting capture or sending control commands', async t => {
+test('speaker labels are ignored without restarting capture or sending control commands', async t => {
   const h = await harness(t, true)
   const controls = h.controls.length
   const captures = h.audio.length
@@ -778,7 +778,7 @@ test('speaker switches preserve frame labels without restarting capture or sendi
     await h.pcm(new Uint8Array([42, 0]), role)
   }
   await h.pcm(new Uint8Array([42, 0]), 'self', 'phone')
-  assert.deepEqual(h.pcmFrames, [[1,1,42,0], [1,2,42,0], [1,0,42,0], [1,1,42,0], [1,0,42,0]])
+  assert.deepEqual(h.pcmFrames, [[42,0], [42,0], [42,0], [42,0], [42,0]])
   assert.equal(h.controls.length, controls)
   assert.equal(h.audio.length, captures)
 })

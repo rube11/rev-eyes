@@ -56,7 +56,9 @@ func handleUtterance(
 	}
 
 	outcome, err := service.HandleUtterance(ctx, scope, utteranceID, utterance)
-	if scope.Speech.PersonalMemory() && shouldCaptureMemory(outcome.Decision.Action) {
+	// Speaker labels are fallible observations, not a memory-admission gate.
+	// Extraction still decides whether the actual words contain reusable facts.
+	if shouldCaptureMemory(outcome.Decision.Action) {
 		if memories == nil || !memories.Capture(scope, utteranceID, utterance) {
 			slog.WarnContext(ctx, "memory learning queue unavailable")
 		}
@@ -95,8 +97,8 @@ func handleUtterance(
 	}
 
 	response := outcome.Response
-	if !scope.Speech.ContextOnly() && (outcome.Decision.Action == assistant.ActionRemember ||
-		(outcome.Decision.Action == assistant.ActionMemoryCorrect && response == "")) {
+	if outcome.Decision.Action == assistant.ActionRemember ||
+		(outcome.Decision.Action == assistant.ActionMemoryCorrect && response == "") {
 		if memories == nil {
 			return result, errors.New("memory service is required")
 		}

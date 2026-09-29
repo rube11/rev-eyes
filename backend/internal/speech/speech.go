@@ -63,23 +63,6 @@ func (u *Utterance) ContextOnly() bool {
 	return false
 }
 
-// PersonalMemory requires an entirely wearer-attributed utterance. Never join
-// disjoint wearer fragments across someone else's words into a new assertion.
-func (u *Utterance) PersonalMemory() bool {
-	if u == nil {
-		return true
-	} // Intentional text input.
-	if u.SpeakerUncertain || len(u.Segments) == 0 {
-		return false
-	}
-	for _, s := range u.Segments {
-		if s.Role != Self {
-			return false
-		}
-	}
-	return true
-}
-
 // Record retains provenance in existing transcript storage and compaction.
 func (u *Utterance) Record() string {
 	segments := u.Segments

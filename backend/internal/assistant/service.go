@@ -151,9 +151,9 @@ func (s *Service) HandleUtterance(
 	if err != nil {
 		return Outcome{}, fmt.Errorf("route utterance: %w", err)
 	}
-	// Other or mixed speech may receive answers, but is not an account command.
-	// Enforce this independently of classifier output and before any mutations.
-	if scope.Speech.ContextOnly() && decision.Action != ActionRespond && decision.Action != ActionSuggestTip && decision.Action != ActionIgnore && decision.Action != ActionStateUpdate {
+	// Fallible speaker labels must not veto memory learning or explicit saves.
+	// Other account controls still require wearer-attributed speech.
+	if scope.Speech.ContextOnly() && decision.Action != ActionRespond && decision.Action != ActionSuggestTip && decision.Action != ActionIgnore && decision.Action != ActionStateUpdate && decision.Action != ActionRemember && decision.Action != ActionMemoryCorrect {
 		return Outcome{Decision: Decision{Action: ActionIgnore}}, nil
 	}
 

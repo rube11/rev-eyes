@@ -22,7 +22,6 @@ import {
 import type { GlassesMessage } from "./glasses-ui"
 import { env } from "../shared/config/env"
 import { AudioCaptureController } from "./audio"
-import { encodeAudioFrame } from "./audio-frame"
 import { AssistantResponseLifecycle } from "./assistant-response-lifecycle"
 import {
   getEvenBridge,
@@ -239,7 +238,6 @@ export async function initializeEvenExperience(
   function sendControl(type: string) {
     return safeSendJson(connection.current, {
       type,
-      ...((type === "ambient_start" || type === "listening_start") && { encoding: "pcm_speaker_v1" }),
     })
   }
 
@@ -1193,7 +1191,9 @@ export async function initializeEvenExperience(
       if (audioCapture.running) {
         let ownedPcm: Uint8Array<ArrayBuffer> | undefined
         try {
-          ownedPcm = encodeAudioFrame(event.audioEvent!)
+          // Speaker identification is disabled. Keep an owned copy of raw
+          // PCM; never mutate SDK memory or forward its fallible role labels.
+          ownedPcm = new Uint8Array(pcm)
           safeSend(connection.current, ownedPcm.buffer)
         } catch {
           // Ignore malformed or late audio frames.
