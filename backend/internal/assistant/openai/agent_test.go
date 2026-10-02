@@ -164,7 +164,7 @@ func TestSuggestTipUsesSharedContextToolsAndTipInstructions(t *testing.T) {
 		!strings.Contains(request.Instructions, "# Eyes tonality guide") {
 		t.Fatalf("result=%#v instructions=%q", result, request.Instructions)
 	}
-	for _, rule := range []string{"meaning in this conversation", "180 characters", "Do not invent an acronym expansion", "avoid patronizing or repeating"} {
+	for _, rule := range []string{"meaning in this conversation", "180 characters", "Do not invent an acronym expansion", "avoid patronizing or repeating", "suggested reply", "Public background", "Never invent personal experience"} {
 		if !strings.Contains(request.Instructions, rule) {
 			t.Errorf("missing contextual explanation rule %q", rule)
 		}
