@@ -4,6 +4,7 @@ export type WorkspaceView =
   | 'memories'
   | 'watches'
   | 'tasks'
+  | 'agents'
 
 export const workspaceResources = [
   'conversations',

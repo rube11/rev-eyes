@@ -703,6 +703,7 @@ function App() {
       data={visibleWorkspaceData}
       email={session.user.email ?? 'Account'}
       userId={session.user.id}
+      accessToken={session.access_token}
       onSendChat={async (sessionId, text) => {
         try { return await sendChatMessage(session.access_token, sessionId, text) }
         finally { requestWorkspaceRefreshRef.current(workspaceResources) }

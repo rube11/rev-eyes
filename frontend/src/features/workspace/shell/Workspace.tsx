@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 
+import { AgentsView } from '../views/AgentsView'
 import { HomeView } from '../views/HomeView'
 import { ConversationLog } from '../views/ConversationLog'
 import { MemoriesView } from '../views/MemoriesView'
@@ -29,6 +30,7 @@ import './Workspace.css'
 type WorkspaceProps = {
   onSendChat?: SendChatMessage
   userId?: string
+  accessToken?: string
   data: WorkspaceData
   email: string
   glassesStatus: string
@@ -56,6 +58,7 @@ type WorkspaceProps = {
 export function Workspace({
   onSendChat,
   userId,
+  accessToken,
   data,
   email,
   glassesStatus,
@@ -86,12 +89,14 @@ export function Workspace({
   useEffect(() => {
     const handleHashChange = () => {
       const next = window.location.hash.replace(/^#/u, '')
-      if (isWorkspaceView(next)) {
-        setView(next)
-      }
+      setView(isWorkspaceView(next) ? next : 'now')
     }
     window.addEventListener('hashchange', handleHashChange)
-    return () => window.removeEventListener('hashchange', handleHashChange)
+    window.addEventListener('popstate', handleHashChange)
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange)
+      window.removeEventListener('popstate', handleHashChange)
+    }
   }, [])
 
   const navigate = (
@@ -101,7 +106,7 @@ export function Workspace({
     setOpenConversationId(target.conversationId)
     setFocusMemoryId(target.memoryId)
     setView(nextView)
-    window.history.replaceState(
+    if (window.location.hash !== `#${nextView}`) window.history.pushState(
       null,
       '',
       `${window.location.pathname}${window.location.search}#${nextView}`,
@@ -117,7 +122,7 @@ export function Workspace({
   const assistant = getAssistantStatus(glassesStatus, isDemo)
   const connected = assistant.active
   const failedResources = workspaceResources.filter((resource) => resourceErrors[resource])
-  const unavailable = view !== 'now' && resourceErrors[view] === 'unavailable'
+  const unavailable = view !== 'now' && view !== 'agents' && resourceErrors[view] === 'unavailable'
   const accountLabel = isDemo ? 'Preview mode' : shorten(email, 24)
   const accountInitial = isDemo
     ? 'P'
@@ -143,7 +148,7 @@ export function Workspace({
           title={viewTitles[view]}
           syncing={syncing}
           lastSyncedAt={lastSyncedAt}
-          onRetry={onRetry}
+          onRetry={view === 'agents' ? undefined : onRetry}
           assistant={assistant}
           isDemo={isDemo}
           reconnecting={reconnecting}
@@ -172,6 +177,7 @@ export function Workspace({
               body="This section is unavailable right now. Use Try again above to reload it. Other sections remain available."
             />
           ) : null}
+          {view === 'agents' ? <AgentsView key={userId} accessToken={accessToken} /> : null}
           {view === 'now' ? (
             <HomeView
               data={data}

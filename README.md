@@ -147,6 +147,7 @@ does not verify provider credentials or deployed behavior.
 
 - [Frontend development and packaging](frontend/README.md)
 - [Backend package architecture](backend/internal/README.md)
+- [Optional agent status gateway and laptop bridge roadmap](backend/docs/agent-bridge.md)
 - [AWS infrastructure and deployment](backend/infra/README.md)
 
 Local environment files, logs, compiled binaries, and Even Hub packages are
