@@ -1,138 +1,173 @@
-# Agent gateway: first increment
+# T3 threads on Rev Eyes
 
-This is an **opt-in status integration**, not a paired laptop agent controller.
-It preserves Moonshine/Deepgram → Jev routing/tool selection → strict OpenAI
-arguments → registered Go tools → final composer. No audio is sent to T3.
+Rev Eyes can list T3 threads, select one, display its conversation, and send
+explicit typed or tap-to-talk messages to that exact thread. T3 continues the
+work with its existing project, model, tools, and permission mode. No audio is
+sent to T3; the existing Deepgram transcriber produces the message text.
 
-## What is implemented
+This implementation is opt-in and tested offline. **It is not connected to a
+live T3 account yet.** OAuth enrollment/refresh, deployment, and hardware testing
+remain separate work.
 
-- `agentbridge.Provider`: explicit capabilities and owner-bound connections;
-  trusted `tool.Scope.UserID`, never model arguments, selects the owner.
-- `list_agent_threads`: the first **20** T3 threads across projects with status
-  metadata and the provider's continuation cursor. This is not a full inventory.
-  There is no pagination tool yet; a missing thread must not be called nonexistent.
-- A bounded MCP Streamable HTTP client (JSON and SSE responses), initialization,
-  tools/schema discovery, read-only annotation check, correlation-ID validation,
-  no redirects, bounded response bodies and sanitized errors. Each read discovers
-  capabilities again; offline/revoked/incompatible providers fail closed.
-- Three-second gateway deadline, no long-running provider wait in the foreground,
-  no background goroutine pretending to be a durable job, no automatic retries.
-- Generic side-effect-free thread-read boundary for future providers. **T3 read
-  is deliberately disabled**: current `t3_thread_read` is annotated non-read-only
-  and marks a child's final result delivered. Its schema has no opt-out. Do not
-  change `ReadOnly` just because an upstream tool is named “read.”
-- A capability-disabled `Dot` placeholder. It makes no claim about a public dot
-  messaging API and registers no tools.
+## Interaction
 
-Only list/status is currently registered for T3. Sends, launch, interruption,
-permission answers, result-delivery acknowledgment and shell execution are absent.
-No reminder/watch confirmation, speech admission, turn budget, database schema,
-websocket protocol or notification behavior has been changed.
-Provider text is labeled untrusted data and cannot grant execution authority.
+On the phone or web, open **Agents**. Cards show a compact task title, status,
+and update time. Click a thread to select it on the glasses and open its
+conversation. Tap the glasses to speak, then pause or tap again to submit. The
+phone also has a text composer. Load more threads or messages explicitly.
 
-## Workspace status view
+On the glasses:
 
-The Agents workspace uses authenticated `GET /workspace/agents`, protected by the
-existing Supabase verifier and origin policy. It shares the tool gateway instance
-and derives ownership only from the verified identity, never query/body fields.
-Responses are `Cache-Control: no-store` and contain `{connections, limit: 20}`.
-An empty connection list means not configured for this account, including when
-the feature is off; it does not reveal other owners’ configuration. Provider
-failures remain sanitized per-connection unavailable results. The endpoint
-accepts no target URL, credential, owner override, cursor or action.
+1. From the idle Eyes screen, scroll to open the thread picker. Background
+   microphone capture stops while you browse.
+2. Scroll through title/status cards, then tap to select a thread. A second tap
+   starts the microphone for that thread only.
+3. Speech is submitted once at the first transcription endpoint. T3 receives
+   a **queued new turn**, not a steer/restart. A receipt says queued, never
+   completed. The mic does not reopen automatically after a T3 receipt.
+4. Scroll through the receipt/reply. Scrolling forward past its final page
+   explicitly reads the next conversation page. Scroll again to check for new
+   messages. Reads are manual; there is no background polling or completion alert.
+5. Hold while idle to return to Eyes. Hold in the picker to dismiss it. Double
+   tap retains the app's exit behavior. Ordinary Eyes answers still support their
+   existing paginated reading and hands-free follow-ups.
 
-The view loads on navigation and offers manual refresh, with no agent polling or
-notifications. It displays first-page status only, never a full inventory or
-proof of completion. Thread content, sending, starting, interruption and Dot
-connections remain unsupported. Laptop pairing is future work; no connection
-setup form or browser-side provider credential handling is provided.
+Thread titles are the compact descriptions available from T3's list response;
+Rev Eyes does not generate semantic summaries or infer completion from titles.
+Conversation reads begin at the first page, can advance with the provider's
+position cursor, and shorten long messages to 2,000 characters with a visible
+notice. The native reader advances its cursor in memory. It is a lightweight
+conversation viewer, not a full mirrored T3 transcript.
 
-## Optional direct HTTPS configuration
+## Configuration and authorization
 
-Leave **all three variables empty** to disable the feature (the default):
+Leave the three connection values empty to disable this integration:
 
 ```dotenv
 AGENT_T3_MCP_URL=
 AGENT_T3_MCP_TOKEN=
 AGENT_T3_OWNER_USER_ID=
+AGENT_T3_CONTROL_ENABLED=false
 ```
 
-An operator may later supply a **previously authorized, reachable HTTPS `/mcp`**
-endpoint, its server-side OAuth access token, and the exact Supabase user ID
-owning it. Partial configuration fails startup. Tokens must not be sent to the
-frontend or placed in prompts, URLs, repository files, or logs. Use the least
-privileged/read-only T3 ceiling. OAuth enrollment, refresh and pairing are NOT
-implemented; an expired token means unavailable status, not an automatic fallback.
-The owner-to-token mapping is trusted operator configuration, not self-service
-multi-user enrollment. Never assign another person's T3 credential to a user.
+Supply a previously authorized, reachable **HTTPS `/mcp`** endpoint, its
+server-side OAuth access token, and the exact Rev Eyes user ID that owns the
+connection. Partial connection configuration fails startup. Tokens never go to
+the browser, glasses, prompts, URLs, or returned errors. A token is operator
+configuration for one owner; this is not self-service multi-user enrollment.
 
-This path is useful only if an authorized secure route already exists (for
-example a validated T3 Connect setup); **localhost on hosted Eyes is not your
-laptop**. Do not expose a raw local T3 port, disable TLS, reuse `/mcp` credentials
-against internal RPC, or invent a tunnel to make this work. The library-only
-`NewLoopback` constructor permits literal loopback HTTP for a future same-machine
-connector; the backend environment configuration intentionally cannot enable it.
-No listeners or connectors are started by this change.
+`AGENT_T3_CONTROL_ENABLED=false` permits status only. Set it to `true` to allow
+explicit UI conversation reads and messages. The token's independent T3 ceiling
+must allow messaging the chosen thread. T3 enforces that ceiling; Rev Eyes does
+not raise a thread's permissions, change models, or answer permission requests.
+An expired/revoked credential produces an unavailable connection.
 
-The installed T3 version is unknown. Live compatibility validation is required:
-check OAuth audience/ceiling, MCP protocol `2025-03-26`, discovered list schema,
-read-only annotation, and response shape with that version before enabling.
-Tests use only mocked providers and httptest, never your live laptop.
+The supported remote route is **T3 Connect**, documented in T3's
+[outside-agent guide](https://github.com/pingdotgg/t3code/blob/main/docs/user/outside-agents.md).
+In T3, use **Settings → Environments → Copy MCP URL**. Hosted Rev Eyes needs a
+route reachable from its server. Its localhost is not your laptop. Do not expose
+a raw local T3 port or reuse MCP tokens against internal RPC. The library-only
+`NewLoopback` constructor remains for same-machine adapters; backend environment
+configuration requires HTTPS.
 
-## Next increment: authenticated outbound laptop bridge (contract only)
+T3's documented OAuth flow discovers authorization metadata, opens an approval
+page, and lets the owner choose an access ceiling. Rev Eyes does not yet
+implement that enrollment or token refresh. A production setup needs a dedicated
+registered client, PKCE/state validation, secure credential persistence,
+revocation handling, and audience/version validation. Do not borrow another
+client's credentials to skip enrollment.
 
-The following is **not implemented**, and is the prerequisite for controlling a
-laptop from hosted Eyes without a pre-existing reachable secure endpoint:
+## API and execution boundary
 
-1. Pair through an authenticated owner UI with short-lived single-use challenge;
-   issue a revocable device credential bound to user, connection and allowed
-   capabilities. Laptop holds T3 credentials locally. No model-supplied hosts,
-   paths, executables, project names-as-paths or tokens.
-2. Laptop initiates outbound TLS to a fixed backend endpoint and authenticates.
-   Backend derives ownership from authentication, not frame payloads. Both sides
-   negotiate a protocol version and capability ceiling. Expiration/revocation
-   denies new commands. Disconnect is **not** cancellation.
-3. Use a durable command/outbox record containing command ID, owner, connection,
-   session/utterance, explicit target, authorized operation, idempotency key,
-   payload digest, timestamps, state and remote correlation. Persist before ACK.
-   The utterance returns “queued”, not “finished”; a worker owns all long waits.
-4. Persist authorization separately and bind it to one exact target/payload.
-   Extend or add a feature-specific confirmer rather than reusing reminder/watch
-   “yes”. Context-only speech cannot authorize writes. Provider approvals remain
-   in T3 UI; `t3_pending_request` questions are not permission approvals.
-5. Lease worker commands; deduplicate receipts and reconcile after restart or
-   reconnect. Retry reads with bounded backoff. A send/launch timeout after
-   dispatch is **unknown**, not retryable: reconcile provider correlation first,
-   and request user resolution when no proof is available. Queue send mode
-   explicitly; never silently steer/restart. No exactly-once claim without
-   provider support.
-6. States must distinguish queued, dispatched, running, waiting-for-user,
-   completed, failed, cancel-requested, canceled and unknown. Persist cancel
-   intent; completion racing with cancel must retain the actual provider outcome.
-   Never classify disconnection, an ACK, or a cancel request as completion.
-7. Atomically persist terminal/action-needed notification intent with state;
-   deduplicate it, correlate connection/thread/command, and reuse notification
-   ACK/replay. Routine progress must not interrupt glasses follow-up listening.
-   Add a workspace resource/UI only when backed by authenticated persisted data.
+All HTTP workspace routes require the existing verified bearer identity. The
+backend derives ownership from authentication, never body/query owner fields.
+The existing origin policy wraps these endpoints; responses are `no-store`.
 
-Required tests before shipping those effects: exact authorization and ownership,
-quick durable ACK independent of foreground turn, restart/lease recovery,
-unknown-outcome reconciliation, reconnect/receipt dedup, cancel/completion races,
-notification outbox/ACK/replay and provider permission ceilings. Those tests
-cannot honestly pass in this increment because the corresponding components do
-not exist. No migrations, live pairing, credential setup, remote execution,
-publication, or deployment are part of this implementation.
+- `GET /workspace/agents`: first 20 threads per configured connection.
+- `GET /workspace/agents?connection_id=…&cursor=…`: subsequent bounded page.
+- `POST /workspace/agents/thread`: exact `connection_id`, `thread_id`, and optional
+  nonnegative `after_position`; bounded conversation page.
+- `POST /workspace/agents/messages`: exact `connection_id`, `thread_id`, `text`,
+  and `request_id`; forwards a queued message and returns T3's correlated receipt.
+- `GET /agents/voice`: consumes the existing one-use WebSocket ticket and binds
+  connection/thread IDs for that socket's entire lifetime. Each tap starts one
+  manual transcription. Ambient/candidate handlers are absent. Changing targets
+  tears down the old runtime before a new socket is adopted.
 
-## Sources and checks
+`list_agent_threads` remains the only T3 model tool. It is side-effect free and
+first-page-only. Explicit actions are outside the Jev/model tool registry, so
+background speech, memory review, and provider text cannot acquire send authority.
+Context-only/other-speaker speech is rejected by the voice handler. Device speaker
+labels are still disabled, so this is explicit tap intent, not biometric identity.
 
-Upstream reviewed 2026-10-29; moving `main` is evidence, not an installed-version
-pin. Validate against the laptop version before use:
+`Capabilities.Open` is separate from read-only `Read`. Upstream `t3_thread_read`
+can acknowledge delivery of child results. It is invoked only by a user's
+selection/refresh/scroll, or refresh following their send. It is never exposed as
+a read-only model tool. Provider strings are untrusted display data, not HTML,
+commands, endpoint configuration, or permission grants.
 
-- [T3 external agents / OAuth MCP](https://github.com/pingdotgg/t3code/blob/main/docs/user/outside-agents.md)
-- [Orchestrator tools and read delivery semantics](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/mcp/toolkits/orchestrator/tools.ts)
-- [Tool contracts / schemas](https://github.com/pingdotgg/t3code/blob/main/packages/contracts/src/orchestratorMcp.ts)
-- [T3 authentication boundaries](https://github.com/pingdotgg/t3code/blob/main/docs/internals/environment-auth.md)
+The MCP client refreshes discovery for every invocation, validates the operation's
+required fields/types, and requires `clientRequestId` plus `mode: queue` support
+before sending. It supports bounded JSON/SSE responses, correlates RPC IDs, rejects
+redirects, and sanitizes errors. Gateway reads have a three-second deadline;
+control calls have a six-second deadline with a five-second MCP deadline.
 
-Run `go test ./...` and `go vet ./...` from `backend`. Focused package tests also
-run with `go test -race ./internal/agentbridge/... ./internal/web`. Run frontend
-`pnpm test`, `pnpm lint` and `pnpm build` for the Agents workspace integration.
+## Delivery and recovery
+
+There is no Rev Eyes background command queue or promise of exactly-once delivery.
+The foreground request waits only for T3's acceptance receipt; T3 owns the actual
+run. A receipt must match the selected thread and contain message/run IDs plus a
+started/queued delivery state. It does not mean the agent finished.
+
+Typed sends use a client request ID scoped by the backend to owner/connection.
+A manual retry of the same unchanged draft while the view remains mounted reuses
+the key. T3's idempotency support is required. After dispatch, transport failure,
+malformed responses, mismatched receipts, and timeouts become **delivery unknown**.
+There are no automatic send retries. Navigation/reload loses the in-memory typed
+retry key; check the T3 conversation before repeating a message. Voice commands
+have a fresh key per explicit tap and are never replayed on reconnect.
+
+Disconnecting is not cancellation of work already accepted by T3. The glasses
+warn about uncertain delivery after an interrupted turn. Do not claim success or
+failure without a correlated receipt. Provider approval prompts remain in T3.
+
+## Remaining work
+
+The implemented slice continues existing threads. Full T3 UI parity still needs
+project selection/new-thread launch, explicit interruption, permission-request
+handoff, attachments/artifacts, live result updates, and richer recent summaries.
+Self-service OAuth connection setup is required before this can be offered as an
+account-linking feature. Installed-version and live permission compatibility are
+unverified.
+
+For reliable offline/background control, build an authenticated outbound device
+bridge and durable command/outbox records. Bind authorization to exact operations,
+lease work, reconcile uncertain outcomes using provider request IDs, persist cancel
+intent, and deduplicate notifications. Those components and database migrations
+are intentionally absent from this foreground implementation.
+
+Dots research is documented separately in
+[ChatGPT Dots integration research](chatgpt-dots-integration-research.md). The Dots
+placeholder remains disconnected; no public inbound Dots API is assumed.
+
+## Validation
+
+Run backend `go test ./...`, `go vet ./...`, and
+`go test -race ./internal/agentbridge/... ./internal/realtime`. Tests cover strict
+HTTP arguments, ownership, opaque target IDs, capability defaults, queued mode,
+idempotency keys, unknown/mismatched outcomes, and real WebSocket transcription
+with a fake provider, including one send per tap and context-only rejection.
+
+Run frontend `pnpm test`, `pnpm lint`, and `pnpm build`. Tests exercise the real
+runtime with fake SDK/socket boundaries: picker selection, bound target, ambient
+capture stopping, no automatic follow-up mic, reply reading, return to Eyes, and
+existing speech/display behavior. Status tests cover pagination, stale/disposed
+requests, token changes, and untrusted text. No live provider, physical glasses,
+OAuth enrollment, or interactive browser QA is claimed. Production builds retain
+the existing bundle-size warning above 500 kB.
+
+Upstream documentation and contracts reviewed 2026-10-30:
+
+- [Outside agents / OAuth MCP](https://github.com/pingdotgg/t3code/blob/main/docs/user/outside-agents.md)
+- [Orchestrator schemas](https://github.com/pingdotgg/t3code/blob/main/packages/contracts/src/orchestratorMcp.ts)
+- [Tool annotations and semantics](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/mcp/toolkits/orchestrator/tools.ts)

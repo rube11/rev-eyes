@@ -24,6 +24,11 @@ func agentGatewayFromEnvironment(getenv func(string) string) (*agentbridge.Gatew
 	if err != nil {
 		return nil, errors.New("invalid agent T3 configuration")
 	}
+	control := strings.TrimSpace(getenv("AGENT_T3_CONTROL_ENABLED"))
+	if control != "" && control != "true" && control != "false" {
+		return nil, errors.New("AGENT_T3_CONTROL_ENABLED must be true or false")
+	}
+	client.WithControl(control == "true")
 	gateway, err := agentbridge.New([]agentbridge.Connection{{ID: "t3-laptop", OwnerID: owner, ProviderName: "t3", Provider: client}})
 	if err != nil {
 		return nil, err

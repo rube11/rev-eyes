@@ -38,22 +38,21 @@ test('defensive provider parsing caps pages and treats malformed/offline status 
   assert.equal(result.threads[0].status, 'working')
 })
 
-test('all visible states are truthful; no unsupported action controls', () => {
+test('visible states distinguish read-only, control-enabled and disconnected accounts', () => {
   for (const phase of ['loading', 'error', 'ready']) {
     const html = render({ phase, connections: [] })
-    assert.match(html, /Read-only preview/)
-    assert.match(html, /Not supported/)
-    assert.match(html, /This placeholder is not connected/)
+    assert.match(html, /Connection research/)
+    assert.match(html, /Not connected/)
     assert.doesNotMatch(html, /<button[^>]*>\s*(Send|Start|Interrupt|Connect|Pair)/)
     assert.match(html, phase === 'loading' ? /Checking your configured connection/ : phase === 'error' ? /Couldn’t load agent status/ : /Not configured for this account/)
   }
   const empty = render({ phase: 'ready', connections: parseAgentConnections(payload()) })
   assert.match(empty, /No threads returned on this page/)
-  assert.match(empty, /not a complete inventory/)
   const full = render({ phase: 'ready', connections: parseAgentConnections(payload([{ title: '<img src=x>', status: 'working', threadId: 'id' }], { nextCursor: 20 })) })
   assert.match(full, /&lt;img src=x&gt;/)
-  assert.match(full, /More threads are available/)
-  assert.match(full, /Pagination is not available/)
+  assert.match(full, /Load more threads/)
+  assert.match(full, /Read-only preview/)
+  assert.match(full, /disabled/)
   const offline = payload(); offline.connections[0].error = 'unavailable'
   assert.match(render({ phase: 'ready', connections: parseAgentConnections(offline) }), /provider may be offline/)
 })
@@ -120,4 +119,72 @@ test('a replacement token/owner store cannot display the previous request result
   assert.deepEqual(newStore.getSnapshot().connections,[])
   assert.equal(oldStore.getSnapshot().phase,'loading')
   newStore.dispose()
+})
+
+
+test('pagination retains existing threads, deduplicates IDs and uses the provider cursor', async () => {
+  const requests = []
+  const store = new AgentStatusStore(async (_signal, page) => {
+    requests.push(page)
+    return page ? payload([{threadId:'b',title:'Next'},{threadId:'a',title:'Updated'}], {nextCursor:null}) : payload([{threadId:'a',title:'First'}], {nextCursor:20})
+  })
+  await store.refresh(); await store.loadMore('t3')
+  assert.deepEqual(requests, [undefined, {connectionId:'t3',cursor:20}])
+  assert.deepEqual(store.getSnapshot().connections[0].threads.map(row => row.title), ['Updated','Next'])
+  assert.equal(store.getSnapshot().connections[0].hasMore,false)
+  store.dispose()
+})
+
+test('control cards preserve opaque T3 IDs and expose only implemented capabilities', () => {
+  const data = payload([{threadId:'mcp:launch:one',title:'Fix audio',status:'running'}])
+  data.connections[0].capabilities.send = true
+  data.connections[0].capabilities.open = true
+  const connections = parseAgentConnections(data)
+  assert.equal(connections[0].threads[0].id,'mcp:launch:one')
+  const html = renderToStaticMarkup(React.createElement(AgentStatusPanel,{snapshot:{phase:'ready',connections},onRefresh(){},onSelect(){}}))
+  assert.match(html,/Messaging enabled/)
+  assert.doesNotMatch(html,/<button[^>]*disabled/)
+  assert.equal(parseAgentConnections(payload([{threadId:'https://evil'}]))[0].unavailable,true)
+})
+
+test('agent voice socket uses the selected target and a one-use ticket, never a provider credential', async () => {
+  const previousFetch = global.fetch
+  const previousSocket = global.WebSocket
+  const requests = []
+  const sockets = []
+  global.fetch = async (url, options) => { requests.push({url,options}); return {ok:true,json:async () => ({ticket:'single-use-ticket'})} }
+  global.WebSocket = class {
+    constructor(url) { this.url=url; this.listeners=new Map(); sockets.push(this); queueMicrotask(() => this.listeners.get('open')?.()) }
+    addEventListener(type, listener) { this.listeners.set(type,listener) }
+    removeEventListener(type, listener) { if (this.listeners.get(type) === listener) this.listeners.delete(type) }
+    close() {}
+  }
+  try {
+    const { connectRealtimeSocket } = load('shared/api/client.ts')
+    await connectRealtimeSocket('eyes-session-token',{agentTarget:{connectionId:'laptop',threadId:'mcp:launch:chosen'}})
+    assert.equal(sockets[0].url.pathname,'/agents/voice')
+    assert.equal(sockets[0].url.searchParams.get('thread_id'),'mcp:launch:chosen')
+    assert.equal(sockets[0].url.searchParams.get('connection_id'),'laptop')
+    assert.equal(sockets[0].url.searchParams.get('ticket'),'single-use-ticket')
+    assert.doesNotMatch(sockets[0].url.toString(),/eyes-session-token/)
+    assert.equal(requests[0].options.headers.Authorization,'Bearer eyes-session-token')
+    await connectRealtimeSocket('eyes-session-token')
+    assert.equal(sockets[1].url.pathname,'/ws')
+  } finally { global.fetch=previousFetch;global.WebSocket=previousSocket }
+})
+
+test('typed agent messages preserve target and retry key; uncertain delivery stays uncertain', async () => {
+  const previousFetch = global.fetch
+  const requests = []
+  global.fetch = async (url, options) => { requests.push({url,options}); return {ok:true,json:async () => ({threadId:'chosen',delivery:'queued'})} }
+  try {
+    const {sendAgentMessage,openAgentThread} = load('features/workspace/agentClient.ts')
+    const target={connectionId:'laptop',threadId:'chosen',title:'Fix it'}
+    await sendAgentMessage('session',target,'Do the work','stable-key')
+    assert.deepEqual(JSON.parse(requests[0].options.body),{connection_id:'laptop',thread_id:'chosen',text:'Do the work',request_id:'stable-key'})
+    global.fetch=async () => ({ok:false,json:async () => ({error:'delivery_unknown'})})
+    await assert.rejects(sendAgentMessage('session',target,'Do the work','stable-key'),/Delivery is uncertain/)
+    global.fetch=async () => ({ok:true,json:async () => ({thread:{threadId:'wrong'},items:[]})})
+    await assert.rejects(openAgentThread('session',target),/Couldn’t read this thread/)
+  } finally {global.fetch=previousFetch}
 })

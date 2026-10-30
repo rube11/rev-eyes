@@ -7,7 +7,10 @@ const ts = require('typescript')
 
 // Exercise the real runtime, lifecycle and audio controller with fake SDK/socket
 // boundaries. No hardware microphone, network requests, or model calls.
-async function harness(t, serverListeningEnabled = false, reconnect = false, realDisplay = false) {
+async function harness(t, serverListeningEnabled = false, reconnect = false, realDisplay = false, agentOptions = {}) {
+  const selections = []
+  const connectionOptions = []
+  const threadReads = []
   let now = 0
   let eventHandler
   let allowAudio = true
@@ -55,6 +58,14 @@ async function harness(t, serverListeningEnabled = false, reconnect = false, rea
   }
   const mocks = {
     "../shared/config/env": { env: { serverListeningEnabled } },
+    "../../shared/config/env": { env: { serverListeningEnabled } },
+    "../features/workspace/agentClient": {
+      loadAgentConnections: async () => agentOptions.connections ?? [],
+      openAgentThread: async (_token, target, _signal, after) => {
+        threadReads.push({ target, after })
+        return { messages: [{id:'m',role:'assistant',text:agentOptions.replyMessage ?? 'The fix is ready for review.'}], hasMore:false, nextPosition:12, truncated:false }
+      },
+    },
     '@evenrealities/even_hub_sdk': {
       AppLocationAccuracy: { Medium: 1 }, AudioInputSource: { Glasses: 1 },
       OsEventTypeList: { CLICK_EVENT: 0, SCROLL_TOP_EVENT: 1, SCROLL_BOTTOM_EVENT: 2, DOUBLE_CLICK_EVENT: 3 },
@@ -79,7 +90,8 @@ async function harness(t, serverListeningEnabled = false, reconnect = false, rea
       }),
       presentGlassesMessage: text => ({ kind: 'answer', body: text }),
     },
-    '../shared/api/client': { connectRealtimeSocket: async () => {
+    '../shared/api/client': { connectRealtimeSocket: async (_token, options) => {
+      connectionOptions.push(options)
       if (reconnect && socket.readyState !== 1) socket = newSocket()
       const opened = socket
       if (connectionGate) await connectionGate
@@ -174,7 +186,8 @@ async function harness(t, serverListeningEnabled = false, reconnect = false, rea
   }
   const { initializeEvenExperience } = load(path.resolve(__dirname, '../src/even/runtime.ts'))
   const dispose = await initializeEvenExperience(
-    'synthetic-test-token', value => statuses.push(value), resources => workspaceEvents.push(resources),
+    'synthetic-test-token', value => statuses.push(value), resources => workspaceEvents.push(resources), undefined,
+    { target: agentOptions.target, onTargetChange: target => selections.push(target) },
   )
   t.after(dispose)
   await advance(0)
@@ -188,7 +201,7 @@ async function harness(t, serverListeningEnabled = false, reconnect = false, rea
     await message('assistant_thinking')
     await message('assistant_response', { text: 'It is noon.' })
   }
-  return { audio, controls, pages, statuses, upgrades, pcmFrames, sockets, workspaceEvents,
+  return { audio, controls, pages, statuses, upgrades, pcmFrames, sockets, workspaceEvents, selections, connectionOptions, threadReads,
     nativeCalls, nativeText: () => nativePage?.textObject.map(item => item.content).join('\n'),
     failNativeRender: (count = 1) => { failedNativeRenders = count },
     setNativeAckDelay: milliseconds => { nativeAckDelay = milliseconds },
@@ -853,4 +866,58 @@ test('server notifications defer answers and acknowledge dismissal without stopp
   await h.message('conversation_idle')
   assert.equal(h.audio.at(-1), true)
   assert.equal(h.pages.at(-1).footer, 'Tap to talk')
+})
+
+
+test('selected T3 thread uses a bound manual socket and never opens ambient or follow-up capture', async t => {
+  const target = {connectionId:'laptop',threadId:'mcp:launch:chosen',title:'Fix audio'}
+  const h = await harness(t,true,false,false,{target})
+  assert.equal(h.audio.length,0)
+  assert.equal(h.connectionOptions[0].agentTarget.threadId,target.threadId)
+  await h.click()
+  assert.equal(h.controls.includes('listening_start'),true)
+  assert.equal(h.controls.includes('ambient_start'),false)
+  await h.message('user_transcript',{text:'Please fix the bug'})
+  await h.message('assistant_thinking')
+  await h.message('assistant_response',{text:'Message queued in your T3 thread.'})
+  await h.message('listening_stopped')
+  await h.advance(31_000)
+  assert.equal(h.audio.filter(Boolean).length,1)
+  assert.equal(h.audio.at(-1),false)
+  await h.scroll(1)
+  assert.equal(h.threadReads[0].target.threadId,target.threadId)
+  assert.match(h.pages.at(-1).message.body,/fix is ready for review/)
+})
+
+test('glasses thread picker stops ambient capture and selects an exact opaque target', async t => {
+  const h = await harness(t,true,false,false,{connections:[{id:'laptop',unavailable:false,canSend:true,threads:[{id:'mcp:launch:chosen',title:'Fix audio',status:'running'}],hasMore:false}]})
+  await h.scroll(1)
+  assert.match(h.pages.at(-1).message.body,/Fix audio/)
+  assert.equal(h.controls.includes('ambient_stop'),true)
+  assert.equal(h.selections.length,0)
+  await h.click()
+  assert.equal(h.selections[0].connectionId,'laptop')
+  assert.equal(h.selections[0].threadId,'mcp:launch:chosen')
+})
+
+test('holding an idle T3 thread returns to Eyes without sending or starting a microphone', async t => {
+  const h = await harness(t,true,false,false,{target:{connectionId:'laptop',threadId:'id',title:'Fix audio'}})
+  await h.sleep()
+  assert.equal(h.selections.length,1)
+  assert.equal(h.selections[0],undefined)
+  assert.equal(h.audio.length,0)
+})
+
+
+test('long T3 replies keep their reading position without starting another microphone', async t => {
+  const h=await harness(t,true,false,false,{target:{connectionId:'laptop',threadId:'id',title:'Task'},replyMessage:'A'.repeat(350)})
+  await h.click()
+  await h.message('assistant_thinking')
+  await h.message('assistant_response',{text:'Queued.'})
+  await h.message('listening_stopped')
+  await h.scroll(1)
+  assert.equal(h.pages.at(-1).pageIndex,0)
+  await h.scroll(1)
+  assert.equal(h.pages.at(-1).pageIndex,1)
+  assert.equal(h.audio.filter(Boolean).length,1)
 })

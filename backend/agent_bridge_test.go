@@ -12,6 +12,8 @@ func TestAgentToolsConfiguration(t *testing.T) {
 		{name: "disabled"},
 		{name: "partial", values: map[string]string{"AGENT_T3_MCP_URL": "https://example.test/mcp"}, wantError: true},
 		{name: "insecure", values: map[string]string{"AGENT_T3_MCP_URL": "http://example.test/mcp", "AGENT_T3_MCP_TOKEN": "test-only", "AGENT_T3_OWNER_USER_ID": "owner"}, wantError: true},
+		{name: "explicit control still registers only a status tool", values: map[string]string{"AGENT_T3_MCP_URL": "https://example.test/mcp", "AGENT_T3_MCP_TOKEN": "test-only", "AGENT_T3_OWNER_USER_ID": "owner", "AGENT_T3_CONTROL_ENABLED": "true"}, wantTools: 1},
+		{name: "invalid control switch", values: map[string]string{"AGENT_T3_MCP_URL": "https://example.test/mcp", "AGENT_T3_MCP_TOKEN": "test-only", "AGENT_T3_OWNER_USER_ID": "owner", "AGENT_T3_CONTROL_ENABLED": "yes"}, wantError: true},
 		{name: "configured without contacting provider", values: map[string]string{"AGENT_T3_MCP_URL": "https://example.test/mcp", "AGENT_T3_MCP_TOKEN": "test-only", "AGENT_T3_OWNER_USER_ID": "owner"}, wantTools: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

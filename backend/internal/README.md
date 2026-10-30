@@ -2,7 +2,8 @@
 
 The top level is reserved for application capabilities shared across features:
 
-- `agentbridge`: opt-in owner-scoped coding-agent status tools and provider adapters;
+- `agentbridge`: opt-in owner-scoped T3 status tools, explicit thread control,
+  and a target-bound tap-to-talk endpoint;
   see [scope and secure laptop bridge contract](../docs/agent-bridge.md).
 - `assistant`: utterance routing and response orchestration. Provider-specific
   code lives below it, such as `assistant/openai`.

@@ -73,8 +73,11 @@ func (t *readTool) Execute(ctx context.Context, scope tool.Scope, args json.RawM
 	return tool.Result{Content: string(data)}, err
 }
 func decode(raw json.RawMessage, target any, allowed ...string) error {
+	return decodeBounded(raw, target, 1024, allowed...)
+}
+func decodeBounded(raw json.RawMessage, target any, limit int, allowed ...string) error {
 	invalid := errors.New("invalid agent tool arguments")
-	if len(raw) > 1024 {
+	if len(raw) > limit {
 		return invalid
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))

@@ -44,9 +44,10 @@ import {
 } from "./realtime-socket"
 import type { WorkspaceResource } from "../features/workspace/workspaceTypes"
 import { RealtimeConnection } from "./realtime-connection"
+import { loadAgentConnections, openAgentThread, type AgentTarget } from "../features/workspace/agentClient"
 
 type ListeningState = "idle" | "starting" | "listening" | "stopping"
-type DisplaySurface = "compact" | "message" | "offline" | "sleep" | "transcript"
+type DisplaySurface = "compact" | "message" | "offline" | "sleep" | "transcript" | "agents"
 type NotificationPresentation = {
   id: string
   message: GlassesMessage
@@ -131,9 +132,17 @@ export async function initializeEvenExperience(
   onWorkspaceChanged: (resources: readonly WorkspaceResource[]) => void =
     () => undefined,
   onConnected: () => void = () => undefined,
+  agents: { target?: AgentTarget; onTargetChange?: (target?: AgentTarget) => void } = {},
 ): Promise<() => Promise<void>> {
   resumeGlassesPage()
-  const serverListeningEnabled = env.serverListeningEnabled
+  const agentTarget = agents.target
+  const serverListeningEnabled = env.serverListeningEnabled && !agentTarget
+  let agentRequests = new AbortController()
+  let agentRows: { target?: AgentTarget; label: string; status: string }[] = []
+  let agentIndex = 0
+  let agentMore: { connectionId: string; cursor: number }[] = []
+  let agentUncertain = false
+  let agentReadPosition: number | undefined
   let active = true
   let transitionTail: Promise<void> = Promise.resolve()
   let listeningState: ListeningState = "idle"
@@ -164,6 +173,7 @@ export async function initializeEvenExperience(
   let responseWindowGeneration = 0
 
   const connection = new RealtimeConnection(accessToken, {
+    agentTarget,
     enqueue: enqueueTransition,
     connected: handleConnected,
     unavailable: showReconnectState,
@@ -366,7 +376,11 @@ export async function initializeEvenExperience(
     latestTranscript = ""
     idlePrompt = undefined
     visibleAssistant = undefined
-    await setPage(buildCompactPage(serverListeningEnabled ? "LISTENING  ·  TAP TO TALK" : "TAP TO TALK"), "compact")
+    if (agentTarget) {
+      await setPage(buildMessagePage(presentGlassesMessage(`${agentTarget.title.slice(0, 96)}\n${agentUncertain ? 'Delivery uncertain. Check the thread in T3 before sending again.' : 'Tap to speak to this thread.'}`), "Tap to talk · Hold: Eyes"), "compact")
+    } else {
+      await setPage(buildCompactPage(serverListeningEnabled ? "LISTENING · TAP TO TALK · SCROLL: THREADS" : "TAP TO TALK · SCROLL: THREADS"), "compact")
+    }
   }
 
   async function showListening() {
@@ -401,6 +415,7 @@ export async function initializeEvenExperience(
 
   function answerAction(): string {
     if (thinking || awaitingResponse) return "Thinking"
+    if (agentTarget) return "Tap: talk · Scroll: reply"
     return listeningState === "listening"
       ? listeningLabel() : "Tap to talk"
   }
@@ -438,6 +453,10 @@ export async function initializeEvenExperience(
     presentation: GlassesMessage,
   ) {
     clearAssistantResponseState()
+    if (agentTarget) {
+      await setPage(buildMessagePage(presentation, "Tap: talk · Scroll: reply", messagePageIndex), "message")
+      return
+    }
     try {
       await setPage(
         buildMessagePage(presentation, "Opening mic", messagePageIndex),
@@ -680,6 +699,7 @@ export async function initializeEvenExperience(
       return
     }
     connection.release(closedSocket)
+    if (agentTarget && (listeningState !== "idle" || thinking || awaitingResponse)) agentUncertain = true
     clearAssistantResponseState()
     awaitingResponse = false
     latestTranscript = ""
@@ -1045,6 +1065,14 @@ export async function initializeEvenExperience(
   }
 
   async function handleClick() {
+    if (surface === "agents") {
+      const row = agentRows[agentIndex]
+      if (row && agents.onTargetChange) {
+        if (!row.target && !agentTarget) { await showReady(); await startAmbientCapture() }
+        else agents.onTargetChange(row.target)
+      }
+      return
+    }
     if (currentNotification && surface === "message") {
       await dismissNotification()
       return
@@ -1176,6 +1204,76 @@ export async function initializeEvenExperience(
     }
   }
 
+  async function readAgentReply() {
+    if (!agentTarget || thinking || awaitingResponse || listeningState !== "idle") return
+    agentRequests.abort()
+    agentRequests = new AbortController()
+    const timeout = setTimeout(() => agentRequests.abort(), 8000)
+    try {
+      reportStatus("Loading T3 reply")
+      const detail = await openAgentThread(accessToken, agentTarget, agentRequests.signal, agentReadPosition)
+      if (!active) return
+      const body = detail.messages.map((message) => `${message.role === "user" ? "You" : "T3"}: ${message.text}`).join("\n\n")
+      const note = detail.hasMore ? "More messages: scroll past this page." : "Scroll again to check for updates."
+      const presentation = presentGlassesMessage(body ? `${body}\n\n${detail.truncated ? 'Long messages shortened. Full text is in T3.\n' : ''}${note}` : "No newer messages returned. T3 may still be working.")
+      if (detail.nextPosition !== undefined) agentReadPosition = detail.nextPosition
+      visibleAssistant = presentation
+      messagePageIndex = 0
+      await showAssistantPresentation(presentation)
+      reportStatus("Connected")
+    } catch { if (active) reportStatus("Couldn’t read T3. Scroll to retry.") }
+    finally { clearTimeout(timeout) }
+  }
+
+  async function browseAgents(direction: number) {
+    if (surface === "message" && (currentNotification || visibleAssistant)) {
+      if (agentTarget && !currentNotification && direction > 0 && visibleAssistant && messagePageIndex >= glassesMessagePages(visibleAssistant).length - 1) await readAgentReply()
+      else await turnMessagePage(direction)
+      return
+    }
+    if (sleeping || currentNotification || thinking || awaitingResponse || listeningState !== "idle") return
+    if (surface !== "agents") {
+      if (surface === "message") { await turnMessagePage(direction); return }
+      cancelAssistantResponseWindow()
+      await stopAudioCapture(true)
+      agentRequests.abort()
+      agentRequests = new AbortController()
+      const timeout = setTimeout(() => agentRequests.abort(), 8000)
+      try {
+        await setPage(buildCompactPage("LOADING T3 THREADS"), "agents")
+        const connections = await loadAgentConnections(accessToken, agentRequests.signal)
+        if (!active) return
+        agentRows = [{ label: "Eyes", status: "Return to your assistant" }, ...connections.filter((entry) => !entry.unavailable && entry.canSend).flatMap((entry) => entry.threads.map((thread) => ({ target: { connectionId: entry.id, threadId: thread.id, title: thread.title }, label: thread.title.slice(0, 96), status: thread.status.replaceAll("_", " ").slice(0, 40) })))]
+        agentMore = connections.filter((entry) => entry.hasMore && entry.canSend && entry.cursor !== undefined).map((entry) => ({connectionId: entry.id, cursor: entry.cursor!}))
+        agentIndex = Math.min(1, agentRows.length - 1)
+      } catch {
+        if (active) { await showIdlePrompt("T3 UNAVAILABLE · TAP TO TALK"); await startAmbientCapture() }
+        return
+      } finally { clearTimeout(timeout) }
+    } else {
+      if (direction > 0 && agentIndex === agentRows.length - 1 && agentMore.length) {
+        const page = agentMore[0]
+        agentRequests.abort()
+        agentRequests = new AbortController()
+        const timeout = setTimeout(() => agentRequests.abort(), 8000)
+        try {
+          const connections = await loadAgentConnections(accessToken, agentRequests.signal, page)
+          if (!active) return
+          const entry = connections.find((item) => item.id === page.connectionId)
+          if (!entry || entry.unavailable || entry.cursor === page.cursor) throw new Error("Invalid page")
+          const existing = new Set(agentRows.map((row) => row.target && `${row.target.connectionId}:${row.target.threadId}`))
+          agentRows.push(...entry.threads.filter((thread) => !existing.has(`${entry.id}:${thread.id}`)).map((thread) => ({target: {connectionId: entry.id, threadId: thread.id, title: thread.title}, label: thread.title.slice(0, 96), status: thread.status.replaceAll("_", " ").slice(0, 40)})))
+          if (entry.hasMore && entry.cursor !== undefined) agentMore[0] = {connectionId: entry.id, cursor: entry.cursor}
+          else agentMore.shift()
+        } catch { reportStatus("Couldn’t load more threads. Scroll to retry."); return }
+        finally { clearTimeout(timeout) }
+      }
+      agentIndex = Math.max(0, Math.min(agentRows.length - 1, agentIndex + direction))
+    }
+    const row = agentRows[agentIndex]
+    await setPage(buildMessagePage(presentGlassesMessage(`${row.label}\n${row.status}`), `${agentIndex + 1}/${agentRows.length} · Scroll · Tap to select`), "agents")
+  }
+
   const stopEvents = bridge.onEvenHubEvent((event) => {
     const eventType =
       event.listEvent?.eventType ??
@@ -1204,12 +1302,16 @@ export async function initializeEvenExperience(
       return
     }
     if (eventType === OsEventTypeList.SCROLL_TOP_EVENT) {
-      void enqueueTransition(() => turnMessagePage(-1))
+      void enqueueTransition(() => browseAgents(-1))
     } else if (eventType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
-      void enqueueTransition(() => turnMessagePage(1))
+      void enqueueTransition(() => browseAgents(1))
     } else if (isLongPressEvent(event)) {
       suppressClicksUntil = Date.now() + RELEASE_CLICK_SUPPRESSION_MS
-      void enqueueTransition(enterSleep)
+      void enqueueTransition(async () => {
+        if (surface === "agents") { await showReady(); await startAmbientCapture(); return }
+        if (agentTarget && agents.onTargetChange && listeningState === "idle" && !thinking && !awaitingResponse) { agents.onTargetChange(); return }
+        await enterSleep()
+      })
     } else if (isClickEvent(event) && Date.now() >= suppressClicksUntil) {
       const pending = takePendingTranscript()
       void enqueueTransition(async () => {
@@ -1231,6 +1333,7 @@ export async function initializeEvenExperience(
       return teardownPromise ?? Promise.resolve()
     }
     active = false
+    agentRequests.abort()
     takePendingTranscript()
     clearAssistantResponseState()
     setListeningState("idle")

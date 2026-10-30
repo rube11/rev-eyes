@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 
+import type { AgentTarget } from '../features/workspace/agentClient'
 import { initializeEvenExperience } from '../even/runtime'
 import { showEvenMessage } from '../even/glasses-page-host'
 import {
@@ -134,6 +135,8 @@ function App() {
   const requestWorkspaceRefreshRef = useRef<WorkspaceRefreshRequester>(
     () => undefined,
   )
+  const [agentSelection, setAgentSelection] = useState<{ owner: string; target?: AgentTarget }>()
+  const agentTarget = agentSelection?.owner === session?.user.id ? agentSelection?.target : undefined
   const accessToken = session?.access_token
   const visibleWorkspaceData =
     isDemoMode || workspaceOwnerId === session?.user.id
@@ -418,6 +421,7 @@ function App() {
           requestWorkspaceRefreshRef.current(workspaceResources)
         }
       },
+      { target: agentTarget, onTargetChange: (target) => { if (!disposed && session?.user.id) setAgentSelection({ owner: session.user.id, target }) } },
     ))
       .catch(() => {
         if (!disposed) {
@@ -435,7 +439,7 @@ function App() {
       disposed = true
       void connectionSession.stop().catch(() => undefined)
     }
-  }, [accessToken, connectionRevision, connectionSession])
+  }, [accessToken, connectionRevision, connectionSession, agentTarget, session?.user.id])
 
   const reconnectGlasses = () => {
     if (isDemoMode || !accessToken || reconnectPending.current) return
@@ -704,6 +708,8 @@ function App() {
       email={session.user.email ?? 'Account'}
       userId={session.user.id}
       accessToken={session.access_token}
+      agentTarget={agentTarget}
+      onAgentTargetChange={(target) => setAgentSelection({ owner: session.user.id, target })}
       onSendChat={async (sessionId, text) => {
         try { return await sendChatMessage(session.access_token, sessionId, text) }
         finally { requestWorkspaceRefreshRef.current(workspaceResources) }

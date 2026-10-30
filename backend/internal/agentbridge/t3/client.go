@@ -1,4 +1,4 @@
-// Package t3 implements the deliberately narrow, read-only T3 MCP boundary.
+// Package t3 implements the owner-configured T3 MCP boundary.
 package t3
 
 import (
@@ -30,6 +30,7 @@ var ErrUnavailable = errors.New("T3 capability unavailable or incompatible")
 type Client struct {
 	endpoint, token string
 	http            *http.Client
+	control         bool
 }
 
 func New(endpoint, token string) (*Client, error) { return newClient(endpoint, token, false) }
@@ -52,7 +53,11 @@ func newClient(endpoint, token string, loopback bool) (*Client, error) {
 	return &Client{endpoint: endpoint, token: token, http: &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
-func (*Client) Capabilities() agentbridge.Capabilities { return agentbridge.Capabilities{List: true} }
+// WithControl opts in to explicit UI/gesture actions. It does not register model tools.
+func (c *Client) WithControl(enabled bool) *Client { c.control = enabled; return c }
+func (c *Client) Capabilities() agentbridge.Capabilities {
+	return agentbridge.Capabilities{List: true, Send: c.control, Open: c.control}
+}
 
 // Read is unavailable: current upstream t3_thread_read marks child results as
 // delivered and is explicitly annotated non-read-only. Do not silently weaken
@@ -61,12 +66,100 @@ func (*Client) Read(context.Context, string) (json.RawMessage, error) { return n
 
 // List returns the first bounded page, including provider status metadata and
 // nextCursor. It does not claim the first page is the complete thread inventory.
-func (c *Client) List(ctx context.Context) (json.RawMessage, error) {
+func (c *Client) List(ctx context.Context) (json.RawMessage, error) { return c.ListPage(ctx, 0) }
+
+func (c *Client) ListPage(ctx context.Context, cursor int) (json.RawMessage, error) {
+	args := map[string]any{"allProjects": true, "limit": 20}
+	if cursor > 0 {
+		args["cursor"] = cursor
+	}
+	return c.call(ctx, "t3_thread_list", args, func(raw json.RawMessage, readOnly bool) bool {
+		return readOnly && compatibleListSchema(raw) && (cursor == 0 || schemaAccepts(raw, map[string]string{"cursor": "number"}, nil))
+	}, nil)
+}
+
+func (c *Client) Send(ctx context.Context, threadID, message, requestID string) (json.RawMessage, error) {
+	if !c.control {
+		return nil, ErrUnavailable
+	}
+	dispatched := false
+	data, err := c.call(ctx, "t3_thread_send", map[string]any{"threadId": threadID, "message": message, "clientRequestId": requestID, "mode": "queue"}, func(raw json.RawMessage, _ bool) bool {
+		return schemaAccepts(raw, map[string]string{"threadId": "string", "message": "string", "clientRequestId": "string", "mode": "string"}, []string{"threadId", "message", "clientRequestId", "mode"})
+	}, &dispatched)
+	if err != nil && dispatched {
+		return nil, agentbridge.ErrDeliveryUnknown
+	}
+	return data, err
+}
+
+// Open is an explicit user action, never a context-only/read-only model tool:
+// upstream reading may acknowledge delivery of a child result.
+func (c *Client) Open(ctx context.Context, threadID string) (json.RawMessage, error) {
+	return c.OpenPage(ctx, threadID, -1)
+}
+func (c *Client) OpenPage(ctx context.Context, threadID string, after int) (json.RawMessage, error) {
+	if !c.control {
+		return nil, ErrUnavailable
+	}
+	args := map[string]any{"threadId": threadID, "view": "messages", "limit": 20, "maxCharsPerItem": 2000}
+	fields := map[string]string{"threadId": "string", "view": "string", "limit": "number", "maxCharsPerItem": "number"}
+	if after >= 0 {
+		args["afterPosition"] = after
+		fields["afterPosition"] = "number"
+	}
+	return c.call(ctx, "t3_thread_read", args, func(raw json.RawMessage, _ bool) bool {
+		return schemaAccepts(raw, fields, []string{"threadId", "view", "limit", "maxCharsPerItem", "afterPosition"})
+	}, nil)
+}
+
+func schemaAccepts(raw json.RawMessage, fields map[string]string, allowedRequired []string) bool {
+	var s struct {
+		Type       string `json:"type"`
+		Properties map[string]struct {
+			Type string   `json:"type"`
+			Enum []string `json:"enum"`
+		} `json:"properties"`
+		Required []string `json:"required"`
+	}
+	if json.Unmarshal(raw, &s) != nil || s.Type != "object" {
+		return false
+	}
+	for name, typ := range fields {
+		p := s.Properties[name]
+		if p.Type != typ && !(typ == "number" && p.Type == "integer") {
+			return false
+		}
+		if name == "mode" && len(p.Enum) > 0 {
+			found := false
+			for _, value := range p.Enum {
+				found = found || value == "queue"
+			}
+			if !found {
+				return false
+			}
+		}
+	}
+	if allowedRequired != nil {
+		for _, name := range s.Required {
+			found := false
+			for _, allowed := range allowedRequired {
+				found = found || name == allowed
+			}
+			if !found {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Every invocation refreshes discovery and authorization. No automatic retries.
+func (c *Client) call(ctx context.Context, name string, args map[string]any, compatible func(json.RawMessage, bool) bool, dispatched *bool) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	session := ""
 	defer func() { c.closeSession(ctx, session) }()
-	init, err := c.rpc(ctx, &session, 1, "initialize", map[string]any{"protocolVersion": protocolVersion, "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "rev-eyes", "version": "0.1"}})
+	init, err := c.rpc(ctx, &session, 1, "initialize", map[string]any{"protocolVersion": protocolVersion, "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "rev-eyes", "version": "0.2"}})
 	if err != nil {
 		return nil, err
 	}
@@ -79,17 +172,15 @@ func (c *Client) List(ctx context.Context) (json.RawMessage, error) {
 	if _, err = c.rpc(ctx, &session, 0, "notifications/initialized", nil); err != nil {
 		return nil, err
 	}
-	// Discovery is bounded and repeated per request, so stale permissions/schemas
-	// are never assumed after a reconnect. No mutation is retried or attempted.
 	cursor := ""
-	seenCursors := map[string]bool{}
-	compatible := false
+	seen := map[string]bool{}
+	found := false
 	for page := 0; page < 10; page++ {
-		args := map[string]any{}
+		params := map[string]any{}
 		if cursor != "" {
-			args["cursor"] = cursor
+			params["cursor"] = cursor
 		}
-		raw, e := c.rpc(ctx, &session, 2+page, "tools/list", args)
+		raw, e := c.rpc(ctx, &session, 2+page, "tools/list", params)
 		if e != nil {
 			return nil, e
 		}
@@ -106,24 +197,27 @@ func (c *Client) List(ctx context.Context) (json.RawMessage, error) {
 		if json.Unmarshal(raw, &catalog) != nil {
 			return nil, ErrUnavailable
 		}
-		for _, t := range catalog.Tools {
-			if t.Name == "t3_thread_list" {
-				compatible = t.Annotations.ReadOnly && compatibleListSchema(t.InputSchema)
+		for _, tool := range catalog.Tools {
+			if tool.Name == name {
+				found = compatible(tool.InputSchema, tool.Annotations.ReadOnly)
 			}
 		}
-		if compatible || catalog.NextCursor == "" {
+		if found || catalog.NextCursor == "" {
 			break
 		}
-		if seenCursors[catalog.NextCursor] {
+		if seen[catalog.NextCursor] {
 			return nil, ErrUnavailable
 		}
-		seenCursors[catalog.NextCursor] = true
+		seen[catalog.NextCursor] = true
 		cursor = catalog.NextCursor
 	}
-	if !compatible {
+	if !found {
 		return nil, ErrUnavailable
 	}
-	raw, err := c.rpc(ctx, &session, 20, "tools/call", map[string]any{"name": "t3_thread_list", "arguments": map[string]any{"allProjects": true, "limit": 20}})
+	if dispatched != nil {
+		*dispatched = true
+	}
+	raw, err := c.rpc(ctx, &session, 20, "tools/call", map[string]any{"name": name, "arguments": args})
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +230,7 @@ func (c *Client) List(ctx context.Context) (json.RawMessage, error) {
 		} `json:"content"`
 	}
 	if json.Unmarshal(raw, &result) != nil || result.IsError {
-		return nil, errors.New("T3 list failed")
+		return nil, ErrUnavailable
 	}
 	payload := result.Structured
 	if len(payload) == 0 || string(payload) == "null" {
@@ -145,11 +239,16 @@ func (c *Client) List(ctx context.Context) (json.RawMessage, error) {
 		}
 		payload = json.RawMessage(result.Content[0].Text)
 	}
-	var page struct {
-		Threads json.RawMessage `json:"threads"`
-	}
-	if json.Unmarshal(payload, &page) != nil || len(page.Threads) == 0 || page.Threads[0] != '[' {
+	if !json.Valid(payload) || len(payload) > 128*1024 {
 		return nil, ErrUnavailable
+	}
+	if name == "t3_thread_list" {
+		var p struct {
+			Threads json.RawMessage `json:"threads"`
+		}
+		if json.Unmarshal(payload, &p) != nil || len(p.Threads) == 0 || p.Threads[0] != '[' {
+			return nil, ErrUnavailable
+		}
 	}
 	return payload, nil
 }

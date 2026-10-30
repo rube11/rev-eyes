@@ -16,13 +16,14 @@ var ErrUnavailable = errors.New("agent connection or capability unavailable")
 // Capabilities are explicit: adding a provider never implicitly enables writes.
 type Capabilities struct {
 	List      bool `json:"list"`
+	Open      bool `json:"open"`
 	Read      bool `json:"read"`
 	Send      bool `json:"send"`
 	Start     bool `json:"start"`
 	Interrupt bool `json:"interrupt"`
 }
 
-// Provider exposes only reads in this increment. Read MUST be side-effect free;
+// Provider is the model-visible read boundary. Read MUST be side-effect free;
 // acknowledging delivery or approving anything is not a read for this purpose.
 // Implementations must honor context cancellation and bound response sizes.
 type Provider interface {
@@ -50,8 +51,10 @@ func New(connections []Connection) (*Gateway, error) {
 		}
 		seen[c.ID] = true
 		caps := c.Provider.Capabilities()
-		if caps.Send || caps.Start || caps.Interrupt {
-			return nil, errors.New("agent mutations are not supported")
+		_, canSend := c.Provider.(Messenger)
+		_, canOpen := c.Provider.(ThreadOpener)
+		if (caps.Send && !canSend) || (caps.Open && !canOpen) || caps.Start || caps.Interrupt {
+			return nil, errors.New("agent capability has no implementation")
 		}
 	}
 	return &Gateway{connections: append([]Connection(nil), connections...)}, nil
@@ -116,7 +119,7 @@ func validID(id string) bool {
 		return false
 	}
 	for _, c := range id {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.') {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.' || c == ':') {
 			return false
 		}
 	}

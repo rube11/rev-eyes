@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 
+import type { AgentTarget } from '../agentClient'
 import { AgentsView } from '../views/AgentsView'
 import { HomeView } from '../views/HomeView'
 import { ConversationLog } from '../views/ConversationLog'
@@ -31,6 +32,8 @@ type WorkspaceProps = {
   onSendChat?: SendChatMessage
   userId?: string
   accessToken?: string
+  agentTarget?: AgentTarget
+  onAgentTargetChange?: (target?: AgentTarget) => void
   data: WorkspaceData
   email: string
   glassesStatus: string
@@ -59,6 +62,8 @@ export function Workspace({
   onSendChat,
   userId,
   accessToken,
+  agentTarget,
+  onAgentTargetChange,
   data,
   email,
   glassesStatus,
@@ -177,7 +182,7 @@ export function Workspace({
               body="This section is unavailable right now. Use Try again above to reload it. Other sections remain available."
             />
           ) : null}
-          {view === 'agents' ? <AgentsView key={userId} accessToken={accessToken} /> : null}
+          {view === 'agents' ? <AgentsView key={userId} accessToken={accessToken} target={agentTarget} onTargetChange={onAgentTargetChange} /> : null}
           {view === 'now' ? (
             <HomeView
               data={data}

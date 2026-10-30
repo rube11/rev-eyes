@@ -22,3 +22,16 @@
 .agents-setup summary { cursor: pointer; color: var(--fg); }
 .agents-setup p { margin-top: var(--space-3); max-width: 72ch; }
 @media (max-width: 560px) { .agents-boundary { flex-direction: column; gap: var(--space-3); } .agents-provider__header, .agent-thread { padding: var(--space-4); } .agents-message { padding: var(--space-5) var(--space-4); } }
+button.agent-thread { width: 100%; background: transparent; color: var(--fg); text-align: left; cursor: pointer; border: 0; border-top: 1px solid var(--line); }
+button.agent-thread:hover, .agent-thread--selected { background: var(--surface-2); }
+button.agent-thread:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+button.agent-thread:disabled { cursor: default; opacity: .65; }
+.agent-conversation__controls, .agent-conversation__messages, .agent-composer { padding: var(--space-5) var(--space-6); }
+.agent-conversation__controls { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); border-bottom: 1px solid var(--line); }
+.agent-conversation__controls > p { flex-basis: 100%; }
+.agent-conversation__messages { max-height: 480px; overflow-y: auto; }
+.agent-message { padding: var(--space-4); border-radius: var(--radius-md); margin-bottom: var(--space-3); background: var(--surface-2); }
+.agent-message--user { margin-left: var(--space-6); }
+.agent-message p:last-child { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); }
+.agent-composer { display: grid; justify-items: start; gap: var(--space-3); border-top: 1px solid var(--line); }
+.agent-composer textarea { width: 100%; background: var(--surface-2); color: var(--fg); border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-3); font: inherit; resize: vertical; }
