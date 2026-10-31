@@ -43,10 +43,25 @@ function page(containers: TextContainerProperty[]): RebuildPageContainer {
   return new RebuildPageContainer({ containerTotalNum: containers.length, textObject: containers })
 }
 
+// Titles and controls have fixed space; replies still keep every page.
+export function fitGlassesText(value: string, lines: number): string {
+  const wrapped = wrapGlassesText(cleanText(value))
+  if (wrapped.length <= lines) return wrapped.join("\n")
+  const visible = wrapped.slice(0, lines)
+  // Leave room for the ellipsis, including wide glyphs.
+  const characters = Array.from(new Intl.Segmenter("en", { granularity: "grapheme" }).segment(visible[lines - 1]), part => part.segment)
+  visible[lines - 1] = characters.slice(0, -2).join("").trimEnd() + "…"
+  return visible.join("\n")
+}
+
+export function buildThreadPage(title: string, detail: string, action: string): RebuildPageContainer {
+  return buildMessagePage(presentGlassesMessage(`${fitGlassesText(title, 2)}\n\n${fitGlassesText(detail, 3)}`), action)
+}
+
 function status(content: string, name = "message-status"): TextContainerProperty {
   return text({
     xPosition: MARGIN, yPosition: 244, width: CONTENT_WIDTH, height: 32,
-    containerID: 2, containerName: name, content, isEventCapture: 0,
+    containerID: 2, containerName: name, content: fitGlassesText(content, 1), isEventCapture: 0,
   })
 }
 
@@ -92,7 +107,10 @@ export function buildTranscriptPage(
 export function buildMessageStatus(message: GlassesMessage, action: string, pageIndex = 0): string {
   const count = glassesMessagePages(message).length
   const current = Math.max(0, Math.min(count - 1, pageIndex))
-  return count > 1 ? `${current + 1}/${count} · Scroll · ${action}` : action
+  if (count <= 1) return fitGlassesText(action, 1)
+  const withScroll = `${current + 1}/${count} · Scroll · ${action}`
+  return fitGlassesText(!action.includes("Scroll") && wrapGlassesText(withScroll).length === 1
+    ? withScroll : `${current + 1}/${count} · ${action}`, 1)
 }
 
 export function buildMessagePage(

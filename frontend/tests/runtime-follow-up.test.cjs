@@ -60,10 +60,10 @@ async function harness(t, serverListeningEnabled = false, reconnect = false, rea
     "../shared/config/env": { env: { serverListeningEnabled } },
     "../../shared/config/env": { env: { serverListeningEnabled } },
     "../features/workspace/agentClient": {
-      loadAgentConnections: async () => agentOptions.connections ?? [],
+      loadAgentConnections: async (...args) => agentOptions.loadConnections ? agentOptions.loadConnections(...args) : agentOptions.connections ?? [],
       openAgentThread: async (_token, target, _signal, after) => {
         threadReads.push({ target, after })
-        return { messages: [{id:'m',role:'assistant',text:agentOptions.replyMessage ?? 'The fix is ready for review.'}], hasMore:false, nextPosition:12, truncated:false }
+        return agentOptions.readThread ? agentOptions.readThread(_signal, after) : { messages: [{id:'m',role:'assistant',text:agentOptions.replyMessage ?? 'The fix is ready for review.'}], hasMore:false, nextPosition:12, truncated:false }
       },
     },
     '@evenrealities/even_hub_sdk': {
@@ -81,9 +81,11 @@ async function harness(t, serverListeningEnabled = false, reconnect = false, rea
     './glasses-ui': {
       buildCompactPage: label => ({ label }), buildSleepPage: () => ({ label: 'sleep' }),
       buildCompactContent: label => label,
+      fitGlassesText: text => text,
+      buildThreadPage: (title, detail, footer) => ({ message: { kind: 'answer', body: `${title}\n\n${detail}` }, footer }),
       buildMessagePage: (message, footer, pageIndex = 0) => ({ message, footer, pageIndex }),
       buildMessageStatus: (_message, footer) => footer,
-      glassesMessagePages: message => message.body.match(/.{1,100}/g) ?? [' '],
+      glassesMessagePages: message => message.body.replace(/\n/g, ' ').match(/.{1,100}/g) ?? [' '],
       buildTranscriptContent: text => text,
       buildTranscriptPage: (text, thinking, listeningStatus) => ({
         transcript: text, footer: thinking ? 'Thinking' : listeningStatus,
@@ -670,7 +672,7 @@ test('sleep discards scheduled transcript updates', async t => {
   assert.equal(h.pages.at(-1).label, 'sleep')
 })
 
-test('real layouts keep body and status disjoint and preserve all list content', () => {
+function loadGlassesUI() {
   const cache = new Map()
   function load(file) {
     if (cache.has(file)) return cache.get(file).exports
@@ -686,7 +688,11 @@ test('real layouts keep body and status disjoint and preserve all list content',
     vm.runInNewContext('(function(require,module,exports){' + source + '\n})')(localRequire, module, module.exports)
     return module.exports
   }
-  const ui = load(path.resolve(__dirname, '../src/even/glasses-ui.ts'))
+  return load(path.resolve(__dirname, '../src/even/glasses-ui.ts'))
+}
+
+test('real layouts keep body and status disjoint and preserve all list content', () => {
+  const ui = loadGlassesUI()
   const source = 'A meal plan\n\n' + Array.from({ length: 8 }, (_, i) => '- Ingredient ' + i).join('\n')
     + '\n\nDo not forget the final advice.'
   const message = ui.presentGlassesMessage(source)
@@ -905,7 +911,7 @@ test('holding an idle T3 thread returns to Eyes without sending or starting a mi
   await h.sleep()
   assert.equal(h.selections.length,1)
   assert.equal(h.selections[0],undefined)
-  assert.equal(h.audio.length,0)
+  assert.equal(h.audio.filter(Boolean).length,0)
 })
 
 
@@ -920,4 +926,342 @@ test('long T3 replies keep their reading position without starting another micro
   await h.scroll(1)
   assert.equal(h.pages.at(-1).pageIndex,1)
   assert.equal(h.audio.filter(Boolean).length,1)
+})
+
+function deferred() {
+  let resolve, reject
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
+}
+const chosenThread = { connectionId: 'laptop', threadId: 'mcp:launch:chosen', title: 'Fix audio' }
+function threadConnection(threads = [{ id: chosenThread.threadId, title: chosenThread.title, status: 'running' }], extra = {}) {
+  return { id: 'laptop', unavailable: false, canSend: true, threads, hasMore: false, ...extra }
+}
+
+test('thread reads before speaking, refreshes without a cursor, and shows waiting and failures', async t => {
+  let fail = false
+  const h = await harness(t, true, false, false, {
+    target: chosenThread,
+    readThread: async () => {
+      if (fail) throw new Error('Unavailable')
+      return { messages: [], nextPosition: 12, hasMore: false }
+    },
+  })
+  assert.match(h.pages.at(-1).message.body, /Tap to speak\nScroll to read reply/)
+  await h.scroll(1)
+  assert.match(h.pages.at(-1).message.body, /No new reply yet/)
+  await h.scroll(1)
+  assert.equal(h.threadReads.length, 2)
+  assert.ok(h.threadReads.every(read => read.after === undefined), 'refresh must also catch edits to existing messages')
+  fail = true
+  await h.scroll(1)
+  assert.match(h.pages.at(-1).message.body, /Couldn’t read reply.*\nScroll to retry/)
+  assert.equal(h.pages.at(-1).footer, 'Hold: Eyes')
+  assert.equal(h.audio.filter(Boolean).length, 0)
+})
+
+test('reply timeout is visible, allows retry and rejects late success', async t => {
+  const late = deferred()
+  let reads = 0
+  const h = await harness(t, true, false, false, {
+    target: chosenThread,
+    readThread: () => ++reads === 1 ? late.promise : Promise.resolve({ messages: [], hasMore: false }),
+  })
+  await h.scroll(1)
+  assert.match(h.pages.at(-1).message.body, /Reading reply/)
+  await h.advance(8_000)
+  assert.match(h.pages.at(-1).message.body, /Couldn’t read reply/)
+  await h.scroll(1)
+  assert.match(h.pages.at(-1).message.body, /No new reply yet/)
+  late.resolve({ messages: [{ role: 'assistant', text: 'Stale reply' }], nextPosition: 99 })
+  await h.advance(0)
+  assert.doesNotMatch(h.pages.at(-1).message.body, /Stale reply/)
+})
+
+test('hold exits a pending reply read without waiting for the network', async t => {
+  const late = deferred()
+  let signal
+  const h = await harness(t, true, false, false, {
+    target: chosenThread, readThread: incoming => { signal = incoming; return late.promise },
+  })
+  await h.scroll(1)
+  await h.sleep()
+  assert.equal(h.selections.length, 1)
+  assert.equal(h.selections[0], undefined)
+  assert.equal(signal.aborted, true)
+  const count = h.pages.length
+  late.resolve({ messages: [{ role: 'assistant', text: 'Late reply' }] })
+  await h.advance(0)
+  assert.equal(h.pages.length, count)
+  assert.equal(h.audio.filter(Boolean).length, 0)
+})
+
+test('a reply read cannot replace a new speech turn', async t => {
+  const late = deferred()
+  const h = await harness(t, true, false, false, { target: chosenThread, readThread: () => late.promise })
+  await h.scroll(1)
+  await h.click()
+  assert.match(h.pages.at(-1).label, /Listening/)
+  late.resolve({ messages: [{ role: 'assistant', text: 'Stale reply' }], nextPosition: 99 })
+  await h.advance(0)
+  assert.match(h.pages.at(-1).label, /Listening/)
+})
+
+for (const [text, expected] of [
+  ['Message queued in your T3 thread. Open the thread to check its reply.', 'Sent to thread.'],
+  ['Delivery is uncertain. Check the T3 thread before sending again.', 'Send not confirmed.'],
+  ['Message was not sent. Check the T3 connection and its permissions.', 'Not sent.'],
+  ['Speech was not sent. Tap and speak your own message.', 'Not sent.'],
+]) {
+  test(`thread delivery feedback: ${text.split('.')[0]}`, async t => {
+    const h = await harness(t, true, false, false, { target: chosenThread })
+    await h.click()
+    await h.message('assistant_thinking')
+    assert.equal(h.pages.at(-1).footer, 'Sending')
+    assert.equal(h.statuses.at(-1), 'Sending')
+    await h.message('assistant_response', { text })
+    await h.message('listening_stopped')
+    assert.ok(h.pages.at(-1).message.body.startsWith(expected))
+    assert.equal(h.pages.at(-1).footer, 'Scroll · Hold: Eyes')
+    assert.equal(h.audio.filter(Boolean).length, 1)
+    assert.equal(h.audio.at(-1), false)
+  })
+}
+
+test('taps while a manual send is waiting do not start another microphone; Hold returns to Eyes', async t => {
+  const h = await harness(t, true, false, false, { target: chosenThread })
+  await h.click()
+  await h.click()
+  assert.equal(h.pages.at(-1).footer, 'Sending')
+  await h.click()
+  await h.click()
+  assert.equal(h.audio.filter(Boolean).length, 1)
+  await h.sleep()
+  assert.equal(h.selections.length, 1)
+  assert.equal(h.selections[0], undefined)
+})
+
+test('reconnect after speech shows unconfirmed delivery without resending', async t => {
+  const h = await harness(t, true, true, false, { target: chosenThread })
+  await h.click()
+  await h.message('assistant_thinking')
+  await h.disconnect()
+  assert.match(h.pages.at(-1).label, /Reconnecting\nHold: Eyes/)
+  await h.advance(1_000)
+  assert.match(h.pages.at(-1).message.body, /Send not confirmed/)
+  assert.equal(h.controls.filter(value => value === 'listening_start').length, 1)
+  assert.equal(h.connectionOptions[1].agentTarget.threadId, chosenThread.threadId)
+  await h.scroll(1)
+  assert.equal(h.threadReads[0].target.threadId, chosenThread.threadId)
+})
+
+test('picker loading ignores taps and back cancels a request that resolves late', async t => {
+  const late = deferred()
+  let signal
+  const h = await harness(t, true, false, false, {
+    loadConnections: (_token, incoming) => { signal = incoming; return late.promise },
+  })
+  await h.scroll(1)
+  await h.click()
+  assert.equal(h.selections.length, 0)
+  await h.sleep()
+  assert.equal(signal.aborted, true)
+  assert.match(h.pages.at(-1).label, /TAP TO TALK/)
+  const count = h.pages.length
+  late.resolve([threadConnection()])
+  await h.advance(0)
+  assert.equal(h.pages.length, count)
+  assert.equal(h.selections.length, 0)
+  assert.equal(h.audio.at(-1), true)
+})
+
+test('picker survives reconnect without opening ambient capture or losing its selected row', async t => {
+  const h = await harness(t, true, true, false, { connections: [threadConnection()] })
+  await h.scroll(1)
+  const row = h.pages.at(-1).message.body
+  await h.disconnect()
+  await h.advance(1_000)
+  assert.equal(h.pages.at(-1).message.body, row)
+  assert.equal(h.audio.at(-1), false)
+  assert.equal(h.controls.filter(value => value === 'ambient_start').length, 1)
+  await h.message('conversation_started')
+  await h.message('assistant_response', { text: 'Stale Eyes response' })
+  assert.equal(h.pages.at(-1).message.body, row)
+  await h.click()
+  assert.equal(h.selections[0].threadId, chosenThread.threadId)
+})
+
+test('a tap queued with a scroll never selects a row the user has not seen', async t => {
+  const h = await harness(t, true, false, false, { connections: [threadConnection([
+    { id: 'first', title: 'Same title', status: 'running' },
+    { id: 'second', title: 'Same title', status: 'running' },
+  ])] })
+  await h.scroll(1)
+  await Promise.all([h.scroll(1), h.click()])
+  assert.equal(h.selections.length, 0)
+  await h.click()
+  assert.equal(h.selections[0].threadId, 'second')
+  await h.click()
+  assert.equal(h.selections.length, 1)
+  assert.equal(h.controls.filter(value => value === 'listening_start').length, 0)
+})
+
+test('Eyes row and picker back restore speech without changing targets', async t => {
+  const h = await harness(t, true, false, false, { connections: [threadConnection()] })
+  await h.scroll(1)
+  await h.scroll(-1)
+  assert.match(h.pages.at(-1).message.body, /^Eyes/)
+  await h.click()
+  assert.match(h.pages.at(-1).label, /TAP TO TALK/)
+  assert.equal(h.selections.length, 0)
+  assert.equal(h.audio.at(-1), true)
+  await h.scroll(1)
+  await h.sleep()
+  await h.click() // Release click is suppressed.
+  assert.equal(h.controls.includes('listening_start'), false)
+  await h.advance(750)
+  await h.click()
+  assert.equal(h.controls.includes('listening_start'), true)
+})
+
+test('picker failures stay visible and allow scroll to retry', async t => {
+  let calls = 0
+  const h = await harness(t, true, false, false, {
+    loadConnections: async () => {
+      if (++calls === 1) throw new Error('Unavailable')
+      return [threadConnection()]
+    },
+  })
+  await h.scroll(1)
+  assert.match(h.pages.at(-1).message.body, /Threads unavailable/)
+  await h.click()
+  assert.equal(h.audio.at(-1), false)
+  await h.scroll(1)
+  assert.match(h.pages.at(-1).message.body, /Fix audio/)
+  await h.click()
+  assert.equal(h.selections[0].threadId, chosenThread.threadId)
+})
+
+test('load more failures retain the last row and allow retry with the same cursor', async t => {
+  const requested = []
+  let fail = true
+  const h = await harness(t, true, false, false, {
+    loadConnections: async (_token, _signal, page) => {
+      requested.push(page)
+      if (!page) return [threadConnection(undefined, { hasMore: true, cursor: 20 })]
+      if (fail) { fail = false; throw new Error('Unavailable') }
+      return [threadConnection([{ id: 'second', title: 'Second task', status: 'idle' }])]
+    },
+  })
+  await h.scroll(1)
+  await h.scroll(1)
+  assert.match(h.pages.at(-1).message.body, /Couldn’t load more/)
+  await h.scroll(1)
+  assert.match(h.pages.at(-1).message.body, /Second task/)
+  assert.equal(requested[1].cursor, 20)
+  assert.equal(requested[2].cursor, 20)
+  await h.click()
+  assert.equal(h.selections[0].threadId, 'second')
+})
+
+test('long titles and thread controls fit one body page and one footer line', () => {
+  const ui = loadGlassesUI()
+  for (const title of ['Fix audio', 'WWW '.repeat(80), '界👩‍💻'.repeat(100), 'same\n'.repeat(80)]) {
+    for (const [detail, action] of [
+      ['Tap to speak\nScroll to read reply', 'Hold: Eyes'],
+      ['laptop\nScroll: threads · Hold: back', '999/1000 · Tap: select'],
+      ['Couldn’t load more.\nScroll to retry.', 'Tap: select · Hold: back'],
+      ['Send not confirmed.\nScroll to check the thread.', 'Hold: Eyes'],
+    ]) {
+      const [body, status] = ui.buildThreadPage(title, detail, action).textObject
+      assert.ok(body.content.split('\n').length <= 6, body.content)
+      assert.equal(ui.glassesMessagePages(ui.presentGlassesMessage(body.content)).length, 1)
+      assert.equal(status.content, action)
+      assert.equal(body.isEventCapture, 1)
+      if (title.length > 100) assert.match(body.content, /…/)
+      if (detail.includes('Hold: back')) assert.match(body.content, /Hold: back/)
+    }
+  }
+  const reply = ui.presentGlassesMessage('W'.repeat(20_000))
+  const footer = ui.buildMessageStatus(reply, 'Scroll · Hold: Eyes', 99)
+  assert.match(footer, /^100\/\d+ · Scroll · Hold: Eyes$/)
+  assert.equal(footer.includes('\n'), false)
+  assert.equal(ui.glassesMessagePages(reply).join('').replace(/\s/g, '').length, 20_000)
+})
+
+test('installed SDK renders thread controls, sending feedback and a paged reply', async t => {
+  const h = await harness(t, true, false, true, { target: chosenThread, replyMessage: 'Reply '.repeat(120) })
+  assert.match(h.nativeText(), /Fix audio/)
+  assert.match(h.nativeText(), /Scroll to read reply/)
+  assert.match(h.nativeText(), /Hold: Eyes/)
+  await h.click()
+  assert.match(h.nativeText(), /Pause or tap to send/)
+  await h.message('user_transcript', { text: 'Please fix the bug' })
+  await h.advance(250)
+  await h.click()
+  assert.match(h.nativeText(), /Sending/)
+  await h.message('assistant_response', { text: 'Message queued in your T3 thread. Open the thread to check its reply.' })
+  await h.message('listening_stopped')
+  assert.match(h.nativeText(), /Sent to thread/)
+  await h.scroll(1)
+  assert.match(h.nativeText(), /1\/\d+ · Scroll · Hold: Eyes/)
+  await h.scroll(1)
+  assert.match(h.nativeText(), /2\/\d+ · Scroll · Hold: Eyes/)
+  assert.equal(h.audio.filter(Boolean).length, 1)
+})
+
+for (const text of ['', 'Please fix it']) {
+  test(`silent thread completion clears the listening cue (${text ? 'speech' : 'no speech'})`, async t => {
+    const h = await harness(t, true, false, false, { target: chosenThread })
+    await h.click()
+    if (text) await h.message('user_transcript', { text })
+    await h.click()
+    await h.message('assistant_done')
+    await h.message('listening_stopped')
+    assert.match(h.pages.at(-1).message.body, text ? /Send not confirmed/ : /No speech heard/)
+    assert.equal(h.pages.at(-1).footer, 'Scroll · Hold: Eyes')
+    assert.equal(h.audio.at(-1), false)
+  })
+}
+
+test('opaque connection and thread IDs cannot collide when loading more rows', async t => {
+  const h = await harness(t, true, false, false, {
+    loadConnections: async (_token, _signal, page) => page
+      ? [threadConnection([{ id: 'b:c', title: 'Exact second thread', status: 'idle' }], { id: 'a' })]
+      : [
+        threadConnection([{ id: 'c', title: 'First thread', status: 'idle' }], { id: 'a:b' }),
+        threadConnection([{ id: 'd', title: 'Other thread', status: 'idle' }], { id: 'a', hasMore: true, cursor: 20 }),
+      ],
+  })
+  await h.scroll(1)
+  await h.scroll(1)
+  await h.scroll(1)
+  assert.match(h.pages.at(-1).message.body, /Exact second thread/)
+  await h.click()
+  assert.equal(h.selections[0].connectionId, 'a')
+  assert.equal(h.selections[0].threadId, 'b:c')
+})
+
+test('a stop acknowledgement before thread delivery keeps Sending visible and blocks a second recording', async t => {
+  const h = await harness(t, true, false, false, { target: chosenThread })
+  await h.click()
+  await h.message('user_transcript', { text: 'Fix it please' })
+  await h.click()
+  await h.message('listening_stopped')
+  assert.equal(h.pages.at(-1).footer, 'Sending')
+  await h.click()
+  assert.equal(h.audio.filter(Boolean).length, 1)
+  await h.message('assistant_response', { text: 'Message queued in your T3 thread.' })
+  assert.match(h.pages.at(-1).message.body, /Sent to thread/)
+})
+
+test('interrupted transcription on a thread prompts a delivery check, not a microphone error', async t => {
+  const h = await harness(t, true, true, false, { target: chosenThread })
+  await h.click()
+  await h.message('listening_stopped', { error: 'Transcription unavailable' })
+  assert.match(h.pages.at(-1).message.body, /Speech interrupted.*\nScroll to check the thread/)
+  assert.equal(h.pages.at(-1).footer, 'Hold: Eyes')
+  await h.disconnect()
+  await h.advance(1_000)
+  assert.match(h.pages.at(-1).message.body, /Send not confirmed/)
 })
