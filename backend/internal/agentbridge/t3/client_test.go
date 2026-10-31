@@ -17,14 +17,18 @@ const listSchema = `{"type":"object","properties":{"allProjects":{"type":"boolea
 
 func fakeServer(t *testing.T, sse bool, readOnly bool, schema string, result string) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
+	return fakeServerProtocol(t, sse, readOnly, schema, result, legacyProtocolVersion)
+}
+func fakeServerProtocol(t *testing.T, sse bool, readOnly bool, schema string, result string, negotiated string) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
 	calls := new(atomic.Int32)
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/mcp" || r.Header.Get("Authorization") != "Bearer test-token" {
 			t.Errorf("wrong request endpoint or auth")
 		}
 		if r.Method == http.MethodDelete {
-			if r.Header.Get("Mcp-Session-Id") != "test-session" {
-				t.Error("wrong closed session")
+			if r.Header.Get("Mcp-Session-Id") != "test-session" || r.Header.Get("MCP-Protocol-Version") != negotiated {
+				t.Error("wrong closed session or protocol")
 			}
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -38,16 +42,19 @@ func fakeServer(t *testing.T, sse bool, readOnly bool, schema string, result str
 			t.Error(err)
 			return
 		}
+		if req.Method != "initialize" && r.Header.Get("MCP-Protocol-Version") != negotiated {
+			t.Error("request did not use the negotiated protocol")
+		}
 		var response string
 		switch req.Method {
 		case "initialize":
 			w.Header().Set("Mcp-Session-Id", "test-session")
-			response = `{"protocolVersion":"2025-03-26","capabilities":{},"serverInfo":{"name":"mock","version":"test"}}`
+			response = fmt.Sprintf(`{"protocolVersion":%q,"capabilities":{},"serverInfo":{"name":"mock","version":"test"}}`, negotiated)
 		case "notifications/initialized":
 			w.WriteHeader(http.StatusAccepted)
 			return
 		case "tools/list":
-			if r.Header.Get("Mcp-Session-Id") != "test-session" || r.Header.Get("MCP-Protocol-Version") != protocolVersion {
+			if r.Header.Get("Mcp-Session-Id") != "test-session" || r.Header.Get("MCP-Protocol-Version") != negotiated {
 				t.Error("missing session/protocol")
 			}
 			response = fmt.Sprintf(`{"tools":[{"name":"t3_thread_list","inputSchema":%s,"annotations":{"readOnlyHint":%t}},{"name":"t3_thread_send"}]}`, schema, readOnly)
@@ -335,5 +342,26 @@ func TestStalledHTTPAndSSEHonorDeadline(t *testing.T) {
 				t.Fatalf("deadline not respected: %v", err)
 			}
 		})
+	}
+}
+
+func TestNegotiatedProtocolUsedForEveryRequest(t *testing.T) {
+	for _, version := range []string{legacyProtocolVersion, protocolVersion} {
+		for _, sse := range []bool{false, true} {
+			t.Run(version+fmt.Sprint(sse), func(t *testing.T) {
+				server, calls := fakeServerProtocol(t, sse, true, listSchema, `{"structuredContent":{"threads":[],"nextCursor":null}}`, version)
+				defer server.Close()
+				client, err := NewLoopback(server.URL+"/mcp", "test-token")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = client.List(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if calls.Load() != 1 {
+					t.Fatal("list was not called exactly once")
+				}
+			})
+		}
 	}
 }

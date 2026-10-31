@@ -5,9 +5,10 @@ explicit typed or tap-to-talk messages to that exact thread. T3 continues the
 work with its existing project, model, tools, and permission mode. No audio is
 sent to T3; the existing Deepgram transcriber produces the message text.
 
-This implementation is opt-in and tested offline. **It is not connected to a
-live T3 account yet.** OAuth enrollment/refresh, deployment, and hardware testing
-remain separate work.
+This implementation is opt-in. Authenticated thread listing was verified against
+a live T3 Code 0.1.5 environment over a private Tailscale connection on 2026-10-31.
+Application deployment, live voice/send verification, self-service OAuth
+enrollment/refresh, and hardware testing remain separate work.
 
 ## Interaction
 
@@ -62,10 +63,13 @@ must allow messaging the chosen thread. T3 enforces that ceiling; Rev Eyes does
 not raise a thread's permissions, change models, or answer permission requests.
 An expired/revoked credential produces an unavailable connection.
 
-The supported remote route is **T3 Connect**, documented in T3's
+The public remote route is **T3 Connect**, documented in T3's
 [outside-agent guide](https://github.com/pingdotgg/t3code/blob/main/docs/user/outside-agents.md).
 In T3, use **Settings → Environments → Copy MCP URL**. Hosted Rev Eyes needs a
-route reachable from its server. Its localhost is not your laptop. Do not expose
+route reachable from its server. A private Tailscale HTTPS endpoint also works
+when the hosted API backend is an approved member of that tailnet and its access
+policy permits the connection. Tailscale membership and T3 OAuth are separate
+authorizations. Its localhost is not your laptop. Do not expose
 a raw local T3 port or reuse MCP tokens against internal RPC. The library-only
 `NewLoopback` constructor remains for same-machine adapters; backend environment
 configuration requires HTTPS.
@@ -109,7 +113,9 @@ commands, endpoint configuration, or permission grants.
 The MCP client refreshes discovery for every invocation, validates the operation's
 required fields/types, and requires `clientRequestId` plus `mode: queue` support
 before sending. It supports bounded JSON/SSE responses, correlates RPC IDs, rejects
-redirects, and sanitizes errors. Gateway reads have a three-second deadline;
+redirects, and sanitizes errors. It offers MCP `2025-06-18`, accepts that version
+or legacy `2025-03-26`, and uses the negotiated version in every subsequent
+request and session-close header. Gateway reads have a three-second deadline;
 control calls have a six-second deadline with a five-second MCP deadline.
 
 ## Delivery and recovery
@@ -137,7 +143,8 @@ The implemented slice continues existing threads. Full T3 UI parity still needs
 project selection/new-thread launch, explicit interruption, permission-request
 handoff, attachments/artifacts, live result updates, and richer recent summaries.
 Self-service OAuth connection setup is required before this can be offered as an
-account-linking feature. Installed-version and live permission compatibility are
+account-linking feature. Live listing and discovery compatibility are verified for T3 0.1.5; live
+message delivery, thread continuation, and permission-ceiling behavior remain
 unverified.
 
 For reliable offline/background control, build an authenticated outbound device
@@ -162,8 +169,9 @@ Run frontend `pnpm test`, `pnpm lint`, and `pnpm build`. Tests exercise the real
 runtime with fake SDK/socket boundaries: picker selection, bound target, ambient
 capture stopping, no automatic follow-up mic, reply reading, return to Eyes, and
 existing speech/display behavior. Status tests cover pagination, stale/disposed
-requests, token changes, and untrusted text. No live provider, physical glasses,
-OAuth enrollment, or interactive browser QA is claimed. Production builds retain
+requests, token changes, and untrusted text. Live authenticated list/discovery was checked separately against T3 0.1.5.
+No live message send, physical glasses, self-service OAuth enrollment, or
+interactive browser QA is claimed. Production builds retain
 the existing bundle-size warning above 500 kB.
 
 Upstream documentation and contracts reviewed 2026-10-30:

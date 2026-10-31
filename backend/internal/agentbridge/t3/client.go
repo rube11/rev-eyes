@@ -19,7 +19,14 @@ import (
 	"github.com/rube11/rev-eyes/backend/internal/agentbridge"
 )
 
-const protocolVersion = "2025-03-26"
+const protocolVersion = "2025-06-18"
+const legacyProtocolVersion = "2025-03-26"
+
+type mcpSession struct {
+	id       string
+	protocol string
+}
+
 const maxResponseBytes = 1 << 20
 
 var ErrUnavailable = errors.New("T3 capability unavailable or incompatible")
@@ -157,7 +164,7 @@ func schemaAccepts(raw json.RawMessage, fields map[string]string, allowedRequire
 func (c *Client) call(ctx context.Context, name string, args map[string]any, compatible func(json.RawMessage, bool) bool, dispatched *bool) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	session := ""
+	session := mcpSession{protocol: protocolVersion}
 	defer func() { c.closeSession(ctx, session) }()
 	init, err := c.rpc(ctx, &session, 1, "initialize", map[string]any{"protocolVersion": protocolVersion, "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "rev-eyes", "version": "0.2"}})
 	if err != nil {
@@ -166,9 +173,10 @@ func (c *Client) call(ctx context.Context, name string, args map[string]any, com
 	var initialized struct {
 		ProtocolVersion string `json:"protocolVersion"`
 	}
-	if json.Unmarshal(init, &initialized) != nil || initialized.ProtocolVersion != protocolVersion {
+	if json.Unmarshal(init, &initialized) != nil || (initialized.ProtocolVersion != protocolVersion && initialized.ProtocolVersion != legacyProtocolVersion) {
 		return nil, ErrUnavailable
 	}
+	session.protocol = initialized.ProtocolVersion
 	if _, err = c.rpc(ctx, &session, 0, "notifications/initialized", nil); err != nil {
 		return nil, err
 	}
@@ -277,7 +285,7 @@ func compatibleListSchema(raw json.RawMessage) bool {
 	return true
 }
 
-func (c *Client) rpc(ctx context.Context, session *string, id int, method string, params any) (json.RawMessage, error) {
+func (c *Client) rpc(ctx context.Context, session *mcpSession, id int, method string, params any) (json.RawMessage, error) {
 	envelope := map[string]any{"jsonrpc": "2.0", "method": method}
 	if id != 0 {
 		envelope["id"] = id
@@ -294,10 +302,10 @@ func (c *Client) rpc(ctx context.Context, session *string, id int, method string
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	if method != "initialize" {
-		req.Header.Set("MCP-Protocol-Version", protocolVersion)
+		req.Header.Set("MCP-Protocol-Version", session.protocol)
 	}
-	if *session != "" {
-		req.Header.Set("Mcp-Session-Id", *session)
+	if session.id != "" {
+		req.Header.Set("Mcp-Session-Id", session.id)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -312,7 +320,7 @@ func (c *Client) rpc(ctx context.Context, session *string, id int, method string
 		if len(s) > 256 || strings.ContainsAny(s, "\r\n") {
 			return nil, ErrUnavailable
 		}
-		*session = s
+		session.id = s
 	}
 	if id == 0 {
 		return nil, nil
@@ -378,8 +386,8 @@ func decodeResponse(raw []byte, id int) (json.RawMessage, error) {
 // closeSession releases server-side MCP transport state when supported. A
 // failed close never changes the result of a completed read. The parent request
 // deadline still applies; no background goroutine survives this request.
-func (c *Client) closeSession(ctx context.Context, session string) {
-	if session == "" {
+func (c *Client) closeSession(ctx context.Context, session mcpSession) {
+	if session.id == "" {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
@@ -389,8 +397,8 @@ func (c *Client) closeSession(ctx context.Context, session string) {
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Mcp-Session-Id", session)
-	req.Header.Set("MCP-Protocol-Version", protocolVersion)
+	req.Header.Set("Mcp-Session-Id", session.id)
+	req.Header.Set("MCP-Protocol-Version", session.protocol)
 	resp, err := c.http.Do(req)
 	if err == nil {
 		resp.Body.Close()
