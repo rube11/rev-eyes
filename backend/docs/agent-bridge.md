@@ -27,18 +27,28 @@ On the glasses:
    a **queued new turn**, not a steer/restart. A receipt says queued, never
    completed. The mic does not reopen automatically after a T3 receipt.
 4. Scroll through the receipt/reply. Scrolling forward past its final page
-   explicitly reads the next conversation page. Scroll again to check for new
+   explicitly rereads recent messages. Scroll again to check for new
    messages. Reads are manual; there is no background polling or completion alert.
-5. Hold while idle to return to Eyes. Hold in the picker to dismiss it. Double
+5. Hold to return to Eyes, including while sending or loading. Hold in the picker
+   to dismiss it. Double
    tap retains the app's exit behavior. Ordinary Eyes answers still support their
    existing paginated reading and hands-free follow-ups.
 
 Thread titles are the compact descriptions available from T3's list response;
 Rev Eyes does not generate semantic summaries or infer completion from titles.
-Conversation reads begin at the first page, can advance with the provider's
-position cursor, and shorten long messages to 2,000 characters with a visible
-notice. The native reader advances its cursor in memory. It is a lightweight
-conversation viewer, not a full mirrored T3 transcript.
+Conversation reads default to messages in the last 20 visible timeline positions,
+using T3's exact item count. Activity also occupies timeline positions, so this
+window can contain fewer than 20 messages or no messages. The glasses show that
+limit explicitly. Refresh rereads the window so an assistant's edits to an
+existing reply are visible. On the phone, **Earlier messages** opens history
+from the start, and **More messages** advances through it. Long messages are
+shortened to 2,000 characters with a visible notice. This is a lightweight viewer.
+
+Titles and controls fit the display. Picker taps stay tied to the row actually
+shown; reconnects preserve the picker. Loading runs outside the gesture queue,
+so Hold remains available. Thread cards show a short state instead of connection
+IDs. The phone keeps the selected conversation above the list and preserves its
+draft across routine sign-in token refreshes.
 
 ## Configuration and authorization
 
@@ -89,8 +99,10 @@ The existing origin policy wraps these endpoints; responses are `no-store`.
 
 - `GET /workspace/agents`: first 20 threads per configured connection.
 - `GET /workspace/agents?connection_id=…&cursor=…`: subsequent bounded page.
-- `POST /workspace/agents/thread`: exact `connection_id`, `thread_id`, and optional
-  nonnegative `after_position`; bounded conversation page.
+- `POST /workspace/agents/thread`: exact `connection_id`, `thread_id`; recent
+  window by default. Optional `from_start:true` opens history; nonnegative
+  `after_position` pages history. These two options cannot be combined. The recent
+  result includes `hasEarlier` when earlier timeline positions were omitted.
 - `POST /workspace/agents/messages`: exact `connection_id`, `thread_id`, `text`,
   and `request_id`; forwards a queued message and returns T3's correlated receipt.
 - `GET /agents/voice`: consumes the existing one-use WebSocket ticket and binds
@@ -126,8 +138,10 @@ run. A receipt must match the selected thread and contain message/run IDs plus a
 started/queued delivery state. It does not mean the agent finished.
 
 Typed sends use a client request ID scoped by the backend to owner/connection.
-A manual retry of the same unchanged draft while the view remains mounted reuses
-the key. T3's idempotency support is required. After dispatch, transport failure,
+A manual retry of the same target and text while the account's view remains
+mounted reuses the key, even after editing the draft or visiting another thread.
+A confirmed receipt clears that attempt's key. T3's idempotency support is required.
+After dispatch, transport failure,
 malformed responses, mismatched receipts, and timeouts become **delivery unknown**.
 There are no automatic send retries. Navigation/reload loses the in-memory typed
 retry key; check the T3 conversation before repeating a message. Voice commands
@@ -155,7 +169,9 @@ are intentionally absent from this foreground implementation.
 
 Dots research is documented separately in
 [ChatGPT Dots integration research](chatgpt-dots-integration-research.md). The Dots
-placeholder remains disconnected; no public inbound Dots API is assumed.
+connection remains unavailable. The recommended first test uses tools called
+from the owner's existing dot, then tests a panel inside that same conversation
+to post a follow-up. Neither path is implemented or verified with the account.
 
 ## Validation
 
@@ -169,7 +185,10 @@ Run frontend `pnpm test`, `pnpm lint`, and `pnpm build`. Tests exercise the real
 runtime with fake SDK/socket boundaries: picker selection, bound target, ambient
 capture stopping, no automatic follow-up mic, reply reading, return to Eyes, and
 existing speech/display behavior. Status tests cover pagination, stale/disposed
-requests, token changes, and untrusted text. Live authenticated list/discovery was checked separately against T3 0.1.5.
+requests, token changes, stable retry keys after editing, and untrusted text.
+Regression cases cover delayed loads, row-selection races, reconnects, long
+titles, send feedback, and repeated reply checks. Live authenticated list/discovery
+was checked separately against T3 0.1.5.
 No live message send, physical glasses, self-service OAuth enrollment, or
 interactive browser QA is claimed. Production builds retain
 the existing bundle-size warning above 500 kB.

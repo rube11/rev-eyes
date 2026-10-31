@@ -47,6 +47,7 @@ import {
 import type { WorkspaceResource } from "../features/workspace/workspaceTypes"
 import { RealtimeConnection } from "./realtime-connection"
 import { loadAgentConnections, openAgentThread, type AgentTarget } from "../features/workspace/agentClient"
+import { agentStatusLabel } from "../features/workspace/agentStatus"
 
 type ListeningState = "idle" | "starting" | "listening" | "stopping"
 type DisplaySurface = "thread" | "compact" | "message" | "offline" | "sleep" | "transcript" | "agents"
@@ -1341,7 +1342,7 @@ export async function initializeEvenExperience(
         const body = detail.messages.map(message => `${message.role === "user" ? "You" : "T3"}: ${message.text}`).join("\n\n")
         const presentation = presentGlassesMessage(body
           ? `${body}${detail.truncated ? "\n\nFull text is in T3." : ""}`
-          : "No new reply yet.\nScroll to check again.")
+          : "No recent messages.\nOpen T3 for earlier replies.")
         visibleAssistant = presentation
         messagePageIndex = 0
         await showAssistantPresentation(presentation)
@@ -1385,7 +1386,7 @@ export async function initializeEvenExperience(
           agentRows = [{ label: "Eyes", status: "Your assistant" }, ...connections.filter(entry => !entry.unavailable && entry.canSend).flatMap(entry => entry.threads.map(thread => ({
             target: { connectionId: entry.id, threadId: thread.id, title: thread.title },
             label: thread.title,
-            status: entry.id,
+            status: `T3 · ${agentStatusLabel(thread.status)}`,
           })))]
           agentMore = connections.filter(entry => !entry.unavailable && entry.hasMore && entry.canSend && entry.cursor !== undefined).map(entry => ({ connectionId: entry.id, cursor: entry.cursor! }))
           agentIndex = Math.min(1, agentRows.length - 1)
@@ -1418,7 +1419,7 @@ export async function initializeEvenExperience(
           if (!entry || entry.unavailable || entry.cursor === page.cursor) throw new Error("Invalid page")
           const existing = new Set(agentRows.map(row => row.target && JSON.stringify([row.target.connectionId, row.target.threadId])))
           const nextRows = entry.threads.filter(thread => !existing.has(JSON.stringify([entry.id, thread.id]))).map(thread => ({
-            target: { connectionId: entry.id, threadId: thread.id, title: thread.title }, label: thread.title, status: entry.id,
+            target: { connectionId: entry.id, threadId: thread.id, title: thread.title }, label: thread.title, status: `T3 · ${agentStatusLabel(thread.status)}`,
           }))
           agentRows.push(...nextRows)
           if (entry.hasMore && entry.cursor !== undefined) agentMore[0] = { connectionId: entry.id, cursor: entry.cursor }
