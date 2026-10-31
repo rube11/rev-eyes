@@ -11,6 +11,7 @@ export const navItems: NavItem[] = [
   { id: 'memories', label: 'Memories' },
   { id: 'watches', label: 'Watches' },
   { id: 'tasks', label: 'Tasks' },
+  { id: 'agents', label: 'Agents' },
 ]
 
 export const viewTitles: Record<WorkspaceView, string> = {
@@ -19,6 +20,7 @@ export const viewTitles: Record<WorkspaceView, string> = {
   memories: 'Memories',
   watches: 'Watches',
   tasks: 'Tasks',
+  agents: 'Agents',
 }
 
 export function isWorkspaceView(value: string): value is WorkspaceView {

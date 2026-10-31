@@ -62,6 +62,13 @@ func (s *Server) transcribeConnection(
 		); err != nil {
 			return err
 		}
+		if s.handlers.SingleUtterance {
+			cancel()
+			for range completed {
+			}
+			<-done
+			return nil
+		}
 	}
 
 	return <-done
@@ -81,7 +88,7 @@ func (s *Server) handleCompletedUtterance(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !scope.Speech.ContextOnly() && isRepeatRequest(utterance) {
+	if !s.handlers.DisableRepeat && !scope.Speech.ContextOnly() && isRepeatRequest(utterance) {
 		return writer.WriteJSON(serverMessage{
 			Type: assistantRepeatMessageType,
 			ID:   delivery.messageID,

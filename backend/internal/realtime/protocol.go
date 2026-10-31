@@ -57,6 +57,8 @@ type CandidateAudioHandler func(
 type AmbientListener func(context.Context, <-chan ambient.Input, func(ambient.Clip)) error
 
 type Handlers struct {
+	DisableRepeat           bool
+	SingleUtterance         bool
 	ConversationTranscriber stt.ConversationTranscriber
 	Ambient                 AmbientListener
 	AmbientStreaming        func(context.Context, <-chan ambient.Input, ambient.Conversation) error

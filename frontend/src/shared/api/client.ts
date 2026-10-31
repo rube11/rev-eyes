@@ -7,6 +7,7 @@ type TicketResponse = {
 type RealtimeConnectionOptions = {
   signal?: AbortSignal
   timeoutMs?: number
+  agentTarget?: { connectionId: string; threadId: string }
 }
 
 const DEFAULT_CONNECTION_TIMEOUT_MS = 10_000
@@ -62,7 +63,8 @@ export async function connectRealtimeSocket(
       throw new Error("WebSocket ticket response was empty")
     }
 
-    const url = new URL("/ws", env.apiBaseUrl)
+    const url = new URL(options.agentTarget ? "/agents/voice" : "/ws", env.apiBaseUrl)
+    if (options.agentTarget) { url.searchParams.set("connection_id", options.agentTarget.connectionId); url.searchParams.set("thread_id", options.agentTarget.threadId) }
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
     url.searchParams.set("ticket", ticket)
 

@@ -8,6 +8,7 @@ type SocketBinding = {
 }
 
 type Options = {
+  agentTarget?: { connectionId: string; threadId: string }
   enqueue: (transition: () => Promise<void>) => Promise<void>
   connected: (socket: WebSocket) => Promise<void>
   unavailable: () => Promise<void>
@@ -113,6 +114,7 @@ export class RealtimeConnection {
         const socket = await connectRealtimeSocket(this.accessToken, {
           signal: controller.signal,
           timeoutMs: 10_000,
+          agentTarget: this.options.agentTarget,
         })
         if (!this.active || generation !== this.generation) {
           closeSocketQuietly(socket)

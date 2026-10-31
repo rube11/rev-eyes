@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rube11/rev-eyes/backend/internal/agentbridge"
 	"github.com/rube11/rev-eyes/backend/internal/ambient"
 	"github.com/rube11/rev-eyes/backend/internal/assistant"
 	"github.com/rube11/rev-eyes/backend/internal/assistant/jev"
@@ -230,6 +231,21 @@ func run() error {
 		}
 	}
 
+	agentGateway, err := agentGatewayFromEnvironment(os.Getenv)
+	if err != nil {
+		return err
+	}
+	for _, candidate := range agentGateway.Tools() {
+		if err := toolRegistry.Register(candidate); err != nil {
+			return err
+		}
+	}
+
+	agentStatusHandler, err := agentbridge.NewWorkspaceHandler(tokenVerifier.Verify, agentGateway)
+	if err != nil {
+		return err
+	}
+
 	toolClassifier, err := assistant.NewJevToolClassifier(jevClient)
 	if err != nil {
 		return err
@@ -360,6 +376,12 @@ func run() error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", web.Health)
+	agentStatusAPI := origins.Handler(agentStatusHandler)
+	mux.Handle("GET /workspace/agents", agentStatusAPI)
+	mux.Handle("OPTIONS /workspace/agents", agentStatusAPI)
+	mux.Handle("POST /workspace/agents/{action}", agentStatusAPI)
+	mux.Handle("OPTIONS /workspace/agents/{action}", agentStatusAPI)
+	mux.Handle("GET /agents/voice", agentGateway.VoiceHandler(transcriber, realtimeHub, tickets.Consume, origins.Allows))
 	mux.Handle("/auth/ws-ticket", origins.Handler(ticketHandler))
 	textChatAPI := origins.Handler(realtimeServer.TextHandler(tokenVerifier.Verify, sessionStore.Reopen))
 	mux.Handle("POST /workspace/conversations/{session_id}/messages", textChatAPI)

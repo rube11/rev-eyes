@@ -16,6 +16,8 @@ type IconProps = SVGProps<SVGSVGElement> & { size?: number }
 export function NavIcon({ view, size = 18, ...rest }: IconProps & { view: WorkspaceView }) {
   const common = { ...base, width: size, height: size, ...rest }
   switch (view) {
+    case 'agents':
+      return <svg {...common}><rect x="4" y="7" width="16" height="13" rx="3" /><path d="M12 3v4M8 12h.01M16 12h.01M8 16h8" /></svg>
     case 'now':
       return (
         <svg {...common}>
