@@ -8,6 +8,10 @@ export function getAssistantStatus(status: string, preview = false) {
       return { label: 'Listening', detail: 'Speak naturally. A pause ends your turn—no second tap needed.', active: true }
     case 'thinking':
       return { label: 'Thinking', detail: 'Your reply will appear on your glasses when it’s ready.', active: true }
+    case 'sending':
+      return { label: 'Sending', detail: 'Sending your message to the selected thread.', active: true }
+    case 'reading reply':
+      return { label: 'Reading reply', detail: 'Checking the selected thread for a reply.', active: true }
     case 'starting microphone':
       return { label: 'Starting mic', detail: 'Wait for the listening cue before speaking.', active: true }
     case 'connecting':

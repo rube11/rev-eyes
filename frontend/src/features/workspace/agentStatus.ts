@@ -6,6 +6,19 @@ export type AgentSnapshot = {
   checkedAt?: string
 }
 
+export function agentStatusLabel(status: string): string {
+  switch (status) {
+    case 'idle': return 'Ready'
+    case 'preparing': case 'starting': case 'running': return 'Working'
+    case 'queued': return 'Waiting'
+    case 'waiting': return 'Needs you'
+    case 'completed': return 'Done'
+    case 'failed': return 'Failed'
+    case 'interrupted': case 'cancelled': case 'rolled_back': return 'Stopped'
+    default: return 'Unknown'
+  }
+}
+
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid agent response')
   return value as Record<string, unknown>

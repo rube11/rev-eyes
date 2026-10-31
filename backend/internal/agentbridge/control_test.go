@@ -12,10 +12,11 @@ import (
 
 type controlProvider struct {
 	fakeProvider
-	sends             int
-	target, text, key string
-	sendErr           error
-	receipt           string
+	sends                         int
+	opens, recentOpens, pageOpens int
+	target, text, key             string
+	sendErr                       error
+	receipt                       string
 }
 
 func newControlProvider() *controlProvider {
@@ -36,9 +37,21 @@ func (p *controlProvider) Send(_ context.Context, id, text, key string) (json.Ra
 	return data, nil
 }
 func (p *controlProvider) Open(_ context.Context, id string) (json.RawMessage, error) {
+	p.opens++
 	data, _ := json.Marshal(map[string]any{"thread": map[string]string{"threadId": id}, "items": []any{}})
 	return data, nil
 }
+func (p *controlProvider) OpenRecent(ctx context.Context, id string) (json.RawMessage, error) {
+	p.recentOpens++
+	data, _ := json.Marshal(map[string]any{"thread": map[string]string{"threadId": id}, "items": []any{}})
+	return data, nil
+}
+func (p *controlProvider) OpenPage(ctx context.Context, id string, after int) (json.RawMessage, error) {
+	p.pageOpens++
+	data, _ := json.Marshal(map[string]any{"thread": map[string]string{"threadId": id}, "items": []any{}})
+	return data, nil
+}
+
 func (p *controlProvider) ListPage(_ context.Context, cursor int) (json.RawMessage, error) {
 	return json.RawMessage(`{"threads":[],"nextCursor":null}`), nil
 }
@@ -118,5 +131,34 @@ func TestControlHTTPUsesVerifiedOwnerAndStrictPayload(t *testing.T) {
 	}
 	if p.sends != 1 {
 		t.Fatalf("sent %d times", p.sends)
+	}
+}
+
+func TestThreadHTTPSeparatesRecentAndHistoryAndRejectsMixedModes(t *testing.T) {
+	p := newControlProvider()
+	handler, _ := NewWorkspaceHandler(func(context.Context, string) (string, error) { return "alice", nil }, testGateway(t, p))
+	mux := http.NewServeMux()
+	mux.Handle("POST /workspace/agents/{action}", handler)
+	for _, test := range []struct {
+		body   string
+		status int
+	}{
+		{`{"connection_id":"laptop","thread_id":"id"}`, 200},
+		{`{"connection_id":"laptop","thread_id":"id","from_start":true}`, 200},
+		{`{"connection_id":"laptop","thread_id":"id","after_position":20}`, 200},
+		{`{"connection_id":"laptop","thread_id":"id","from_start":true,"after_position":20}`, 400},
+		{`{"connection_id":"laptop","thread_id":"id","from_start":"yes"}`, 400},
+		{`{"connection_id":"laptop","thread_id":"id","from_start":true,"owner":"bob"}`, 400},
+	} {
+		request := httptest.NewRequest("POST", "/workspace/agents/thread", strings.NewReader(test.body))
+		request.Header.Set("Authorization", "Bearer verified")
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, request)
+		if response.Code != test.status {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body)
+		}
+	}
+	if p.opens != 1 || p.recentOpens != 1 || p.pageOpens != 1 {
+		t.Fatalf("wrong read operations: first=%d recent=%d page=%d", p.opens, p.recentOpens, p.pageOpens)
 	}
 }

@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { getAssistantStatus } from '../src/features/workspace/assistantStatus.js'
 
 test('only known ready or in-progress states show an active connection', () => {
-  for (const state of ['Connected', 'Sleeping', 'Listening', 'Thinking', 'Starting microphone']) {
+  for (const state of ['Connected', 'Sleeping', 'Listening', 'Thinking', 'Sending', 'Reading reply', 'Starting microphone']) {
     assert.equal(getAssistantStatus(state).active, true, state)
   }
   for (const state of ['Connecting', 'Reconnecting', 'Offline', 'Disconnected', 'Microphone unavailable', 'Glasses command failed', '', 'unknown']) {

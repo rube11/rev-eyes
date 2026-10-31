@@ -33,28 +33,28 @@ test('defensive provider parsing caps pages and treats malformed/offline status 
   const offline = payload(); offline.connections[0].error = 'unavailable'
   assert.equal(parseAgentConnections(offline)[0].unavailable, true)
   assert.throws(() => parseAgentConnections({ connections: [] }))
-  const result = parseAgentConnections(payload([{ threadId: 'a', title: '<script>bad</script>', status: 'working' }], { nextCursor: 20 }))[0]
+  const result = parseAgentConnections(payload([{ threadId: 'a', title: '<script>bad</script>', status: 'running' }], { nextCursor: 20 }))[0]
   assert.equal(result.hasMore, true)
-  assert.equal(result.threads[0].status, 'working')
+  assert.equal(result.threads[0].status, 'running')
 })
 
 test('visible states distinguish read-only, control-enabled and disconnected accounts', () => {
   for (const phase of ['loading', 'error', 'ready']) {
     const html = render({ phase, connections: [] })
-    assert.match(html, /Connection research/)
-    assert.match(html, /Not connected/)
+    assert.match(html, /Dots isn’t connected yet/)
+    assert.doesNotMatch(html.replace(/<[^>]*>/g, ''), /Connection research|inventory|provider|Not configured/)
     assert.doesNotMatch(html, /<button[^>]*>\s*(Send|Start|Interrupt|Connect|Pair)/)
-    assert.match(html, phase === 'loading' ? /Checking your configured connection/ : phase === 'error' ? /Couldn’t load agent status/ : /Not configured for this account/)
+    assert.match(html, phase === 'loading' ? /Loading threads/ : phase === 'error' ? /Couldn’t load threads/ : /T3 isn’t connected to this account/)
   }
   const empty = render({ phase: 'ready', connections: parseAgentConnections(payload()) })
-  assert.match(empty, /No threads returned on this page/)
-  const full = render({ phase: 'ready', connections: parseAgentConnections(payload([{ title: '<img src=x>', status: 'working', threadId: 'id' }], { nextCursor: 20 })) })
+  assert.match(empty, /No threads on this page/)
+  const full = render({ phase: 'ready', connections: parseAgentConnections(payload([{ title: '<img src=x>', status: 'running', threadId: 'id' }], { nextCursor: 20 })) })
   assert.match(full, /&lt;img src=x&gt;/)
-  assert.match(full, /Load more threads/)
-  assert.match(full, /Read-only preview/)
+  assert.match(full, /More threads/)
+  assert.match(full, /View only/)
   assert.match(full, /disabled/)
   const offline = payload(); offline.connections[0].error = 'unavailable'
-  assert.match(render({ phase: 'ready', connections: parseAgentConnections(offline) }), /provider may be offline/)
+  assert.match(render({ phase: 'ready', connections: parseAgentConnections(offline) }), /Couldn’t reach T3/)
 })
 
 test('refresh is single-flight, clears previous status, and handles failure', async () => {
@@ -95,7 +95,7 @@ test('navigation/disposal aborts requests and ignores late results; effect resta
 test('upstream T3 list fixture displays top-level status and ignores authority-like metadata', () => {
   const fixture = payload([{threadId:'thread-1',projectId:'project-1',title:'Review UI',status:'running',latestRunId:'run-1',providerInstanceId:'provider-1',model:'model',runtimeMode:'full-access',interactionMode:'autonomous',linkedPullRequest:null,parentThreadId:null,relationshipToParent:null,itemCount:4,settled:false,settledAt:null,snoozed:false,snoozedUntil:null,createdAt:'2026-10-29T00:00:00Z',updatedAt:'2026-10-29T00:01:00Z',link:'javascript:alert(1)'}], {nextCursor:20,total:30})
   const html = render({phase:'ready',connections:parseAgentConnections(fixture)})
-  assert.match(html,/running/)
+  assert.match(html,/Working/)
   assert.doesNotMatch(html,/javascript:|full-access|autonomous/)
 })
 
@@ -142,7 +142,7 @@ test('control cards preserve opaque T3 IDs and expose only implemented capabilit
   const connections = parseAgentConnections(data)
   assert.equal(connections[0].threads[0].id,'mcp:launch:one')
   const html = renderToStaticMarkup(React.createElement(AgentStatusPanel,{snapshot:{phase:'ready',connections},onRefresh(){},onSelect(){}}))
-  assert.match(html,/Messaging enabled/)
+  assert.match(html,/Connected/)
   assert.doesNotMatch(html,/<button[^>]*disabled/)
   assert.equal(parseAgentConnections(payload([{threadId:'https://evil'}]))[0].unavailable,true)
 })
@@ -183,8 +183,41 @@ test('typed agent messages preserve target and retry key; uncertain delivery sta
     await sendAgentMessage('session',target,'Do the work','stable-key')
     assert.deepEqual(JSON.parse(requests[0].options.body),{connection_id:'laptop',thread_id:'chosen',text:'Do the work',request_id:'stable-key'})
     global.fetch=async () => ({ok:false,json:async () => ({error:'delivery_unknown'})})
-    await assert.rejects(sendAgentMessage('session',target,'Do the work','stable-key'),/Delivery is uncertain/)
+    await assert.rejects(sendAgentMessage('session',target,'Do the work','stable-key'),/Couldn’t confirm delivery/)
     global.fetch=async () => ({ok:true,json:async () => ({thread:{threadId:'wrong'},items:[]})})
     await assert.rejects(openAgentThread('session',target),/Couldn’t read this thread/)
+  } finally {global.fetch=previousFetch}
+})
+
+
+test('uncertain sends retain their key after edits and thread changes', () => {
+  const {AgentSendKeys}=load('features/workspace/agentSendKeys.ts')
+  let next=0
+  const keys=new AgentSendKeys(()=>`key-${++next}`)
+  const first={connectionId:'one',threadId:'task',title:'Task'}
+  const second={connectionId:'two',threadId:'task',title:'Other task'}
+  const attempt=keys.prepare(first,'Fix audio')
+  assert.notEqual(keys.prepare(first,'Fix display').key,attempt.key)
+  assert.notEqual(keys.prepare(second,'Fix audio').key,attempt.key)
+  assert.equal(keys.prepare(first,'Fix audio').key,attempt.key)
+  keys.complete(attempt.signature)
+  assert.notEqual(keys.prepare(first,'Fix audio').key,attempt.key)
+})
+
+test('thread reads distinguish a recent refresh from an explicit history request', async () => {
+  const previousFetch=global.fetch
+  const bodies=[]
+  global.fetch=async (_url,options)=>{
+    bodies.push(JSON.parse(options.body))
+    return {ok:true,json:async()=>({thread:{threadId:'chosen'},items:[],hasEarlier:true,nextPosition:99})}
+  }
+  try {
+    const {openAgentThread}=load('features/workspace/agentClient.ts')
+    const target={connectionId:'laptop',threadId:'chosen',title:'Task'}
+    const recent=await openAgentThread('session',target)
+    await openAgentThread('session',target,undefined,undefined,true)
+    assert.equal(recent.hasEarlier,true)
+    assert.equal(bodies[0].after_position,undefined)
+    assert.equal(bodies[1].from_start,true)
   } finally {global.fetch=previousFetch}
 })

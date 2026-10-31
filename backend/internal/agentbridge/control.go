@@ -19,6 +19,10 @@ type Messenger interface {
 type ThreadOpener interface {
 	Open(context.Context, string) (json.RawMessage, error)
 }
+type RecentThreadOpener interface {
+	OpenRecent(context.Context, string) (json.RawMessage, error)
+}
+
 type ThreadPageOpener interface {
 	OpenPage(context.Context, string, int) (json.RawMessage, error)
 }
@@ -79,9 +83,12 @@ func (g *Gateway) Send(ctx context.Context, owner, connectionID, threadID, messa
 }
 
 func (g *Gateway) Open(ctx context.Context, owner, connectionID, threadID string) (json.RawMessage, error) {
-	return g.OpenPage(ctx, owner, connectionID, threadID, -1)
+	return g.open(ctx, owner, connectionID, threadID, -1, true)
 }
 func (g *Gateway) OpenPage(ctx context.Context, owner, connectionID, threadID string, after int) (json.RawMessage, error) {
+	return g.open(ctx, owner, connectionID, threadID, after, false)
+}
+func (g *Gateway) open(ctx context.Context, owner, connectionID, threadID string, after int, recent bool) (json.RawMessage, error) {
 	c := g.connection(owner, connectionID)
 	if c == nil || !c.Provider.Capabilities().Open || !validID(threadID) {
 		return nil, ErrUnavailable
@@ -94,7 +101,13 @@ func (g *Gateway) OpenPage(ctx context.Context, owner, connectionID, threadID st
 	defer cancel()
 	var data json.RawMessage
 	var err error
-	if after >= 0 {
+	if recent {
+		if recentOpener, ok := c.Provider.(RecentThreadOpener); ok {
+			data, err = recentOpener.OpenRecent(ctx, threadID)
+		} else {
+			data, err = opener.Open(ctx, threadID)
+		}
+	} else if after >= 0 {
 		pageOpener, ok := c.Provider.(ThreadPageOpener)
 		if !ok || after > 10000000 {
 			return nil, ErrUnavailable
