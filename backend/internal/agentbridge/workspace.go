@@ -76,6 +76,7 @@ func (h *WorkspaceHandler) control(w http.ResponseWriter, r *http.Request, owner
 		Text         string `json:"text"`
 		RequestID    string `json:"request_id"`
 		After        *int   `json:"after_position"`
+		FromStart    bool   `json:"from_start"`
 	}
 	raw, err := readControlBody(w, r)
 	if err != nil {
@@ -92,9 +93,12 @@ func (h *WorkspaceHandler) control(w http.ResponseWriter, r *http.Request, owner
 			if _, ok := keys["after_position"]; ok {
 				fields = append(fields, "after_position")
 			}
+			if _, ok := keys["from_start"]; ok {
+				fields = append(fields, "from_start")
+			}
 		}
 		err = decodeBounded(raw, &input, 20000, fields...)
-		if input.After != nil && *input.After < 0 {
+		if input.After != nil && (*input.After < 0 || input.FromStart) {
 			err = errors.New("invalid position")
 		}
 	} else {
@@ -113,7 +117,11 @@ func (h *WorkspaceHandler) control(w http.ResponseWriter, r *http.Request, owner
 		if input.After != nil {
 			after = *input.After
 		}
-		data, err = h.gateway.OpenPage(r.Context(), owner, input.ConnectionID, input.ThreadID, after)
+		if input.After == nil && !input.FromStart {
+			data, err = h.gateway.Open(r.Context(), owner, input.ConnectionID, input.ThreadID)
+		} else {
+			data, err = h.gateway.OpenPage(r.Context(), owner, input.ConnectionID, input.ThreadID, after)
+		}
 	}
 	if errors.Is(err, ErrDeliveryUnknown) {
 		controlError(w, http.StatusBadGateway, "delivery_unknown")

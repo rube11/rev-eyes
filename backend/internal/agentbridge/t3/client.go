@@ -104,6 +104,42 @@ func (c *Client) Send(ctx context.Context, threadID, message, requestID string) 
 func (c *Client) Open(ctx context.Context, threadID string) (json.RawMessage, error) {
 	return c.OpenPage(ctx, threadID, -1)
 }
+
+// OpenRecent reads the last bounded timeline window. Reading from the end on
+// every refresh also picks up edits to an assistant message already in flight.
+// T3's itemCount is the number of visible timeline positions, not message count.
+func (c *Client) OpenRecent(ctx context.Context, threadID string) (json.RawMessage, error) {
+	data, err := c.Open(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	var meta struct {
+		Thread struct {
+			ID    string `json:"threadId"`
+			Count *int   `json:"itemCount"`
+		} `json:"thread"`
+	}
+	if json.Unmarshal(data, &meta) != nil || meta.Thread.ID != threadID || meta.Thread.Count == nil || *meta.Thread.Count < 0 || *meta.Thread.Count > 10000000 {
+		return nil, ErrUnavailable
+	}
+	earlier := *meta.Thread.Count > 20
+	if earlier {
+		data, err = c.OpenPage(ctx, threadID, *meta.Thread.Count-21)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var result map[string]json.RawMessage
+	if json.Unmarshal(data, &result) != nil || result == nil {
+		return nil, ErrUnavailable
+	}
+	result["hasEarlier"] = json.RawMessage("false")
+	if earlier {
+		result["hasEarlier"] = json.RawMessage("true")
+	}
+	return json.Marshal(result)
+}
+
 func (c *Client) OpenPage(ctx context.Context, threadID string, after int) (json.RawMessage, error) {
 	if !c.control {
 		return nil, ErrUnavailable

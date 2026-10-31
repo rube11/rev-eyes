@@ -3,13 +3,13 @@ package t3
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 
-	"errors"
 	"github.com/rube11/rev-eyes/backend/internal/agentbridge"
 )
 
@@ -83,5 +83,75 @@ func TestSendDiscoversSchemaAndUsesQueueAndStableKey(t *testing.T) {
 				t.Fatal("incompatible schema accepted")
 			}
 		})
+	}
+}
+
+func TestRecentReadStartsAtTailAndReloadsEditedReply(t *testing.T) {
+	var afterPositions []any
+	reply := "Draft reply"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				Arguments map[string]any `json:"arguments"`
+			} `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			return
+		}
+		var result any
+		switch req.Method {
+		case "initialize":
+			result = map[string]any{"protocolVersion": protocolVersion}
+		case "notifications/initialized":
+			w.WriteHeader(202)
+			return
+		case "tools/list":
+			result = map[string]any{"tools": []any{map[string]any{"name": "t3_thread_read", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"threadId": map[string]string{"type": "string"}, "view": map[string]string{"type": "string"}, "limit": map[string]string{"type": "integer"}, "maxCharsPerItem": map[string]string{"type": "integer"}, "afterPosition": map[string]string{"type": "integer"}}, "required": []string{"threadId"}}}}}
+		case "tools/call":
+			after := req.Params.Arguments["afterPosition"]
+			afterPositions = append(afterPositions, after)
+			text := "Old message"
+			if after != nil {
+				if after != float64(79) {
+					t.Errorf("wrong recent window: %v", after)
+				}
+				text = reply
+			}
+			result = map[string]any{"structuredContent": map[string]any{"thread": map[string]any{"threadId": "chosen", "itemCount": 100}, "items": []any{map[string]any{"itemId": "same-message", "position": 99, "type": "assistant_message", "text": text}}, "hasMore": false, "nextPosition": 99}}
+		default:
+			t.Error("unexpected method")
+			w.WriteHeader(400)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+	}))
+	defer server.Close()
+	client, err := NewLoopback(server.URL+"/mcp", "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.WithControl(true)
+	for _, expected := range []string{"Draft reply", "Final reply"} {
+		reply = expected
+		data, err := client.OpenRecent(context.Background(), "chosen")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var page struct {
+			HasEarlier bool `json:"hasEarlier"`
+			Items      []struct {
+				Text string `json:"text"`
+			} `json:"items"`
+		}
+		if json.Unmarshal(data, &page) != nil || !page.HasEarlier || len(page.Items) != 1 || page.Items[0].Text != expected {
+			t.Fatalf("wrong recent reply: %s", data)
+		}
+	}
+	if len(afterPositions) != 4 || afterPositions[0] != nil || afterPositions[2] != nil {
+		t.Fatalf("refresh skipped the current timeline: %v", afterPositions)
 	}
 }
