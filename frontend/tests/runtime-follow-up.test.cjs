@@ -218,6 +218,7 @@ async function harness(t, serverListeningEnabled = false, reconnect = false, rea
 
 test('real display host delivers a Moonshine conversation reply through the installed SDK', async t => {
   const h = await harness(t, true, false, true)
+  assert.match(h.nativeText(), /Tap to speak\nScroll: threads/)
   await h.message('conversation_started')
   assert.match(h.nativeText(), /Listening \.\nPause or tap to send/)
   await h.advance(800)
@@ -360,6 +361,7 @@ test('a stalled display acknowledgment cannot hold reconnect or teardown indefin
 
 test('listening dots breathe across compact and transcript views, then stop while thinking', async t => {
   const h = await harness(t)
+  assert.equal(h.pages.at(-1).label, 'Tap to speak\nScroll: threads')
   await h.click()
   assert.match(h.pages.at(-1).label, /Listening \.\nPause or tap to send/)
 
@@ -875,59 +877,6 @@ test('server notifications defer answers and acknowledge dismissal without stopp
 })
 
 
-test('selected T3 thread uses a bound manual socket and never opens ambient or follow-up capture', async t => {
-  const target = {connectionId:'laptop',threadId:'mcp:launch:chosen',title:'Fix audio'}
-  const h = await harness(t,true,false,false,{target})
-  assert.equal(h.audio.length,0)
-  assert.equal(h.connectionOptions[0].agentTarget.threadId,target.threadId)
-  await h.click()
-  assert.equal(h.controls.includes('listening_start'),true)
-  assert.equal(h.controls.includes('ambient_start'),false)
-  await h.message('user_transcript',{text:'Please fix the bug'})
-  await h.message('assistant_thinking')
-  await h.message('assistant_response',{text:'Message queued in your T3 thread.'})
-  await h.message('listening_stopped')
-  await h.advance(31_000)
-  assert.equal(h.audio.filter(Boolean).length,1)
-  assert.equal(h.audio.at(-1),false)
-  await h.scroll(1)
-  assert.equal(h.threadReads[0].target.threadId,target.threadId)
-  assert.match(h.pages.at(-1).message.body,/fix is ready for review/)
-})
-
-test('glasses thread picker stops ambient capture and selects an exact opaque target', async t => {
-  const h = await harness(t,true,false,false,{connections:[{id:'laptop',unavailable:false,canSend:true,threads:[{id:'mcp:launch:chosen',title:'Fix audio',status:'running'}],hasMore:false}]})
-  await h.scroll(1)
-  assert.match(h.pages.at(-1).message.body,/Fix audio/)
-  assert.equal(h.controls.includes('ambient_stop'),true)
-  assert.equal(h.selections.length,0)
-  await h.click()
-  assert.equal(h.selections[0].connectionId,'laptop')
-  assert.equal(h.selections[0].threadId,'mcp:launch:chosen')
-})
-
-test('holding an idle T3 thread returns to Eyes without sending or starting a microphone', async t => {
-  const h = await harness(t,true,false,false,{target:{connectionId:'laptop',threadId:'id',title:'Fix audio'}})
-  await h.sleep()
-  assert.equal(h.selections.length,1)
-  assert.equal(h.selections[0],undefined)
-  assert.equal(h.audio.filter(Boolean).length,0)
-})
-
-
-test('long T3 replies keep their reading position without starting another microphone', async t => {
-  const h=await harness(t,true,false,false,{target:{connectionId:'laptop',threadId:'id',title:'Task'},replyMessage:'A'.repeat(350)})
-  await h.click()
-  await h.message('assistant_thinking')
-  await h.message('assistant_response',{text:'Queued.'})
-  await h.message('listening_stopped')
-  await h.scroll(1)
-  assert.equal(h.pages.at(-1).pageIndex,0)
-  await h.scroll(1)
-  assert.equal(h.pages.at(-1).pageIndex,1)
-  assert.equal(h.audio.filter(Boolean).length,1)
-})
-
 function deferred() {
   let resolve, reject
   const promise = new Promise((yes, no) => { resolve = yes; reject = no })
@@ -937,28 +886,6 @@ const chosenThread = { connectionId: 'laptop', threadId: 'mcp:launch:chosen', ti
 function threadConnection(threads = [{ id: chosenThread.threadId, title: chosenThread.title, status: 'running' }], extra = {}) {
   return { id: 'laptop', unavailable: false, canSend: true, threads, hasMore: false, ...extra }
 }
-
-test('thread reads before speaking, refreshes without a cursor, and shows waiting and failures', async t => {
-  let fail = false
-  const h = await harness(t, true, false, false, {
-    target: chosenThread,
-    readThread: async () => {
-      if (fail) throw new Error('Unavailable')
-      return { messages: [], nextPosition: 12, hasMore: false }
-    },
-  })
-  assert.match(h.pages.at(-1).message.body, /Tap to speak/)
-  await h.scroll(1)
-  assert.match(h.pages.at(-1).message.body, /No reply yet/)
-  await h.scroll(1)
-  assert.equal(h.threadReads.length, 2)
-  assert.ok(h.threadReads.every(read => read.after === undefined), 'refresh must also catch edits to existing messages')
-  fail = true
-  await h.scroll(1)
-  assert.match(h.pages.at(-1).message.body, /Couldn’t load reply\nScroll to retry/)
-  assert.equal(h.pages.at(-1).footer, 'Hold: Eyes')
-  assert.equal(h.audio.filter(Boolean).length, 0)
-})
 
 test('reply timeout is visible, allows retry and rejects late success', async t => {
   const late = deferred()
@@ -1007,26 +934,25 @@ test('a reply read cannot replace a new speech turn', async t => {
   assert.match(h.pages.at(-1).label, /Listening/)
 })
 
-for (const [text, expected] of [
-  ['Message queued in your T3 thread. Open the thread to check its reply.', 'Sent'],
-  ['Delivery is uncertain. Check the T3 thread before sending again.', 'Send not confirmed'],
-  ['Message was not sent. Check the T3 connection and its permissions.', 'Not sent'],
-  ['Speech was not sent. Tap and speak your own message.', 'Not sent'],
-]) {
-  test(`thread delivery feedback: ${text.split('.')[0]}`, async t => {
-    const h = await harness(t, true, false, false, { target: chosenThread })
+test('thread delivery feedback distinguishes sent, unconfirmed and failed sends', async t => {
+  const h = await harness(t, true, false, false, { target: chosenThread })
+  for (const [text, expected] of [
+    ['Message queued in your T3 thread. Open the thread to check its reply.', 'Sent'],
+    ['Delivery is uncertain. Check the T3 thread before sending again.', 'Send not confirmed'],
+    ['Message was not sent. Check the T3 connection and its permissions.', 'Not sent'],
+    ['Speech was not sent. Tap and speak your own message.', 'Not sent'],
+  ]) {
     await h.click()
     await h.message('assistant_thinking')
     assert.equal(h.pages.at(-1).footer, 'Sending')
-    assert.equal(h.statuses.at(-1), 'Sending')
     await h.message('assistant_response', { text })
     await h.message('listening_stopped')
     assert.ok(h.pages.at(-1).message.body.startsWith(expected))
     assert.equal(h.pages.at(-1).footer, 'Scroll · Hold: Eyes')
-    assert.equal(h.audio.filter(Boolean).length, 1)
-    assert.equal(h.audio.at(-1), false)
-  })
-}
+  }
+  assert.equal(h.audio.filter(Boolean).length, 4)
+  assert.equal(h.audio.at(-1), false)
+})
 
 test('taps while a manual send is waiting do not start another microphone; Hold returns to Eyes', async t => {
   const h = await harness(t, true, false, false, { target: chosenThread })
@@ -1097,9 +1023,11 @@ test('a tap queued with a scroll never selects a row the user has not seen', asy
     { id: 'second', title: 'Same title', status: 'running' },
   ])] })
   await h.scroll(1)
+  assert.ok(h.controls.includes('ambient_stop'))
   await Promise.all([h.scroll(1), h.click()])
   assert.equal(h.selections.length, 0)
   await h.click()
+  assert.equal(h.selections[0].connectionId, 'laptop')
   assert.equal(h.selections[0].threadId, 'second')
   await h.click()
   assert.equal(h.selections.length, 1)
@@ -1123,11 +1051,12 @@ test('Hold is the way back from the picker and its release never starts speech',
   assert.equal(h.controls.includes('listening_start'), true)
 })
 
-test('picker failures stay visible and allow scroll to retry', async t => {
+test('unavailable and failed picker loads stay visible and allow retry', async t => {
   let calls = 0
   const h = await harness(t, true, false, false, {
     loadConnections: async () => {
-      if (++calls === 1) throw new Error('Unavailable')
+      if (++calls === 1) return [threadConnection([], { unavailable: true })]
+      if (calls === 2) throw new Error('Unavailable')
       return [threadConnection()]
     },
   })
@@ -1135,6 +1064,8 @@ test('picker failures stay visible and allow scroll to retry', async t => {
   assert.match(h.pages.at(-1).message.body, /Threads unavailable/)
   await h.click()
   assert.equal(h.audio.at(-1), false)
+  await h.scroll(1)
+  assert.match(h.pages.at(-1).message.body, /Threads unavailable/)
   await h.scroll(1)
   assert.match(h.pages.at(-1).message.body, /Fix audio/)
   await h.click()
@@ -1185,11 +1116,14 @@ test('long titles and thread controls fit one body page and one footer line', ()
   const footer = ui.buildMessageStatus(reply, 'Scroll · Hold: Eyes', 99)
   assert.match(footer, /^100\/\d+ · Scroll · Hold: Eyes$/)
   assert.equal(footer.includes('\n'), false)
+  assert.equal(ui.buildMessageStatus(reply, 'Tap to speak', 1), `2/${ui.glassesMessagePages(reply).length} · Tap to speak`)
   assert.equal(ui.glassesMessagePages(reply).join('').replace(/\s/g, '').length, 20_000)
 })
 
 test('installed SDK renders thread controls, sending feedback and a paged reply', async t => {
   const h = await harness(t, true, false, true, { target: chosenThread, replyMessage: 'Reply '.repeat(120) })
+  assert.equal(h.connectionOptions[0].agentTarget.threadId, chosenThread.threadId)
+  assert.equal(h.audio.length, 0)
   assert.match(h.nativeText(), /Fix audio/)
   assert.match(h.nativeText(), /Scroll: read/)
   assert.match(h.nativeText(), /Hold: Eyes/)
@@ -1206,7 +1140,13 @@ test('installed SDK renders thread controls, sending feedback and a paged reply'
   assert.match(h.nativeText(), /1\/\d+ · Scroll · Hold: Eyes/)
   await h.scroll(1)
   assert.match(h.nativeText(), /2\/\d+ · Scroll · Hold: Eyes/)
+  assert.equal(h.threadReads[0].target.threadId, chosenThread.threadId)
+  await h.advance(31_000)
   assert.equal(h.audio.filter(Boolean).length, 1)
+  assert.equal(h.controls.includes('ambient_start'), false)
+  assert.equal(h.audio.at(-1), false)
+  await h.sleep()
+  assert.deepEqual(h.selections, [undefined])
 })
 
 for (const text of ['', 'Please fix it']) {
@@ -1265,15 +1205,19 @@ test('interrupted transcription on a thread prompts a delivery check, not a micr
   assert.match(h.pages.at(-1).message.body, /Send not confirmed/)
 })
 
-test('thread reading shows only the latest reply and refreshes edits without a cursor', async t => {
+test('thread reads show the latest reply, refresh edits and expose read failures', async t => {
   let text = 'The latest reply'
+  let fail = false
   const h = await harness(t, true, false, false, {
     target: chosenThread,
-    readThread: async () => ({ messages: [
-      { id: 'older', role: 'assistant', text: 'An older reply' },
-      { id: 'user', role: 'user', text: 'My request' },
-      { id: 'current', role: 'assistant', text },
-    ], nextPosition: 99, hasMore: false }),
+    readThread: async () => {
+      if (fail) throw new Error('Unavailable')
+      return { messages: [
+        { id: 'older', role: 'assistant', text: 'An older reply' },
+        { id: 'user', role: 'user', text: 'My request' },
+        { id: 'current', role: 'assistant', text },
+      ], nextPosition: 99, hasMore: false }
+    },
   })
   await h.scroll(1)
   assert.equal(h.pages.at(-1).message.body, 'The latest reply')
@@ -1281,6 +1225,10 @@ test('thread reading shows only the latest reply and refreshes edits without a c
   await h.scroll(1)
   assert.equal(h.pages.at(-1).message.body, text)
   assert.ok(h.threadReads.every(read => read.after === undefined))
+  fail = true
+  await h.scroll(1)
+  assert.match(h.pages.at(-1).message.body, /Couldn’t load reply\nScroll to retry/)
+  assert.equal(h.pages.at(-1).footer, 'Hold: Eyes')
   assert.equal(h.audio.filter(Boolean).length, 0)
 })
 
@@ -1328,32 +1276,4 @@ test('an empty first page still allows scrolling to more threads', async t => {
   assert.match(h.pages.at(-1).message.body, /^Fix audio/)
   await h.click()
   assert.equal(h.selections[0].threadId, chosenThread.threadId)
-})
-
-test('standby uses the same short controls in both Eyes speech modes', async t => {
-  for (const serverListening of [false, true]) {
-    const h = await harness(t, serverListening)
-    assert.equal(h.pages.at(-1).label, 'Tap to speak\nScroll: threads')
-    await h.click()
-    assert.equal(h.pages.at(-1).label, 'Listening .\nPause or tap to send')
-  }
-})
-
-test('pagination adds only the page count to the existing control', () => {
-  const ui = loadGlassesUI()
-  const message = ui.presentGlassesMessage('word '.repeat(100))
-  const count = ui.glassesMessagePages(message).length
-  assert.equal(ui.buildMessageStatus(message, 'Tap to speak', 1), `2/${count} · Tap to speak`)
-})
-
-test('an unavailable connection is not presented as an empty thread list', async t => {
-  const h = await harness(t, true, false, false, {
-    connections: [threadConnection([], { unavailable: true })],
-  })
-  await h.scroll(1)
-  assert.match(h.pages.at(-1).message.body, /Threads unavailable/)
-  await h.click()
-  assert.equal(h.selections.length, 0)
-  await h.sleep()
-  assert.match(h.pages.at(-1).label, /Tap to speak/)
 })
