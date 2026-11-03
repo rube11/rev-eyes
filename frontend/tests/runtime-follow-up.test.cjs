@@ -82,6 +82,7 @@ async function harness(t, serverListeningEnabled = false, reconnect = false, rea
       buildCompactPage: label => ({ label }), buildSleepPage: () => ({ label: 'sleep' }),
       buildCompactContent: label => label,
       fitGlassesText: text => text,
+      buildThreadPickerPage: (threads, index) => ({ message: { kind: 'answer', body: threads[index].title }, footer: 'Tap: open · Hold: back' }),
       buildThreadPage: (title, detail, footer) => ({ message: { kind: 'answer', body: `${title}\n\n${detail}` }, footer }),
       buildMessagePage: (message, footer, pageIndex = 0) => ({ message, footer, pageIndex }),
       buildMessageStatus: (_message, footer) => footer,
@@ -1018,14 +1019,18 @@ test('picker survives reconnect without opening ambient capture or losing its se
 })
 
 test('a tap queued with a scroll never selects a row the user has not seen', async t => {
-  const h = await harness(t, true, false, false, { connections: [threadConnection([
+  const h = await harness(t, true, false, true, { connections: [threadConnection([
     { id: 'first', title: 'Same title', status: 'running' },
     { id: 'second', title: 'Same title', status: 'running' },
   ])] })
   await h.scroll(1)
   assert.ok(h.controls.includes('ambient_stop'))
+  assert.match(h.nativeText(), /Threads\n- /)
+  assert.match(h.nativeText(), /1\/2 · running/)
   await Promise.all([h.scroll(1), h.click()])
   assert.equal(h.selections.length, 0)
+  assert.match(h.nativeText(), /Threads\n  .*\n- /)
+  assert.match(h.nativeText(), /2\/2 · running/)
   await h.click()
   assert.equal(h.selections[0].connectionId, 'laptop')
   assert.equal(h.selections[0].threadId, 'second')
@@ -1039,7 +1044,7 @@ test('Hold is the way back from the picker and its release never starts speech',
   await h.scroll(1)
   await h.scroll(-1)
   assert.match(h.pages.at(-1).message.body, /^Fix audio/)
-  assert.match(h.pages.at(-1).footer, /^1\/1/)
+  assert.equal(h.pages.at(-1).footer, 'Tap: open · Hold: back')
   await h.sleep()
   assert.match(h.pages.at(-1).label, /Tap to speak/)
   assert.equal(h.selections.length, 0)
@@ -1111,6 +1116,19 @@ test('long titles and thread controls fit one body page and one footer line', ()
       if (title.length > 100) assert.match(body.content, /…/)
       if (detail.includes('Hold to go back')) assert.match(body.content, /Hold to go back/)
     }
+  }
+  const threads = Array.from({ length: 7 }, (_, i) => ({ title: `Task ${i} ${'界'.repeat(40)}`, connectionId: 'Laptop', status: 'running' }))
+  for (const index of [0, 3, 6]) {
+    const [list, detail, footer] = ui.buildThreadPickerPage(threads, index).textObject
+    const start = Math.max(0, Math.min(index - 2, threads.length - 5))
+    assert.ok(list.content.split('\n').length <= 6)
+    assert.equal(list.content.split('\n')[index - start + 1], `- Task ${index}…`)
+    assert.ok(detail.content.split('\n').length <= 6)
+    assert.match(detail.content, new RegExp(`${index + 1}/7 · running`))
+    assert.ok(list.xPosition + list.width < detail.xPosition)
+    assert.ok(detail.xPosition + detail.width <= 576)
+    assert.equal(list.isEventCapture + detail.isEventCapture + footer.isEventCapture, 1)
+    assert.equal(footer.content, 'Tap: open · Hold: back')
   }
   const reply = ui.presentGlassesMessage('W'.repeat(20_000))
   const footer = ui.buildMessageStatus(reply, 'Scroll · Hold: Eyes', 99)
@@ -1255,7 +1273,7 @@ test('an empty picker gives refresh and back without offering a selectable place
   connections = [threadConnection()]
   await h.scroll(1)
   assert.match(h.pages.at(-1).message.body, /^Fix audio/)
-  assert.match(h.pages.at(-1).footer, /^1\/1/)
+  assert.equal(h.pages.at(-1).footer, 'Tap: open · Hold: back')
   await h.sleep()
   assert.match(h.pages.at(-1).label, /Tap to speak/)
   assert.equal(h.audio.at(-1), true)

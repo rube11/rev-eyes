@@ -8,7 +8,7 @@ function units(character: string): number {
   return /[MW@%]/u.test(character) ? 2 : 1
 }
 
-export function wrapGlassesText(value: string): string[] {
+export function wrapGlassesText(value: string, columns = TEXT_COLUMNS): string[] {
   const lines: string[] = []
   for (const paragraph of value.split("\n")) {
     let line = ""
@@ -16,7 +16,7 @@ export function wrapGlassesText(value: string): string[] {
     for (const word of paragraph.trim().split(/\s+/u).filter(Boolean)) {
       const characters = Array.from(graphemes.segment(word), part => part.segment)
       const wordWidth = characters.reduce((sum, character) => sum + units(character), 0)
-      if (line && width + 1 + wordWidth > TEXT_COLUMNS) {
+      if (line && width + 1 + wordWidth > columns) {
         lines.push(line)
         line = ""
         width = 0
@@ -24,7 +24,7 @@ export function wrapGlassesText(value: string): string[] {
       if (line) { line += " "; width += 1 }
       for (const character of characters) {
         const nextWidth = units(character)
-        if (width + nextWidth > TEXT_COLUMNS) {
+        if (width + nextWidth > columns) {
           lines.push(line)
           line = ""
           width = 0

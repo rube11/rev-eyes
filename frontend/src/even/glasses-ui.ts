@@ -1,5 +1,5 @@
 import { RebuildPageContainer, TextContainerProperty } from "@evenrealities/even_hub_sdk"
-import { paginateGlassesText, wrapGlassesText } from "./text-layout"
+import { paginateGlassesText, TEXT_COLUMNS, wrapGlassesText } from "./text-layout"
 
 const DISPLAY_WIDTH = 576
 const DISPLAY_HEIGHT = 288
@@ -44,18 +44,42 @@ function page(containers: TextContainerProperty[]): RebuildPageContainer {
 }
 
 // Titles and controls have fixed space; replies still keep every page.
-export function fitGlassesText(value: string, lines: number): string {
-  const wrapped = wrapGlassesText(cleanText(value))
+export function fitGlassesText(value: string, lines: number, columns = TEXT_COLUMNS): string {
+  const wrapped = wrapGlassesText(cleanText(value), columns)
   if (wrapped.length <= lines) return wrapped.join("\n")
   const visible = wrapped.slice(0, lines)
   // Leave room for the ellipsis, including wide glyphs.
   const characters = Array.from(new Intl.Segmenter("en", { granularity: "grapheme" }).segment(visible[lines - 1]), part => part.segment)
-  visible[lines - 1] = characters.slice(0, -2).join("").trimEnd() + "…"
+  while (wrapGlassesText(characters.join("") + "…", columns).length > 1) characters.pop()
+  visible[lines - 1] = characters.join("").trimEnd() + "…"
   return visible.join("\n")
 }
 
 export function buildThreadPage(title: string, detail: string, action: string): RebuildPageContainer {
   return buildMessagePage(presentGlassesMessage(`${fitGlassesText(title, 2)}\n\n${fitGlassesText(detail, 3)}`), action)
+}
+
+export function buildThreadPickerPage(
+  threads: readonly { title: string; connectionId: string; status: string }[], index: number,
+): RebuildPageContainer {
+  const thread = threads[index]
+  const start = Math.max(0, Math.min(index - 2, threads.length - 5))
+  const rows = threads.slice(start, start + 5).map((item, offset) =>
+    `${start + offset === index ? "-" : " "} ${fitGlassesText(item.title, 1, 9)}`)
+  const state = thread.status.replaceAll("_", " ").trim() || "No status"
+  return page([
+    text({
+      xPosition: MARGIN, yPosition: 20, width: 192, height: 208,
+      containerID: 1, containerName: "thread-list", isEventCapture: 1,
+      content: `Threads\n${rows.join("\n")}`,
+    }),
+    text({
+      xPosition: 240, yPosition: 20, width: 312, height: 208,
+      containerID: 3, containerName: "thread-detail", isEventCapture: 0,
+      content: `${fitGlassesText(thread.title, 3, 18)}\n\n${fitGlassesText(thread.connectionId, 1, 18)}\n${fitGlassesText(`${index + 1}/${threads.length} · ${state}`, 1, 18)}`,
+    }),
+    status("Tap: open · Hold: back"),
+  ])
 }
 
 function status(content: string, name = "message-status"): TextContainerProperty {

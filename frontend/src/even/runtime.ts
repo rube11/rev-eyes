@@ -14,11 +14,11 @@ import {
   buildMessagePage,
   buildMessageStatus,
   glassesMessagePages,
-  fitGlassesText,
   buildSleepPage,
   buildTranscriptContent,
   buildTranscriptPage,
   buildThreadPage,
+  buildThreadPickerPage,
   presentGlassesMessage,
 } from "./glasses-ui"
 import type { GlassesMessage } from "./glasses-ui"
@@ -140,7 +140,7 @@ export async function initializeEvenExperience(
   const agentTarget = agents.target
   const serverListeningEnabled = env.serverListeningEnabled && !agentTarget
   let agentRequests = new AbortController()
-  let agentRows: AgentTarget[] = []
+  let agentRows: (AgentTarget & { status: string })[] = []
   let shownAgentTarget: AgentTarget | undefined
   let pickerOpen = false
   let agentRequestPending = false
@@ -1347,8 +1347,7 @@ export async function initializeEvenExperience(
     const row = agentRows[agentIndex]
     shownAgentTarget = undefined
     const page = row
-      ? buildThreadPage(row.title, `${fitGlassesText(row.connectionId, 1)}\nScroll to browse\nHold to go back`,
-        `${agentIndex + 1}/${agentRows.length} · Tap to open`)
+      ? buildThreadPickerPage(agentRows, agentIndex)
       : buildThreadPage("No threads", agentMore.length ? "Scroll for more" : "Scroll to refresh", "Hold: back")
     await setPage(page, "agents")
     shownAgentTarget = row
@@ -1376,7 +1375,7 @@ export async function initializeEvenExperience(
         signal => loadAgentConnections(accessToken, signal),
         async connections => {
           agentRows = connections.filter(entry => !entry.unavailable && entry.canSend).flatMap(entry => entry.threads.map(thread => ({
-            connectionId: entry.id, threadId: thread.id, title: thread.title,
+            connectionId: entry.id, threadId: thread.id, title: thread.title, status: thread.status,
           })))
           if (!agentRows.length && connections.some(entry => entry.unavailable)) throw new Error("Threads unavailable")
           agentMore = connections.filter(entry => !entry.unavailable && entry.hasMore && entry.canSend && entry.cursor !== undefined).map(entry => ({ connectionId: entry.id, cursor: entry.cursor! }))
@@ -1410,7 +1409,7 @@ export async function initializeEvenExperience(
           if (!entry || entry.unavailable || entry.cursor === page.cursor) throw new Error("Invalid page")
           const existing = new Set(agentRows.map(row => JSON.stringify([row.connectionId, row.threadId])))
           const nextRows = entry.threads.filter(thread => !existing.has(JSON.stringify([entry.id, thread.id]))).map(thread => ({
-            connectionId: entry.id, threadId: thread.id, title: thread.title,
+            connectionId: entry.id, threadId: thread.id, title: thread.title, status: thread.status,
           }))
           agentRows.push(...nextRows)
           if (entry.hasMore && entry.cursor !== undefined) agentMore[0] = { connectionId: entry.id, cursor: entry.cursor }
