@@ -1,0 +1,71 @@
+name: Production
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: production-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - run: go test ./... && go vet ./... && go test -race ./internal/agentbridge/... ./internal/realtime
+        working-directory: backend
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile && pnpm lint && pnpm test && pnpm build && pnpm pack:beta
+        working-directory: frontend
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rev-eyes-beta-${{ github.sha }}
+          path: frontend/rev-eyes-beta.ehpk
+          if-no-files-found: error
+      - run: bash infra/build-backend.sh "$RUNNER_TEMP/backend"
+        working-directory: backend
+      - run: |
+          cd "$RUNNER_TEMP"
+          printf '%s' "$GITHUB_SHA" > source_commit
+          sha256sum backend > backend.sha256
+          tar czf release.tgz backend backend.sha256 source_commit
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-${{ github.sha }}
+          path: ${{ runner.temp }}/release.tgz
+  deploy:
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    needs: validate
+    environment: production
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: backend-${{ github.sha }}
+      - name: Deploy binary and verify public health
+        env:
+          DEPLOY_KEY: ${{ secrets.BACKEND_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ vars.BACKEND_KNOWN_HOSTS }}
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          trap 'rm -f ~/.ssh/deploy' EXIT
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -i ~/.ssh/deploy deploy@52.11.78.112 < release.tgz
+          test "$(curl -s -o /dev/null -w '%{http_code}' https://api.rev-eyes.com/health)" = 204
+          test "$(curl -s -o /dev/null -w '%{http_code}' https://api.rev-eyes.com/workspace/agents)" = 401
