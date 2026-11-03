@@ -76,7 +76,7 @@ export function buildThreadPickerPage(
     text({
       xPosition: 240, yPosition: 20, width: 312, height: 208,
       containerID: 3, containerName: "thread-detail", isEventCapture: 0,
-      content: `${fitGlassesText(thread.title, 3, 18)}\n\n${fitGlassesText(thread.connectionId, 1, 18)}\n${fitGlassesText(`${index + 1}/${threads.length} · ${state}`, 1, 18)}`,
+      content: `${fitGlassesText(thread.title, 3, 18)}\n\n${fitGlassesText(thread.connectionId, 1, 18)}\n${fitGlassesText(state, 1, 18)}`,
     }),
     status("Tap: open · Hold: back"),
   ])
