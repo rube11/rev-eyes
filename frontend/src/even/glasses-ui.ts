@@ -108,9 +108,7 @@ export function buildMessageStatus(message: GlassesMessage, action: string, page
   const count = glassesMessagePages(message).length
   const current = Math.max(0, Math.min(count - 1, pageIndex))
   if (count <= 1) return fitGlassesText(action, 1)
-  const withScroll = `${current + 1}/${count} · Scroll · ${action}`
-  return fitGlassesText(!action.includes("Scroll") && wrapGlassesText(withScroll).length === 1
-    ? withScroll : `${current + 1}/${count} · ${action}`, 1)
+  return fitGlassesText(`${current + 1}/${count} · ${action}`, 1)
 }
 
 export function buildMessagePage(
