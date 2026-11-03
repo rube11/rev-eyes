@@ -6,12 +6,19 @@ export type AgentTarget = { connectionId: string; threadId: string; title: strin
 export type AgentMessage = { id: string; role: 'user' | 'assistant'; text: string }
 export type AgentThreadDetail = { messages: AgentMessage[]; hasMore: boolean; nextPosition?: number; truncated: boolean; hasEarlier?: boolean }
 
-export async function loadAgentConnections(accessToken: string, signal?: AbortSignal, page?: { connectionId: string; cursor: number }): Promise<AgentConnection[]> {
+export type AgentPage = { connectionId: string; cursor: number }
+
+// Unparsed thread page; the phone store and glasses picker both validate it.
+export async function fetchAgentPage(accessToken: string, signal?: AbortSignal, page?: AgentPage): Promise<unknown> {
   const url = new URL(`${env.apiBaseUrl}/workspace/agents`)
   if (page) { url.searchParams.set('connection_id', page.connectionId); url.searchParams.set('cursor', String(page.cursor)) }
   const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` }, cache: 'no-store', signal })
   if (!response.ok) throw new Error('Couldn’t load your T3 threads.')
-  return parseAgentConnections(await response.json())
+  return response.json()
+}
+
+export async function loadAgentConnections(accessToken: string, signal?: AbortSignal, page?: AgentPage): Promise<AgentConnection[]> {
+  return parseAgentConnections(await fetchAgentPage(accessToken, signal, page))
 }
 
 async function action(accessToken: string, name: string, target: AgentTarget, input: Record<string, string | number | boolean> = {}, signal?: AbortSignal): Promise<unknown> {
@@ -23,7 +30,7 @@ async function action(accessToken: string, name: string, target: AgentTarget, in
     const payload = await response.json().catch(() => ({})) as { error?: string }
     throw new Error(payload.error === 'delivery_unknown'
       ? 'Couldn’t confirm delivery. Check T3 before retrying.'
-      : 'Couldn’t reach T3. Check Dubs and try again.')
+      : 'Couldn’t reach T3. Check that T3 Code is running and try again.')
   }
   return response.json()
 }

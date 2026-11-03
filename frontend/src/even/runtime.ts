@@ -1135,6 +1135,7 @@ export async function initializeEvenExperience(
     pickerOpen = false
     shownAgentTarget = undefined
     if (!socketIsOpen()) { await showConnectionLost(); return }
+    reportStatus("Connected")
     await showReady()
     await startAmbientCapture()
   }
@@ -1380,6 +1381,7 @@ export async function initializeEvenExperience(
           if (!agentRows.length && connections.some(entry => entry.unavailable)) throw new Error("Threads unavailable")
           agentMore = connections.filter(entry => !entry.unavailable && entry.hasMore && entry.canSend && entry.cursor !== undefined).map(entry => ({ connectionId: entry.id, cursor: entry.cursor! }))
           agentIndex = 0
+          reportStatus("Connected")
           await showAgentTarget()
         },
         async () => {

@@ -12,6 +12,10 @@ export function getAssistantStatus(status: string, preview = false) {
       return { label: 'Sending', detail: 'Sending your message to the selected thread.', active: true }
     case 'reading reply':
       return { label: 'Reading reply', detail: 'Checking the selected thread for a reply.', active: true }
+    // T3 failed, not the glasses link: don't send the user to the Even app.
+    case 'couldn’t read reply':
+    case 'couldn’t load threads':
+      return { label: 'T3 unavailable', detail: 'Your glasses are connected, but T3 didn’t respond. Check that T3 Code is running, then scroll to retry.', active: true }
     case 'starting microphone':
       return { label: 'Starting mic', detail: 'Wait for the listening cue before speaking.', active: true }
     case 'connecting':

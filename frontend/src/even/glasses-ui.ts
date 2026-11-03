@@ -1,5 +1,6 @@
 import { RebuildPageContainer, TextContainerProperty } from "@evenrealities/even_hub_sdk"
 import { paginateGlassesText, TEXT_COLUMNS, wrapGlassesText } from "./text-layout"
+import { agentStatusLabel } from "../features/workspace/agentStatus"
 
 const DISPLAY_WIDTH = 576
 const DISPLAY_HEIGHT = 288
@@ -66,7 +67,8 @@ export function buildThreadPickerPage(
   const start = Math.max(0, Math.min(index - 2, threads.length - 5))
   const rows = threads.slice(start, start + 5).map((item, offset) =>
     `${start + offset === index ? "-" : " "} ${fitGlassesText(item.title, 1, 9)}`)
-  const state = thread.status.replaceAll("_", " ").trim() || "No status"
+  // Same labels as the phone thread list.
+  const state = agentStatusLabel(thread.status)
   return page([
     text({
       xPosition: MARGIN, yPosition: 20, width: 192, height: 208,
