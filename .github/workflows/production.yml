@@ -58,6 +58,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: backend-${{ github.sha }}
+      - name: Connect to backend private network
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TS_CI_AUTH_KEY }}
+          ping: 100.120.108.102
       - name: Deploy binary and verify public health
         env:
           DEPLOY_KEY: ${{ secrets.BACKEND_DEPLOY_KEY }}
@@ -68,6 +73,6 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           trap 'rm -f ~/.ssh/deploy' EXIT
-          ssh -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o BatchMode=yes -o StrictHostKeyChecking=yes -i ~/.ssh/deploy deploy@52.11.78.112 < release.tgz
+          ssh -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o BatchMode=yes -o StrictHostKeyChecking=yes -i ~/.ssh/deploy -o HostKeyAlias=52.11.78.112 deploy@100.120.108.102 < release.tgz
           test "$(curl --max-time 20 -s -o /dev/null -w '%{http_code}' https://api.rev-eyes.com/health)" = 204
           test "$(curl --max-time 20 -s -o /dev/null -w '%{http_code}' https://api.rev-eyes.com/workspace/agents)" = 401

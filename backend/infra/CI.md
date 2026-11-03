@@ -37,3 +37,18 @@ rollback checks the local health endpoint and authentication boundary before
 publishing release metadata. Public endpoint checks also run from the CI runner.
 Vercel and the backend deploy independently after a master push; backend deployment
 is gated by the full validation job, while Vercel retains its native Git behavior.
+
+## Private runner connectivity
+
+The deployment job joins the existing tailnet using `TS_CI_AUTH_KEY` from the
+Production environment, then connects to `100.120.108.102:22`. The existing SSH
+host key remains pinned via `HostKeyAlias`; the deployment key and forced command
+are unchanged. The Tailscale action removes its ephemeral node after the run.
+
+The configured `tag:rev-eyes-ci` may reach only `100.120.108.102` on TCP 22.
+The policy preserves unrestricted connections for existing user-owned devices
+with `autogroup:member`, and tests reject CI access to backend port 8080 and
+another machine's SSH port. Existing T3 and operator permissions are preserved.
+The reusable ephemeral auth key created on 2026-11-03 expires after 90 days;
+rotate `TS_CI_AUTH_KEY` before 2027-02-01. Public Lightsail firewall rules do
+not need changes.
