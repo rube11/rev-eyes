@@ -1,9 +1,17 @@
-export function getAssistantStatus(status: string, preview = false) {
+// `thread` is the T3 thread on the glasses; speech goes there instead of Eyes.
+export function getAssistantStatus(status: string, preview = false, thread?: string) {
   if (preview) return { label: 'Preview', detail: 'Sample data only. Your glasses and account are not connected in this preview.', active: false }
-  switch (status.toLowerCase().trim()) {
+  const normalized = status.toLowerCase().trim()
+  // Display failures carry SDK detail, e.g. "Glasses page failed (2)".
+  if (normalized.startsWith('glasses display update') || normalized.startsWith('glasses page failed')) {
+    return { label: 'Display issue', detail: 'Your glasses didn’t accept the last screen update. Check them in the Even app, or reconnect.', active: false }
+  }
+  switch (normalized) {
     case 'connected':
     case 'sleeping':
-      return { label: 'Ready', detail: 'Tap your glasses, then speak. Pause when you’re finished; Eyes will take it from there.', active: true }
+      return thread
+        ? { label: 'Ready', detail: `Tap your glasses, then speak. A pause sends your message to “${thread}” in T3.`, active: true }
+        : { label: 'Ready', detail: 'Tap your glasses, then speak. Pause when you’re finished; Eyes will take it from there.', active: true }
     case 'listening':
       return { label: 'Listening', detail: 'Speak naturally. A pause ends your turn—no second tap needed.', active: true }
     case 'thinking':
@@ -12,10 +20,17 @@ export function getAssistantStatus(status: string, preview = false) {
       return { label: 'Sending', detail: 'Sending your message to the selected thread.', active: true }
     case 'reading reply':
       return { label: 'Reading reply', detail: 'Checking the selected thread for a reply.', active: true }
+    case 't3 working':
+      return { label: 'T3 working', detail: 'T3 is replying. Its reply appears on your glasses as it’s written.', active: true }
     // T3 failed, not the glasses link: don't send the user to the Even app.
     case 'couldn’t read reply':
     case 'couldn’t load threads':
       return { label: 'T3 unavailable', detail: 'Your glasses are connected, but T3 didn’t respond. Check that T3 Code is running, then scroll to retry.', active: true }
+    // Server speech errors; the glasses connection itself is still up.
+    case 'transcription unavailable':
+    case 'server listening unavailable':
+    case 'candidate audio mode is active':
+      return { label: 'Speech unavailable', detail: 'Eyes couldn’t transcribe that. Tap your glasses to try again.', active: true }
     case 'starting microphone':
       return { label: 'Starting mic', detail: 'Wait for the listening cue before speaking.', active: true }
     case 'connecting':

@@ -124,7 +124,7 @@ export function Workspace({
     tasks: data.tasks.filter((task) => task.status === 'proposed').length || undefined,
   }
 
-  const assistant = getAssistantStatus(glassesStatus, isDemo)
+  const assistant = getAssistantStatus(glassesStatus, isDemo, agentTarget?.title)
   const connected = assistant.active
   const failedResources = workspaceResources.filter((resource) => resourceErrors[resource])
   const unavailable = view !== 'now' && view !== 'agents' && resourceErrors[view] === 'unavailable'
