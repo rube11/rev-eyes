@@ -1026,7 +1026,7 @@ test('a tap queued with a scroll never selects a row the user has not seen', asy
   await h.scroll(1)
   assert.ok(h.controls.includes('ambient_stop'))
   assert.match(h.nativeText(), /Threads\n- /)
-  assert.match(h.nativeText(), /laptop\nrunning/)
+  assert.match(h.nativeText(), /\nlaptop$/)
   await Promise.all([h.scroll(1), h.click()])
   assert.equal(h.selections.length, 0)
   assert.match(h.nativeText(), /Threads\n  .*\n- /)
@@ -1117,9 +1117,9 @@ test('long titles and thread controls fit one body page and one footer line', ()
       if (detail.includes('Hold to go back')) assert.match(body.content, /Hold to go back/)
     }
   }
-  const threads = Array.from({ length: 7 }, (_, i) => ({ title: `Task ${i} ${'界'.repeat(40)}`, connectionId: 'Laptop', status: 'running' }))
+  const threads = Array.from({ length: 7 }, (_, i) => ({ title: `Task ${i} ${'界'.repeat(40)}`, connectionId: i === 3 ? 'Long laptop name' : 'Laptop', status: 'running' }))
   for (const index of [0, 3, 6]) {
-    const [list, detail, footer] = ui.buildThreadPickerPage(threads, index).textObject
+    const [list, detail, footer, device] = ui.buildThreadPickerPage(threads, index).textObject
     const start = Math.max(0, Math.min(index - 2, threads.length - 5))
     assert.ok(list.content.split('\n').length <= 6)
     assert.equal(list.content.split('\n')[index - start + 1], `- Task ${index}…`)
@@ -1127,7 +1127,11 @@ test('long titles and thread controls fit one body page and one footer line', ()
     assert.equal(detail.content.split('\n').at(-1), 'running')
     assert.ok(list.xPosition + list.width < detail.xPosition)
     assert.ok(detail.xPosition + detail.width <= 576)
-    assert.equal(list.isEventCapture + detail.isEventCapture + footer.isEventCapture, 1)
+    assert.equal(list.isEventCapture + detail.isEventCapture + footer.isEventCapture + device.isEventCapture, 1)
+    assert.equal(device.content, index === 3 ? 'Long…' : 'Laptop')
+    assert.equal(device.yPosition, footer.yPosition)
+    assert.ok(footer.xPosition + footer.width < device.xPosition)
+    assert.ok(device.xPosition + device.width <= 576)
     assert.equal(footer.content, 'Tap: open · Hold: back')
   }
   const reply = ui.presentGlassesMessage('W'.repeat(20_000))

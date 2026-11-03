@@ -76,15 +76,20 @@ export function buildThreadPickerPage(
     text({
       xPosition: 240, yPosition: 20, width: 312, height: 208,
       containerID: 3, containerName: "thread-detail", isEventCapture: 0,
-      content: `${fitGlassesText(thread.title, 3, 18)}\n\n${fitGlassesText(thread.connectionId, 1, 18)}\n${fitGlassesText(state, 1, 18)}`,
+      content: `${fitGlassesText(thread.title, 3, 18)}\n\n${fitGlassesText(state, 1, 18)}`,
     }),
-    status("Tap: open · Hold: back"),
+    status("Tap: open · Hold: back", "thread-actions", 384),
+    text({
+      xPosition: 432, yPosition: 244, width: 120, height: 32,
+      containerID: 4, containerName: "thread-device", isEventCapture: 0,
+      content: fitGlassesText(thread.connectionId, 1, 7),
+    }),
   ])
 }
 
-function status(content: string, name = "message-status"): TextContainerProperty {
+function status(content: string, name = "message-status", width = CONTENT_WIDTH): TextContainerProperty {
   return text({
-    xPosition: MARGIN, yPosition: 244, width: CONTENT_WIDTH, height: 32,
+    xPosition: MARGIN, yPosition: 244, width, height: 32,
     containerID: 2, containerName: name, content: fitGlassesText(content, 1), isEventCapture: 0,
   })
 }
