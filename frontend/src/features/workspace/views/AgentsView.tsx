@@ -111,7 +111,8 @@ function ConnectedAgents({ accessToken, target, onTargetChange }: AgentsViewProp
   useEffect(() => { if (selected) conversationPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, [selected])
 
   const connection = snapshot.connections.find((entry) => entry.id === selected?.connectionId && !entry.unavailable)
-  const available = snapshot.phase === 'ready' && connection?.threads.some((thread) => thread.id === selected?.threadId)
+  // Refreshing the first list page must not disable a thread chosen on a later page.
+  const available = snapshot.phase === 'ready' && Boolean(connection)
 
   const read = async (next: AgentTarget, after?: number, fromStart = false) => {
     readRequest.current?.abort()
@@ -139,7 +140,11 @@ function ConnectedAgents({ accessToken, target, onTargetChange }: AgentsViewProp
   }
 
   const select = (next: AgentTarget) => {
-    if (busy.current || sameThread(next, selected)) return
+    if (busy.current) return
+    if (sameThread(next, selected)) {
+      if (!detail && !reading && connection?.canOpen) void read(next)
+      return
+    }
     readRequest.current?.abort()
     readRequest.current = undefined
     generation.current++

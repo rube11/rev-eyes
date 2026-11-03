@@ -1,7 +1,7 @@
 .agents-provider { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-1); margin-bottom: var(--space-4); overflow: hidden; }
 .agents-provider__header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-6); border-bottom: 1px solid var(--line); }
 .agents-provider h2 { font-size: var(--text-lg); font-weight: var(--weight-medium); }
-.agents-provider p { color: var(--fg-muted); font-size: var(--text-sm); line-height: var(--leading-relaxed); }
+.agents-provider p { color: var(--fg-muted); font-size: var(--text-sm); line-height: var(--leading-body); }
 .agents-provider__header .eyebrow { margin-bottom: var(--space-2); font-size: var(--text-2xs); }
 .agents-message { padding: var(--space-6); }
 .agents-message h3 { margin-bottom: var(--space-2); font-size: var(--text-md); font-weight: var(--weight-medium); }
