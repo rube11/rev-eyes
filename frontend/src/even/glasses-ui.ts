@@ -61,7 +61,7 @@ export function buildThreadPage(title: string, detail: string, action: string): 
 }
 
 export function buildThreadPickerPage(
-  threads: readonly { title: string; connectionId: string; status: string }[], index: number,
+  threads: readonly { title: string; connectionId: string; status: string; device?: string }[], index: number,
 ): RebuildPageContainer {
   const thread = threads[index]
   const start = Math.max(0, Math.min(index - 2, threads.length - 5))
@@ -84,7 +84,7 @@ export function buildThreadPickerPage(
     text({
       xPosition: 432, yPosition: 244, width: 120, height: 32,
       containerID: 4, containerName: "thread-device", isEventCapture: 0,
-      content: fitGlassesText(thread.connectionId, 1, 7),
+      content: fitGlassesText(thread.device ?? thread.connectionId, 1, 7),
     }),
   ])
 }

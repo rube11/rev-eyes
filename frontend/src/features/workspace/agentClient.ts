@@ -4,7 +4,7 @@ import type { AgentConnection } from './agentStatus'
 
 export type AgentTarget = { connectionId: string; threadId: string; title: string }
 export type AgentMessage = { id: string; role: 'user' | 'assistant'; text: string }
-export type AgentThreadDetail = { messages: AgentMessage[]; hasMore: boolean; nextPosition?: number; truncated: boolean; hasEarlier?: boolean }
+export type AgentThreadDetail = { messages: AgentMessage[]; hasMore: boolean; nextPosition?: number; truncated: boolean; hasEarlier?: boolean; status?: string }
 
 export type AgentPage = { connectionId: string; cursor: number }
 
@@ -36,7 +36,7 @@ async function action(accessToken: string, name: string, target: AgentTarget, in
 }
 
 export async function openAgentThread(accessToken: string, target: AgentTarget, signal?: AbortSignal, afterPosition?: number, fromStart = false): Promise<AgentThreadDetail> {
-  const value = await action(accessToken, 'thread', target, fromStart ? { from_start: true } : afterPosition === undefined ? {} : { after_position: afterPosition }, signal) as { thread?: { threadId?: string }; items?: unknown[]; hasMore?: boolean; nextPosition?: number; hasEarlier?: boolean }
+  const value = await action(accessToken, 'thread', target, fromStart ? { from_start: true } : afterPosition === undefined ? {} : { after_position: afterPosition }, signal) as { thread?: { threadId?: string; status?: unknown }; items?: unknown[]; hasMore?: boolean; nextPosition?: number; hasEarlier?: boolean }
   if (!value || typeof value !== 'object' || value.thread?.threadId !== target.threadId || (!Array.isArray(value.items) || value.items.length > 20)) throw new Error('Couldn’t read this thread.')
   const messages = value.items.flatMap((item, messagesIndex): AgentMessage[] => {
     if (!item || typeof item !== 'object') return []
@@ -44,7 +44,7 @@ export async function openAgentThread(accessToken: string, target: AgentTarget, 
     if (typeof row.text !== 'string' || (row.type !== 'user_message' && row.type !== 'assistant_message')) return []
     return [{ id: typeof row.itemId === 'string' ? row.itemId : `message-${messagesIndex}`, role: row.type === 'user_message' ? 'user' : 'assistant', text: row.text.slice(0, 2000) }]
   })
-  return { messages, hasEarlier: value.hasEarlier === true, hasMore: value.hasMore === true, nextPosition: typeof value.nextPosition === 'number' && Number.isSafeInteger(value.nextPosition) && value.nextPosition >= 0 ? value.nextPosition : undefined, truncated: value.items.some((item) => Boolean(item && typeof item === 'object' && 'textTruncated' in item && item.textTruncated)) }
+  return { messages, hasEarlier: value.hasEarlier === true, hasMore: value.hasMore === true, nextPosition: typeof value.nextPosition === 'number' && Number.isSafeInteger(value.nextPosition) && value.nextPosition >= 0 ? value.nextPosition : undefined, truncated: value.items.some((item) => Boolean(item && typeof item === 'object' && 'textTruncated' in item && item.textTruncated)), status: typeof value.thread.status === 'string' ? value.thread.status.slice(0, 40) : undefined }
 }
 
 export async function sendAgentMessage(accessToken: string, target: AgentTarget, text: string, requestId: string): Promise<void> {

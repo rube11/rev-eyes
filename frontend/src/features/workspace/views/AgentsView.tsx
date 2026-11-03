@@ -19,11 +19,13 @@ type PanelProps = {
   onRefresh: () => void
   onSelect?: (target: AgentTarget) => void
   selected?: AgentTarget
+  // The thread currently used on the glasses.
+  active?: AgentTarget
   onMore?: (id: string) => void
   children?: ReactNode
 }
 
-export function AgentStatusPanel({ snapshot, onRefresh, onSelect, selected, onMore, children }: PanelProps) {
+export function AgentStatusPanel({ snapshot, onRefresh, onSelect, selected, active, onMore, children }: PanelProps) {
   const loading = snapshot.phase === 'loading'
   return <>
     <PageIntro title="Agents" lede="Choose a T3 thread to read, reply to, or use on your glasses."
@@ -40,10 +42,10 @@ export function AgentStatusPanel({ snapshot, onRefresh, onSelect, selected, onMo
       </div>
       {snapshot.phase === 'ready' ? snapshot.connections.map((connection) => <section key={connection.id} aria-label={`${connection.provider} threads`}>
         <div className="agents-connection__status">
-          <strong>{connection.provider.toLowerCase() === 't3' ? 'Your threads' : connection.provider}</strong>
+          <strong>{connection.label ? `Threads on ${connection.label}` : connection.provider.toLowerCase() === 't3' ? 'Your threads' : connection.provider}</strong>
           <span className="pill">{connection.unavailable ? 'Offline' : connection.canSend ? 'Connected' : 'View only'}</span>
         </div>
-        {connection.unavailable ? <p className="agents-message">Couldn’t reach T3. Check that T3 Code is running and refresh.</p> : <>
+        {connection.unavailable ? <p className="agents-message">{connection.label ? `Couldn’t reach T3 on ${connection.label}. Check that T3 Code is running there and refresh.` : 'Couldn’t reach T3. Check that T3 Code is running and refresh.'}</p> : <>
           {connection.threads.length === 0 ? <p className="agents-message">No threads on this page.</p> : <ul className="agent-threads">
             {connection.threads.map((thread) => {
               const next = { connectionId: connection.id, threadId: thread.id, title: thread.title }
@@ -52,7 +54,7 @@ export function AgentStatusPanel({ snapshot, onRefresh, onSelect, selected, onMo
                   disabled={!onSelect || (!connection.canSend && !connection.canOpen)}
                   onClick={() => onSelect?.(next)} aria-pressed={sameThread(selected, next)}>
                   <div><h3>{thread.title}</h3>{thread.updatedAt ? <p>{formatDateTime(thread.updatedAt)}</p> : null}</div>
-                  <span className="agent-thread__status">{agentStatusLabel(thread.status)}</span>
+                  <span className="agent-thread__status">{agentStatusLabel(thread.status)}{sameThread(active, next) ? ' · On glasses' : ''}</span>
                 </button>
               </li>
             })}
@@ -157,8 +159,8 @@ export function AgentsView({ accessToken, target, onTargetChange }: AgentsViewPr
     generation.current++
     readRequest.current?.abort()
     readRequest.current = undefined
+    // Closing the phone panel never changes what the glasses are using.
     setSelected(undefined)
-    if (sameThread(target, selected)) onTargetChange?.()
   }
 
   const send = async () => {
@@ -192,7 +194,7 @@ export function AgentsView({ accessToken, target, onTargetChange }: AgentsViewPr
       .finally(() => { if (mounted.current) setMore(false) })
   }
 
-  return <AgentStatusPanel snapshot={snapshot} selected={selected} onSelect={sending ? undefined : select}
+  return <AgentStatusPanel snapshot={snapshot} selected={selected} active={target} onSelect={sending ? undefined : select}
     onRefresh={() => { if (!busy.current) { setListError(''); void store.refresh() } }} onMore={more ? undefined : loadMore}>
     {selected ? <section ref={conversationPanel} className="agents-provider agent-conversation" aria-label="Selected thread">
       <header className="agents-provider__header">
@@ -204,7 +206,7 @@ export function AgentsView({ accessToken, target, onTargetChange }: AgentsViewPr
           disabled={!available || !connection?.canSend || !onTargetChange || sending} onClick={() => onTargetChange?.(selected)}>Use on glasses</button>}
         <button type="button" className="primary-action primary-action--quiet" disabled={!available || !connection?.canOpen || reading || sending}
           onClick={() => void read(selected)}>{reading ? 'Loading…' : 'Refresh reply'}</button>
-        {target ? <button type="button" className="primary-action primary-action--quiet" onClick={() => onTargetChange?.()}>Back to Eyes</button> : null}
+        {sameThread(target, selected) ? <button type="button" className="primary-action primary-action--quiet" onClick={() => onTargetChange?.()}>Stop using on glasses</button> : null}
         {sameThread(target, selected) ? <p>Tap your glasses to speak to this thread.</p>
           : connection?.canSend ? <p>Use on glasses to talk to this thread hands-free.</p> : null}
       </div>

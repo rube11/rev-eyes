@@ -138,9 +138,10 @@ func (g *Gateway) Page(ctx context.Context, owner, connectionID string, cursor i
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	label := connectionLabel(ctx, c.Provider)
 	data, err := pager.ListPage(ctx, cursor)
 	if err != nil || !validData(data) {
 		return nil, ErrUnavailable
 	}
-	return []Envelope{{ConnectionID: c.ID, Provider: c.ProviderName, Capabilities: c.Provider.Capabilities(), Data: data}}, nil
+	return []Envelope{{ConnectionID: c.ID, Provider: c.ProviderName, Label: <-label, Capabilities: c.Provider.Capabilities(), Data: data}}, nil
 }

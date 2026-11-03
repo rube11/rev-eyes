@@ -949,7 +949,8 @@ test('thread delivery feedback distinguishes sent, unconfirmed and failed sends'
     await h.message('assistant_response', { text })
     await h.message('listening_stopped')
     assert.ok(h.pages.at(-1).message.body.startsWith(expected))
-    assert.equal(h.pages.at(-1).footer, 'Scroll · Hold: Eyes')
+    // Only a confirmed send follows T3's reply.
+    assert.equal(h.pages.at(-1).footer, expected === 'Sent' ? 'T3 working · Hold: Eyes' : 'Scroll · Hold: Eyes')
   }
   assert.equal(h.audio.filter(Boolean).length, 4)
   assert.equal(h.audio.at(-1), false)
@@ -1134,6 +1135,7 @@ test('long titles and thread controls fit one body page and one footer line', ()
     assert.ok(device.xPosition + device.width <= 576)
     assert.equal(footer.content, 'Tap: open · Hold: back')
   }
+  assert.equal(ui.buildThreadPickerPage([{ ...threads[0], device: 'Dubs' }], 0).textObject[3].content, 'Dubs')
   const reply = ui.presentGlassesMessage('W'.repeat(20_000))
   const footer = ui.buildMessageStatus(reply, 'Scroll · Hold: Eyes', 99)
   assert.match(footer, /^100\/\d+ · Scroll · Hold: Eyes$/)
@@ -1298,4 +1300,49 @@ test('an empty first page still allows scrolling to more threads', async t => {
   assert.match(h.pages.at(-1).message.body, /^Fix audio/)
   await h.click()
   assert.equal(h.selections[0].threadId, chosenThread.threadId)
+})
+
+test('a confirmed thread send follows T3’s reply as it is written, then stops', async t => {
+  const reads = [
+    { messages: [{ id: 'old', role: 'assistant', text: 'Old reply' }], status: 'running' },
+    { messages: [{ id: 'old', role: 'assistant', text: 'Old reply' }, { id: 'u', role: 'user', text: 'Please fix the bug' }, { id: 'a', role: 'assistant', text: 'Looking into it' }], status: 'running' },
+    { messages: [{ id: 'u', role: 'user', text: 'Please fix the bug' }, { id: 'a', role: 'assistant', text: 'Fixed the bug.' }], status: 'idle' },
+  ]
+  const h = await harness(t, true, false, false, { target: chosenThread, readThread: async () => ({ hasMore: false, ...reads[Math.min(h.threadReads.length - 1, reads.length - 1)] }) })
+  await h.click()
+  await h.message('user_transcript', { text: 'Please fix the bug' })
+  await h.advance(250)
+  await h.click()
+  await h.message('assistant_response', { text: 'Message queued in your T3 thread. Open the thread to check its reply.' })
+  await h.message('listening_stopped')
+  assert.equal(h.pages.at(-1).message.body, 'Sent\nWaiting for T3’s reply')
+  await h.advance(3_000)
+  assert.equal(h.pages.at(-1).message.body, 'Sent\nWaiting for T3’s reply', 'an older reply is never shown as the answer')
+  await h.advance(3_000)
+  assert.equal(h.pages.at(-1).message.body, 'Looking into it')
+  assert.equal(h.pages.at(-1).footer, 'T3 working · Hold: Eyes')
+  assert.equal(h.statuses.at(-1), 'T3 working')
+  await h.advance(3_000)
+  assert.equal(h.pages.at(-1).message.body, 'Fixed the bug.')
+  assert.equal(h.pages.at(-1).footer, 'Scroll · Hold: Eyes')
+  assert.equal(h.statuses.at(-1), 'Connected')
+  const count = h.threadReads.length
+  await h.advance(30_000)
+  assert.equal(h.threadReads.length, count)
+  assert.equal(h.audio.filter(Boolean).length, 1)
+})
+
+test('tapping to speak ends reply following', async t => {
+  const h = await harness(t, true, false, false, { target: chosenThread, readThread: async () => ({ messages: [], hasMore: false, status: 'running' }) })
+  await h.click()
+  await h.message('user_transcript', { text: 'Run the tests' })
+  await h.click()
+  await h.message('assistant_response', { text: 'Message queued in your T3 thread.' })
+  await h.message('listening_stopped')
+  await h.advance(3_000)
+  assert.equal(h.threadReads.length, 1)
+  await h.click()
+  assert.match(h.pages.at(-1).label, /Listening/)
+  await h.advance(30_000)
+  assert.equal(h.threadReads.length, 1)
 })

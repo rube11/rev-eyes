@@ -22,15 +22,21 @@ On the glasses:
 1. From the idle Eyes screen, scroll to open the thread picker. Background
    microphone capture stops while you browse.
 2. Scroll through the thread sidebar. A dash marks the highlighted thread; its
-   title and status appear beside it, with the connection name at bottom right.
+   title and status appear beside it, with the T3 environment's label (for
+   example, the laptop's name) at bottom right.
    Tap to select the highlighted thread. A second tap
    starts the microphone for that thread only.
 3. Speech is submitted once at the first transcription endpoint. T3 receives
    a **queued new turn**, not a steer/restart. A receipt says queued, never
    completed. The mic does not reopen automatically after a T3 receipt.
-4. Scroll through the receipt/reply. Scrolling forward past its final page
-   rereads recent messages and shows the latest reply. Scroll again to check
-   for updates; use the phone to browse earlier messages. Reads are manual; there is no background polling or completion alert.
+4. After T3 confirms the send, the glasses follow the reply: every three seconds
+   they reread the recent window and show the newest assistant message after
+   your sent message (matched by its text), with **T3 working** in the footer.
+   An older reply is never shown as the answer. Following stops when the thread
+   leaves a working state, after ten minutes, after three failed reads, or on
+   any tap, manual read, or Hold. Scrolling forward past the final page rereads
+   recent messages manually; use the phone to browse earlier messages. There is
+   no completion alert.
 5. Hold to return to Eyes, including while sending or loading. Hold in the picker
    to dismiss it. Double
    tap retains the app's exit behavior. Ordinary Eyes answers still support their
@@ -110,6 +116,11 @@ The existing origin policy wraps these endpoints; responses are `no-store`.
   manual transcription. Ambient/candidate handlers are absent. Changing targets
   tears down the old runtime before a new socket is adopted.
 
+Thread lists include an optional `label` per connection: the T3 environment's
+display name from `t3_environment_read`, fetched alongside the list, cached for
+ten minutes, and omitted if the tool is missing or fails. It is untrusted
+display text, trimmed and bounded to 64 printable characters.
+
 `list_agent_threads` remains the only T3 model tool. It is side-effect free and
 first-page-only. Explicit actions are outside the Jev/model tool registry, so
 background speech, memory review, and provider text cannot acquire send authority.
@@ -118,7 +129,7 @@ labels are still disabled, so this is explicit tap intent, not biometric identit
 
 `Capabilities.Open` is separate from read-only `Read`. Upstream `t3_thread_read`
 can acknowledge delivery of child results. It is invoked only by a user's
-selection/refresh/scroll, or refresh following their send. It is never exposed as
+selection/refresh/scroll, or the bounded reply following after their send. It is never exposed as
 a read-only model tool. Provider strings are untrusted display data, not HTML,
 commands, endpoint configuration, or permission grants.
 
