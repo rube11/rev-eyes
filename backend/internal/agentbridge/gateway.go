@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 var ErrUnavailable = errors.New("agent connection or capability unavailable")
@@ -30,6 +32,11 @@ type Provider interface {
 	Capabilities() Capabilities
 	List(context.Context) (json.RawMessage, error)
 	Read(context.Context, string) (json.RawMessage, error)
+}
+
+// Labeler optionally names a connection for display, such as a T3 environment.
+type Labeler interface {
+	Label(context.Context) (string, error)
 }
 
 // Connection is trusted server configuration, never model-supplied credentials.
@@ -65,6 +72,7 @@ type Envelope struct {
 	ConnectionID string          `json:"connection_id"`
 	Provider     string          `json:"provider"`
 	ThreadID     string          `json:"thread_id,omitempty"`
+	Label        string          `json:"label,omitempty"`
 	Capabilities Capabilities    `json:"capabilities"`
 	Data         json.RawMessage `json:"untrusted_provider_data,omitempty"`
 	Error        string          `json:"error,omitempty"`
@@ -83,7 +91,9 @@ func (g *Gateway) List(ctx context.Context, owner string) ([]Envelope, error) {
 			continue
 		}
 		entry := Envelope{ConnectionID: c.ID, Provider: c.ProviderName, Capabilities: c.Provider.Capabilities()}
+		label := connectionLabel(ctx, c.Provider)
 		data, err := c.Provider.List(ctx)
+		entry.Label = <-label
 		if err != nil || !validData(data) {
 			entry.Error = "agent status unavailable; no action was taken"
 		} else {
@@ -111,6 +121,38 @@ func (g *Gateway) Read(ctx context.Context, owner, connectionID, threadID string
 		return Envelope{ConnectionID: c.ID, Provider: c.ProviderName, ThreadID: threadID, Capabilities: c.Provider.Capabilities(), Data: data}, nil
 	}
 	return Envelope{}, ErrUnavailable
+}
+
+// connectionLabel runs alongside the list request so it adds no sequential
+// latency. Labels are untrusted display text: trimmed, printable, bounded.
+func connectionLabel(ctx context.Context, provider Provider) <-chan string {
+	result := make(chan string, 1)
+	labeler, ok := provider.(Labeler)
+	if !ok {
+		result <- ""
+		return result
+	}
+	go func() {
+		label, err := labeler.Label(ctx)
+		if err != nil {
+			label = ""
+		}
+		result <- cleanLabel(label)
+	}()
+	return result
+}
+
+func cleanLabel(label string) string {
+	label = strings.TrimSpace(label)
+	if !utf8.ValidString(label) || utf8.RuneCountInString(label) > 64 {
+		return ""
+	}
+	for _, r := range label {
+		if !unicode.IsPrint(r) {
+			return ""
+		}
+	}
+	return label
 }
 
 func validData(data json.RawMessage) bool { return len(data) <= 128*1024 && json.Valid(data) }

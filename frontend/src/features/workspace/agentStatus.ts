@@ -1,5 +1,8 @@
+import type { AgentMessage } from './agentClient'
+
 export type AgentThread = { id: string; title: string; status: string; updatedAt?: string }
-export type AgentConnection = { id: string; provider: string; unavailable: boolean; threads: AgentThread[]; hasMore: boolean; cursor?: number; canSend: boolean; canOpen: boolean }
+// `label` is the provider's display name for the connection, e.g. a T3 environment.
+export type AgentConnection = { id: string; provider: string; label?: string; unavailable: boolean; threads: AgentThread[]; hasMore: boolean; cursor?: number; canSend: boolean; canOpen: boolean }
 export type AgentSnapshot = {
   phase: 'loading' | 'ready' | 'error'
   connections: AgentConnection[]
@@ -19,6 +22,28 @@ export function agentStatusLabel(status: string): string {
   }
 }
 
+// T3 may still be writing a reply in these states.
+export function agentThreadWorking(status?: string): boolean {
+  return status === 'preparing' || status === 'starting' || status === 'running' || status === 'queued'
+}
+
+function normalized(text: string) { return text.replace(/\s+/gu, ' ').trim().toLowerCase() }
+
+// Finds the reply to a message sent from the glasses. Older replies never count:
+// until the sent message appears in the window, there is no reply to show.
+export function agentReplyTo(messages: readonly AgentMessage[], sent: string): { found: boolean; reply?: string } {
+  const wanted = normalized(sent)
+  let anchor = -1
+  for (let index = messages.length - 1; index >= 0 && anchor < 0; index--) {
+    const text = normalized(messages[index].text)
+    // Long messages are shortened by the read, so compare their opening.
+    if (messages[index].role === 'user' && (text === wanted || text.includes(wanted) || (wanted.length > 200 && text.startsWith(wanted.slice(0, 200))))) anchor = index
+  }
+  if (anchor < 0) return { found: false }
+  const reply = messages.slice(anchor + 1).filter((message) => message.role === 'assistant' && message.text.trim()).at(-1)
+  return { found: true, reply: reply?.text.trim() }
+}
+
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid agent response')
   return value as Record<string, unknown>
@@ -34,7 +59,7 @@ export function parseAgentConnections(value: unknown): AgentConnection[] {
   return payload.connections.map((raw) => {
     const entry = record(raw)
     const caps = record(entry.capabilities)
-    const base = { id: label(entry.connection_id, 'connection'), provider: label(entry.provider, 'Agent'), threads: [] as AgentThread[], hasMore: false, canSend: caps.send === true, canOpen: caps.open === true }
+    const base = { id: label(entry.connection_id, 'connection'), provider: label(entry.provider, 'Agent'), label: typeof entry.label === 'string' && entry.label.trim() ? entry.label.trim().slice(0, 64) : undefined, threads: [] as AgentThread[], hasMore: false, canSend: caps.send === true, canOpen: caps.open === true }
     if (entry.error || caps.list !== true) return { ...base, unavailable: true }
     try {
       const data = record(entry.untrusted_provider_data)

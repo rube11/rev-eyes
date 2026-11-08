@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import { env } from '../../../shared/config/env'
 import { AgentStatusStore, agentStatusLabel } from '../agentStatus'
 import type { AgentSnapshot } from '../agentStatus'
-import { openAgentThread, sendAgentMessage } from '../agentClient'
+import { fetchAgentPage, openAgentThread, sendAgentMessage } from '../agentClient'
 import type { AgentTarget, AgentThreadDetail } from '../agentClient'
 import { AgentSendKeys } from '../agentSendKeys'
 import { PageIntro } from '../components/PageIntro'
 import { RefreshIcon } from '../components/icons'
+import { formatDateTime } from '../format'
 import './AgentsView.css'
 
 function sameThread(left?: AgentTarget, right?: AgentTarget) {
@@ -19,14 +19,16 @@ type PanelProps = {
   onRefresh: () => void
   onSelect?: (target: AgentTarget) => void
   selected?: AgentTarget
+  // The thread currently used on the glasses.
+  active?: AgentTarget
   onMore?: (id: string) => void
   children?: ReactNode
 }
 
-export function AgentStatusPanel({ snapshot, onRefresh, onSelect, selected, onMore, children }: PanelProps) {
+export function AgentStatusPanel({ snapshot, onRefresh, onSelect, selected, active, onMore, children }: PanelProps) {
   const loading = snapshot.phase === 'loading'
   return <>
-    <PageIntro title="Agents" lede="Choose a thread. Tap your glasses to speak."
+    <PageIntro title="Agents" lede="Choose a T3 thread to read, reply to, or use on your glasses."
       action={<button className="primary-action primary-action--quiet" type="button" onClick={onRefresh} disabled={loading}>
         <RefreshIcon />{loading ? 'Loading…' : 'Refresh'}
       </button>} />
@@ -35,15 +37,15 @@ export function AgentStatusPanel({ snapshot, onRefresh, onSelect, selected, onMo
       <header className="agents-provider__header"><h2 id="t3-title">T3 Code</h2></header>
       <div role="status" aria-live="polite">
         {loading ? <p className="agents-message">Loading threads…</p> : null}
-        {snapshot.phase === 'error' ? <p className="agents-message">Couldn’t load threads. Check Dubs and refresh.</p> : null}
+        {snapshot.phase === 'error' ? <p className="agents-message">Couldn’t load threads. Check that T3 Code is running and refresh.</p> : null}
         {snapshot.phase === 'ready' && snapshot.connections.length === 0 ? <p className="agents-message">T3 isn’t connected to this account.</p> : null}
       </div>
       {snapshot.phase === 'ready' ? snapshot.connections.map((connection) => <section key={connection.id} aria-label={`${connection.provider} threads`}>
         <div className="agents-connection__status">
-          <strong>{connection.provider.toLowerCase() === 't3' ? 'Your threads' : connection.provider}</strong>
+          <strong>{connection.label ? `Threads on ${connection.label}` : connection.provider.toLowerCase() === 't3' ? 'Your threads' : connection.provider}</strong>
           <span className="pill">{connection.unavailable ? 'Offline' : connection.canSend ? 'Connected' : 'View only'}</span>
         </div>
-        {connection.unavailable ? <p className="agents-message">Couldn’t reach T3. Check Dubs and refresh.</p> : <>
+        {connection.unavailable ? <p className="agents-message">{connection.label ? `Couldn’t reach T3 on ${connection.label}. Check that T3 Code is running there and refresh.` : 'Couldn’t reach T3. Check that T3 Code is running and refresh.'}</p> : <>
           {connection.threads.length === 0 ? <p className="agents-message">No threads on this page.</p> : <ul className="agent-threads">
             {connection.threads.map((thread) => {
               const next = { connectionId: connection.id, threadId: thread.id, title: thread.title }
@@ -51,8 +53,8 @@ export function AgentStatusPanel({ snapshot, onRefresh, onSelect, selected, onMo
                 <button type="button" className={`agent-thread${sameThread(selected, next) ? ' agent-thread--selected' : ''}`}
                   disabled={!onSelect || (!connection.canSend && !connection.canOpen)}
                   onClick={() => onSelect?.(next)} aria-pressed={sameThread(selected, next)}>
-                  <div><h3>{thread.title}</h3>{thread.updatedAt ? <p>{new Date(thread.updatedAt).toLocaleString()}</p> : null}</div>
-                  <span className="agent-thread__status">{agentStatusLabel(thread.status)}</span>
+                  <div><h3>{thread.title}</h3>{thread.updatedAt ? <p>{formatDateTime(thread.updatedAt)}</p> : null}</div>
+                  <span className="agent-thread__status">{agentStatusLabel(thread.status)}{sameThread(active, next) ? ' · On glasses' : ''}</span>
                 </button>
               </li>
             })}
@@ -75,16 +77,10 @@ type AgentsViewProps = {
 
 // The parent keys this view by account. A routine token refresh keeps the draft
 // and retry keys; switching accounts still unmounts and clears the whole view.
-export function AgentsView(props: AgentsViewProps) { return <ConnectedAgents {...props} /> }
-
-function ConnectedAgents({ accessToken, target, onTargetChange }: AgentsViewProps) {
+export function AgentsView({ accessToken, target, onTargetChange }: AgentsViewProps) {
   const store = useMemo(() => new AgentStatusStore(async (signal, page) => {
     if (!accessToken) throw new Error('Sign-in required')
-    const url = new URL(`${env.apiBaseUrl}/workspace/agents`)
-    if (page) { url.searchParams.set('connection_id', page.connectionId); url.searchParams.set('cursor', String(page.cursor)) }
-    const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` }, signal, cache: 'no-store' })
-    if (!response.ok) throw new Error('Couldn’t load threads')
-    return response.json()
+    return fetchAgentPage(accessToken, signal, page)
   }), [accessToken])
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const [selected, setSelected] = useState<AgentTarget | undefined>(target)
@@ -163,8 +159,8 @@ function ConnectedAgents({ accessToken, target, onTargetChange }: AgentsViewProp
     generation.current++
     readRequest.current?.abort()
     readRequest.current = undefined
+    // Closing the phone panel never changes what the glasses are using.
     setSelected(undefined)
-    if (sameThread(target, selected)) onTargetChange?.()
   }
 
   const send = async () => {
@@ -198,7 +194,7 @@ function ConnectedAgents({ accessToken, target, onTargetChange }: AgentsViewProp
       .finally(() => { if (mounted.current) setMore(false) })
   }
 
-  return <AgentStatusPanel snapshot={snapshot} selected={selected} onSelect={sending ? undefined : select}
+  return <AgentStatusPanel snapshot={snapshot} selected={selected} active={target} onSelect={sending ? undefined : select}
     onRefresh={() => { if (!busy.current) { setListError(''); void store.refresh() } }} onMore={more ? undefined : loadMore}>
     {selected ? <section ref={conversationPanel} className="agents-provider agent-conversation" aria-label="Selected thread">
       <header className="agents-provider__header">
@@ -210,10 +206,12 @@ function ConnectedAgents({ accessToken, target, onTargetChange }: AgentsViewProp
           disabled={!available || !connection?.canSend || !onTargetChange || sending} onClick={() => onTargetChange?.(selected)}>Use on glasses</button>}
         <button type="button" className="primary-action primary-action--quiet" disabled={!available || !connection?.canOpen || reading || sending}
           onClick={() => void read(selected)}>{reading ? 'Loading…' : 'Refresh reply'}</button>
-        {target ? <button type="button" className="primary-action primary-action--quiet" onClick={() => onTargetChange?.()}>Back to Eyes</button> : null}
-        <p>Tap your glasses to speak.</p>
+        {sameThread(target, selected) ? <button type="button" className="primary-action primary-action--quiet" onClick={() => onTargetChange?.()}>Stop using on glasses</button> : null}
+        {sameThread(target, selected) ? <p>Tap your glasses to speak to this thread.</p>
+          : connection?.canSend ? <p>Use on glasses to talk to this thread hands-free.</p> : null}
       </div>
       <div className="agent-conversation__messages">
+        {reading && !detail ? <p>Loading messages…</p> : null}
         {detail?.messages.map((message) => <article key={message.id} className={`agent-message agent-message--${message.role}`}>
           <p className="eyebrow">{message.role === 'user' ? 'You' : 'T3'}</p><p>{message.text}</p>
         </article>)}

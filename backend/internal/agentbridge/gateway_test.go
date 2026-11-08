@@ -208,3 +208,20 @@ func TestMalformedOrOversizedProviderDataIsNotExposed(t *testing.T) {
 		}
 	}
 }
+
+type labeledProvider struct {
+	fakeProvider
+	label string
+}
+
+func (p *labeledProvider) Label(context.Context) (string, error) { return p.label, nil }
+
+func TestConnectionLabelIsBoundedDisplayText(t *testing.T) {
+	for label, want := range map[string]string{" Dubs ": "Dubs", "bad\x00name": "", strings.Repeat("x", 65): ""} {
+		g := testGateway(t, &labeledProvider{fakeProvider: fakeProvider{caps: Capabilities{List: true}}, label: label})
+		entries, err := g.List(context.Background(), "alice")
+		if err != nil || len(entries) != 1 || entries[0].Label != want {
+			t.Fatalf("label %q => %+v, %v", label, entries, err)
+		}
+	}
+}

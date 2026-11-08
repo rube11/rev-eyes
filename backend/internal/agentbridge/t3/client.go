@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rube11/rev-eyes/backend/internal/agentbridge"
@@ -38,7 +39,15 @@ type Client struct {
 	endpoint, token string
 	http            *http.Client
 	control         bool
+
+	labelMu      sync.Mutex
+	label        string
+	labelChecked time.Time
 }
+
+// Environment labels rarely change; failures are retried sooner.
+const labelTTL = 10 * time.Minute
+const labelRetry = time.Minute
 
 func New(endpoint, token string) (*Client, error) { return newClient(endpoint, token, false) }
 
@@ -83,6 +92,38 @@ func (c *Client) ListPage(ctx context.Context, cursor int) (json.RawMessage, err
 	return c.call(ctx, "t3_thread_list", args, func(raw json.RawMessage, readOnly bool) bool {
 		return readOnly && compatibleListSchema(raw) && (cursor == 0 || schemaAccepts(raw, map[string]string{"cursor": "number"}, nil))
 	}, nil)
+}
+
+// Label returns the T3 environment's display name (for example, the laptop's
+// name). It is display-only and best-effort; a missing tool yields an error.
+func (c *Client) Label(ctx context.Context) (string, error) {
+	c.labelMu.Lock()
+	label, checked := c.label, c.labelChecked
+	c.labelMu.Unlock()
+	if !checked.IsZero() && time.Since(checked) < labelTTL && (label != "" || time.Since(checked) < labelRetry) {
+		return label, nil
+	}
+	data, err := c.call(ctx, "t3_environment_read", map[string]any{}, func(raw json.RawMessage, _ bool) bool {
+		return schemaAccepts(raw, map[string]string{}, []string{})
+	}, nil)
+	var env struct {
+		Label string `json:"label"`
+	}
+	if err == nil && json.Unmarshal(data, &env) != nil {
+		err = ErrUnavailable
+	}
+	if err != nil && ctx.Err() != nil {
+		// A caller's deadline says nothing about T3; don't cache it.
+		return "", err
+	}
+	c.labelMu.Lock()
+	c.label, c.labelChecked = env.Label, time.Now()
+	if err != nil {
+		c.label = label // keep the last good label through a brief outage
+	}
+	label = c.label
+	c.labelMu.Unlock()
+	return label, nil
 }
 
 func (c *Client) Send(ctx context.Context, threadID, message, requestID string) (json.RawMessage, error) {

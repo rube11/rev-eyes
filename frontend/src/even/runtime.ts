@@ -47,6 +47,7 @@ import {
 import type { WorkspaceResource } from "../features/workspace/workspaceTypes"
 import { RealtimeConnection } from "./realtime-connection"
 import { loadAgentConnections, openAgentThread, type AgentTarget } from "../features/workspace/agentClient"
+import { agentReplyTo, agentThreadWorking } from "../features/workspace/agentStatus"
 
 type ListeningState = "idle" | "starting" | "listening" | "stopping"
 type DisplaySurface = "thread" | "compact" | "message" | "offline" | "sleep" | "transcript" | "agents"
@@ -63,6 +64,20 @@ const TRANSCRIPT_UPDATE_MS = 250
 const LISTENING_ANIMATION_MS = 800
 const LISTENING_FRAMES = [".", ". .", ". . .", ". ."] as const
 const RELEASE_CLICK_SUPPRESSION_MS = 750
+// After a confirmed thread send, reread the thread to show T3's reply as it is
+// written. Any tap, manual read or Hold ends it.
+const AGENT_FOLLOW_INTERVAL_MS = 3_000
+const AGENT_FOLLOW_LIMIT_MS = 10 * 60_000
+// A just-queued turn can still read as idle; don't give up before T3 starts it.
+const AGENT_FOLLOW_START_GRACE_MS = 20_000
+const AGENT_FOLLOW_MAX_FAILURES = 3
+type AgentFollow = {
+  sent: string
+  startedAt: number
+  failures: number
+  shown?: string
+  timer?: ReturnType<typeof setTimeout>
+}
 
 function sendLocation(socket: WebSocket | undefined, location: AppLocation) {
   return safeSendJson(socket, {
@@ -140,13 +155,16 @@ export async function initializeEvenExperience(
   const agentTarget = agents.target
   const serverListeningEnabled = env.serverListeningEnabled && !agentTarget
   let agentRequests = new AbortController()
-  let agentRows: (AgentTarget & { status: string })[] = []
+  let agentRows: (AgentTarget & { status: string; device: string })[] = []
   let shownAgentTarget: AgentTarget | undefined
   let pickerOpen = false
   let agentRequestPending = false
   let agentIndex = 0
   let agentMore: { connectionId: string; cursor: number }[] = []
   let agentUncertain = false
+  let agentFollow: AgentFollow | undefined
+  // Newest transcript received, including throttled updates not yet rendered.
+  let heardTranscript = ""
   let active = true
   let transitionTail: Promise<void> = Promise.resolve()
   let listeningState: ListeningState = "idle"
@@ -422,7 +440,7 @@ export async function initializeEvenExperience(
 
   function answerAction(): string {
     if (thinking || awaitingResponse) return agentTarget ? "Sending" : "Thinking"
-    if (agentTarget) return "Scroll · Hold: Eyes"
+    if (agentTarget) return agentFollow ? "T3 working · Hold: Eyes" : "Scroll · Hold: Eyes"
     return listeningState === "listening"
       ? listeningLabel() : "Tap to speak"
   }
@@ -744,6 +762,7 @@ export async function initializeEvenExperience(
         return
       }
       if (message.type === "user_transcript" && message.text) {
+        heardTranscript = message.text
         // Receipt, not delayed rendering, owns the follow-up deadline.
         if (listeningState === "listening") cancelAssistantResponseWindow()
         if (pendingTranscript) pendingTranscript.message = message
@@ -1028,7 +1047,8 @@ export async function initializeEvenExperience(
         if (agentTarget) {
           if (responseText.startsWith("Message queued in your T3 thread.")) {
             agentUncertain = false
-            text = "Sent"
+            text = "Sent\nWaiting for T3’s reply"
+            startAgentFollow(heardTranscript || latestTranscript)
           } else if (responseText.startsWith("Delivery is uncertain.")) {
             agentUncertain = true
             text = "Send not confirmed\nCheck before sending again"
@@ -1124,10 +1144,84 @@ export async function initializeEvenExperience(
     agents.onTargetChange(target)
   }
 
-  function cancelAgentRequest() {
+  function abortAgentRequest() {
     agentRequests.abort()
     agentRequests = new AbortController()
     agentRequestPending = false
+  }
+
+  function stopAgentFollow() {
+    if (agentFollow?.timer !== undefined) clearTimeout(agentFollow.timer)
+    agentFollow = undefined
+  }
+
+  function cancelAgentRequest() {
+    stopAgentFollow()
+    abortAgentRequest()
+  }
+
+  function startAgentFollow(sent: string) {
+    if (!agentTarget) return
+    stopAgentFollow()
+    agentFollow = { sent, startedAt: Date.now(), failures: 0 }
+    scheduleAgentFollow(agentFollow)
+  }
+
+  function scheduleAgentFollow(follow: AgentFollow) {
+    follow.timer = setTimeout(() => {
+      follow.timer = undefined
+      if (active && agentFollow === follow) void enqueueTransition(async () => followAgentReply(follow))
+    }, AGENT_FOLLOW_INTERVAL_MS)
+  }
+
+  async function showFollowedReply(text: string) {
+    const presentation = presentGlassesMessage(text)
+    if (currentNotification) { deferredAssistant = presentation; return }
+    visibleAssistant = presentation
+    messagePageIndex = Math.min(messagePageIndex, glassesMessagePages(presentation).length - 1)
+    await setPage(buildMessagePage(presentation, answerAction(), messagePageIndex), "message")
+  }
+
+  function followAgentReply(follow: AgentFollow) {
+    const target = agentTarget
+    if (!target || agentFollow !== follow) return
+    // The microphone may still be closing after the receipt; check again later.
+    if (thinking || awaitingResponse || listeningState !== "idle") { scheduleAgentFollow(follow); return }
+    requestAgentData(
+      signal => openAgentThread(accessToken, target, signal),
+      async detail => {
+        if (agentFollow !== follow) return
+        follow.failures = 0
+        const { found, reply } = agentReplyTo(detail.messages, follow.sent)
+        const elapsed = Date.now() - follow.startedAt
+        const working = agentThreadWorking(detail.status)
+        const done = elapsed >= AGENT_FOLLOW_LIMIT_MS ||
+          (!working && (Boolean(found && reply) || elapsed >= AGENT_FOLLOW_START_GRACE_MS))
+        const needsYou = detail.status === "waiting" ? "\n\nT3 needs you. Check your phone." : ""
+        const text = reply
+          ? `${reply}${detail.truncated ? "\n\nFull reply is in T3." : ""}${done ? needsYou : ""}`
+          : done ? `No reply yet\nScroll to check${needsYou}` : "Sent\nWaiting for T3’s reply"
+        if (done) {
+          stopAgentFollow()
+          reportStatus("Connected")
+        } else {
+          reportStatus("T3 working")
+          scheduleAgentFollow(follow)
+        }
+        if (done || text !== follow.shown) {
+          follow.shown = text
+          await showFollowedReply(text)
+        }
+      },
+      async () => {
+        if (agentFollow !== follow) return
+        follow.failures += 1
+        if (follow.failures < AGENT_FOLLOW_MAX_FAILURES) { scheduleAgentFollow(follow); return }
+        stopAgentFollow()
+        reportStatus("Couldn’t read reply")
+        await showFollowedReply("Couldn’t load reply\nScroll to retry")
+      },
+    )
   }
 
   async function closeAgentPicker() {
@@ -1135,6 +1229,7 @@ export async function initializeEvenExperience(
     pickerOpen = false
     shownAgentTarget = undefined
     if (!socketIsOpen()) { await showConnectionLost(); return }
+    reportStatus("Connected")
     await showReady()
     await startAmbientCapture()
   }
@@ -1225,6 +1320,7 @@ export async function initializeEvenExperience(
       return
     }
     latestTranscript = ""
+    heardTranscript = ""
     idlePrompt = undefined
     if (agentTarget) cancelAgentRequest()
     if (!followUp) {
@@ -1283,7 +1379,7 @@ export async function initializeEvenExperience(
     success: (value: T) => Promise<void>,
     failure: () => Promise<void>,
   ) {
-    cancelAgentRequest()
+    abortAgentRequest()
     const controller = agentRequests
     agentRequestPending = true
     // Keep network waits outside the gesture queue so Hold can always leave.
@@ -1320,6 +1416,7 @@ export async function initializeEvenExperience(
 
   async function readAgentReply() {
     if (!agentTarget || thinking || awaitingResponse || listeningState !== "idle") return
+    stopAgentFollow()
     reportStatus("Reading reply")
     await setPage(buildThreadPage(agentTarget.title, "Loading reply", "Hold: Eyes"), "thread")
     requestAgentData(
@@ -1375,11 +1472,12 @@ export async function initializeEvenExperience(
         signal => loadAgentConnections(accessToken, signal),
         async connections => {
           agentRows = connections.filter(entry => !entry.unavailable && entry.canSend).flatMap(entry => entry.threads.map(thread => ({
-            connectionId: entry.id, threadId: thread.id, title: thread.title, status: thread.status,
+            connectionId: entry.id, threadId: thread.id, title: thread.title, status: thread.status, device: entry.label ?? entry.id,
           })))
           if (!agentRows.length && connections.some(entry => entry.unavailable)) throw new Error("Threads unavailable")
           agentMore = connections.filter(entry => !entry.unavailable && entry.hasMore && entry.canSend && entry.cursor !== undefined).map(entry => ({ connectionId: entry.id, cursor: entry.cursor! }))
           agentIndex = 0
+          reportStatus("Connected")
           await showAgentTarget()
         },
         async () => {
@@ -1409,7 +1507,7 @@ export async function initializeEvenExperience(
           if (!entry || entry.unavailable || entry.cursor === page.cursor) throw new Error("Invalid page")
           const existing = new Set(agentRows.map(row => JSON.stringify([row.connectionId, row.threadId])))
           const nextRows = entry.threads.filter(thread => !existing.has(JSON.stringify([entry.id, thread.id]))).map(thread => ({
-            connectionId: entry.id, threadId: thread.id, title: thread.title, status: thread.status,
+            connectionId: entry.id, threadId: thread.id, title: thread.title, status: thread.status, device: entry.label ?? entry.id,
           }))
           agentRows.push(...nextRows)
           if (entry.hasMore && entry.cursor !== undefined) agentMore[0] = { connectionId: entry.id, cursor: entry.cursor }
@@ -1491,6 +1589,7 @@ export async function initializeEvenExperience(
       return teardownPromise ?? Promise.resolve()
     }
     active = false
+    stopAgentFollow()
     agentRequests.abort()
     takePendingTranscript()
     clearAssistantResponseState()

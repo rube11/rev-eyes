@@ -221,3 +221,12 @@ test('thread reads distinguish a recent refresh from an explicit history request
     assert.equal(bodies[1].from_start,true)
   } finally {global.fetch=previousFetch}
 })
+
+test('a connection label names the device in headings and offline copy', () => {
+  const labeled = payload([{ threadId: 'a', title: 'Fix audio', status: 'running' }]); labeled.connections[0].label = ' Dubs '
+  const [connection] = parseAgentConnections(labeled)
+  assert.equal(connection.label, 'Dubs')
+  assert.match(render({ phase: 'ready', connections: [connection] }), /Threads on Dubs/)
+  assert.match(render({ phase: 'ready', connections: [{ ...connection, unavailable: true }] }), /Couldn’t reach T3 on Dubs/)
+  assert.equal(parseAgentConnections(payload())[0].label, undefined)
+})
